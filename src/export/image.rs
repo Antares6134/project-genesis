@@ -1,6 +1,6 @@
-use noise::{NoiseFn, OpenSimplex};
 use crate::core::Grid;
 use image::{ImageBuffer, Luma, Rgb, RgbImage};
+use noise::{NoiseFn, OpenSimplex};
 use rayon::prelude::*;
 use std::path::Path;
 
@@ -14,45 +14,56 @@ fn lerp_color(c1: [u8; 3], c2: [u8; 3], t: f32) -> [u8; 3] {
     ]
 }
 
-/// Authentic Physical Atlas Color System (Natural Earth / National Geographic style)
+#[inline(always)]
+fn sample_3d_fbm(noise: &OpenSimplex, x: f64, y: f64, z: f64, octaves: usize, lacunarity: f64, persistence: f64) -> f32 {
+    let mut total = 0.0f64;
+    let mut amplitude = 1.0f64;
+    let mut frequency = 1.0f64;
+    let mut max_val = 0.0f64;
+    for _ in 0..octaves {
+        total += noise.get([x * frequency, y * frequency, z * frequency]) * amplitude;
+        max_val += amplitude;
+        amplitude *= persistence;
+        frequency *= lacunarity;
+    }
+    (total / max_val) as f32
+}
+
+/// Authentic Physical Atlas Color System
 pub fn get_atlas_biome_color(temp: f32, precip: f32, altitude: f32) -> [u8; 3] {
-    // 1. Extreme Alpine Altitudes: Snow & Bare Slate Rock
-    // (Only triggers on real mountain peaks where altitude > 0.18!)
+    // 1. Extreme Alpine Altitudes
     if temp < -3.0 {
-        return [242, 246, 250]; // Perennial Glacial Ice
+        return [242, 246, 250];
     } else if temp < 0.5 && altitude > 0.16 {
         let t = (0.5 - temp) / 3.5;
-        return lerp_color([125, 120, 115], [242, 246, 250], t); // Scree to Snow
+        return lerp_color([125, 120, 115], [242, 246, 250], t);
     } else if altitude > 0.18 {
-        // High Montane Crags (Slate rock)
         let t = ((altitude - 0.18) / 0.14).clamp(0.0, 1.0);
         let base = if precip < 0.35 { [165, 150, 120] } else { [85, 120, 80] };
         return lerp_color(base, [115, 105, 95], t);
     }
 
-    // 2. Earthy Physical Atlas Palettes (Muted, Natural Earth Tones)
-    let ice_cap          = [242, 246, 250]; // Glacial White
-    let tundra           = [158, 165, 142]; // Lichen Gray-Green
-    let taiga            = [56, 95, 68];    // Deep Boreal Conifer
-    let cold_steppe      = [168, 160, 128]; // Khaki Dry Steppe
-    let prairie          = [148, 168, 105]; // Soft Meadow Green
-    let deciduous_forest = [78, 138, 75];   // Lush Temperate Forest
-    let rainforest       = [28, 92, 44];    // Deep Rainforest Emerald
-    let savanna          = [178, 168, 98];  // Warm Savanna Ochre
-    let desert           = [218, 192, 138]; // Muted Sandstone Gold
+    // 2. Earthy Physical Atlas Palettes
+    let ice_cap          = [242, 246, 250];
+    let tundra           = [158, 165, 142];
+    let taiga            = [56, 95, 68];
+    let cold_steppe      = [168, 160, 128];
+    let prairie          = [148, 168, 105];
+    let deciduous_forest = [78, 138, 75];
+    let rainforest       = [28, 92, 44];
+    let savanna          = [178, 168, 98];
+    let desert           = [218, 192, 138];
 
-    // 3. Smooth Temperature & Moisture Transitions for Lowlands
+    // 3. Smooth Temperature & Moisture Transitions
     if temp < 2.0 {
         let t = (temp + 3.0) / 5.0;
         lerp_color(ice_cap, tundra, t)
     } else if temp < 14.0 {
-        // Cold Boreal Zone
         let wetness = precip.clamp(0.0, 1.0);
         let cold_base = lerp_color(cold_steppe, taiga, wetness);
         let t = (temp - 2.0) / 12.0;
         lerp_color(tundra, cold_base, t)
     } else if temp < 24.0 {
-        // Temperate Zone
         let temperate_base = if precip < 0.16 {
             lerp_color(desert, prairie, precip / 0.16)
         } else if precip < 0.45 {
@@ -63,7 +74,6 @@ pub fn get_atlas_biome_color(temp: f32, precip: f32, altitude: f32) -> [u8; 3] {
         let t = (temp - 14.0) / 10.0;
         lerp_color(taiga, temperate_base, t)
     } else {
-        // Tropical / Subtropical Zone
         if precip < 0.18 {
             lerp_color(desert, savanna, precip / 0.18)
         } else if precip < 0.46 {
@@ -74,7 +84,6 @@ pub fn get_atlas_biome_color(temp: f32, precip: f32, altitude: f32) -> [u8; 3] {
     }
 }
 
-/// Exports a photorealistic High-Resolution Physical Atlas Map (2D Equirectangular)
 pub fn save_physical_map<P: AsRef<Path>>(
     heightmap: &Grid<f32>,
     temp_grid: &Grid<f32>,
@@ -90,9 +99,11 @@ pub fn save_physical_map<P: AsRef<Path>>(
     let h = heightmap.height as u32;
     let mut img = RgbImage::new(w, h);
 
-    // Northwest light direction (315° standard Swiss Cartographic Azimuth)
     let lx = -0.7071f32;
     let ly = -0.7071f32;
+
+    // High-frequency render noise to fracture ice caps and add satellite grain
+    let render_noise = OpenSimplex::new(7777);
 
     let raw_pixels: &mut [u8] = img.as_mut();
     raw_pixels
@@ -100,10 +111,26 @@ pub fn save_physical_map<P: AsRef<Path>>(
         .enumerate()
         .for_each(|(y_idx, row)| {
             let y = y_idx as isize;
+            
+            // Calculate 3D sphere latitude for render noise
+            let v = y_idx as f32 / (h - 1) as f32;
+            let lat = (0.5 - v) * std::f32::consts::PI;
+            let cos_lat = lat.cos() as f64;
+            let sin_lat = lat.sin() as f64;
 
             for x_idx in 0..w {
                 let x = x_idx as isize;
                 let pixel_idx = (x_idx * 3) as usize;
+
+                // 3D Unit Sphere coordinate
+                let u = x_idx as f32 / w as f32;
+                let lon = (u - 0.5) * std::f32::consts::TAU;
+                let px = cos_lat * (lon as f64).cos();
+                let py = sin_lat;
+                let pz = cos_lat * (lon as f64).sin();
+
+                // Generate fractal micro-climate noise (shatters smooth lines!)
+                let micro_noise = sample_3d_fbm(&render_noise, px * 28.0, py * 28.0, pz * 28.0, 4, 2.0, 0.5);
 
                 let elev = *heightmap.get(x, y);
                 let temp = *temp_grid.get(x, y);
@@ -111,25 +138,28 @@ pub fn save_physical_map<P: AsRef<Path>>(
                 let lake = *is_lake.get(x, y);
                 let flow = *flow_grid.get(x, y);
 
-                // --- SWISS SHADED RELIEF (Topography & Cavity Shadows) ---
+                // Perturb climate with noise
+                let display_temp = temp + micro_noise * 4.5;
+                let display_precip = (precip + micro_noise * 0.08).clamp(0.0, 1.0);
+
+                // --- SWISS SHADED RELIEF ---
                 let (gx, gy) = heightmap.gradient(x as f32, y as f32);
                 let slope = (gx * gx + gy * gy).sqrt();
                 let hillshade = -(gx * lx + gy * ly);
 
-                // Contrast tuning: steep mountains cast crisp relief
                 let mut shade = (1.0 + hillshade * 5.5 - slope * 1.5).clamp(0.65, 1.38);
 
-                // FIX: Erase the 1-pixel boundary cliff shadow at the extreme poles!
+                // Fix 1-pixel boundary cliff shadow at the extreme poles
                 if y < 2 || y > (h as isize - 3) {
                     shade = 1.0; 
                 }
-                
+
                 // --- WATER VS LAND COLORING ---
                 let mut final_color: [f32; 3] = if elev <= sea_level {
-                    if temp < -8.0 {
-                        [245.0, 248.0, 255.0]
-                    } else if temp < -3.0 {
-                        [165.0, 205.0, 235.0]
+                    if display_temp < -8.0 {
+                        [245.0, 248.0, 255.0] // Glacial Sea Ice (Now jagged and fractured!)
+                    } else if display_temp < -3.0 {
+                        [175.0, 210.0, 235.0] // Broken Pack Ice Edge
                     } else {
                         let depth = (elev / sea_level).clamp(0.0, 1.0);
                         let shelf = depth.powf(2.8);
@@ -145,8 +175,7 @@ pub fn save_physical_map<P: AsRef<Path>>(
                     [42.0, 125.0, 185.0]
                 } else {
                     let altitude = elev - sea_level;
-                    // NO CHECKERBOARD HASHING! Pure, clean physical atlas colors.
-                    let base = get_atlas_biome_color(temp, precip, altitude);
+                    let base = get_atlas_biome_color(display_temp, display_precip, altitude);
 
                     [
                         (base[0] as f32 * shade).clamp(0.0, 255.0),
@@ -159,11 +188,10 @@ pub fn save_physical_map<P: AsRef<Path>>(
                 if elev > sea_level && !lake && flow >= min_river_flow {
                     let river_strength = ((flow - min_river_flow) / major_river_flow)
                         .sqrt()
-                        .clamp(0.35, 1.0);
+                        .clamp(0.25, 1.0);
 
-                    let river_color = [20.0, 75.0, 150.0]; 
-                    
-                    let blend = (river_strength * 1.5).clamp(0.0, 1.0);
+                    let river_color = [20.0, 85.0, 160.0]; 
+                    let blend = (river_strength * 1.35).clamp(0.0, 1.0);
                     final_color = [
                         final_color[0] * (1.0 - blend) + river_color[0] * blend,
                         final_color[1] * (1.0 - blend) + river_color[1] * blend,
@@ -180,7 +208,6 @@ pub fn save_physical_map<P: AsRef<Path>>(
     img.save(path)
 }
 
-/// 16-bit Grayscale heightmap exporter
 pub fn save_raw_heightmap_16bit<P: AsRef<Path>>(
     heightmap: &Grid<f32>,
     path: P,

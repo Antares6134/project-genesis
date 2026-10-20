@@ -31,14 +31,15 @@ fn main() {
         rand::rng().random_range(1..1_000_000)
     };
 
-    // HIGH RESOLUTION: 2048 x 1024 (over 2 million data points!)
+    // EXTREME HIGH RESOLUTION: 8192 x 4096 (33.5 Million Data Points!)
+    // Bigger than Europa Universalis 4's entire planetary map.
     let world_config = WorldConfig {
-        width: 2048,
-        height: 1024,
+        width: 8192,
+        height: 4096,
         seed,
         num_plates: 32,
         ocean_ratio: 0.65,
-        erosion_droplets: 250_000, // 250k droplets for crisp river valleys
+        erosion_droplets: 3_500_000, // 3.5 Million droplets for ultra-fine HD river carving!
         ..Default::default()
     };
 
@@ -47,10 +48,11 @@ fn main() {
         ..Default::default()
     };
 
-    // Scaled for high resolution
+    // Scaled thresholds for HD rivers
     let hydro_config = HydrologyConfig {
-        min_river_flow: 180.0,
-        major_river_flow: 750.0,
+        min_lake_depth: 0.015,
+        min_river_flow: 1800.0,    // Flow requires much more accumulation at this scale
+        major_river_flow: 15000.0, // Massive Amazon-style arteries
         ..Default::default()
     };
 
