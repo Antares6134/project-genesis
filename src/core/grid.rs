@@ -1,6 +1,8 @@
+use serde::{Deserialize, Serialize};
+
 /// A 2D continuous grid that wraps horizontally (cylindrically) along the X-axis
 /// and clamps at the poles along the Y-axis.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Grid<T> {
     pub width: usize,
     pub height: usize,
