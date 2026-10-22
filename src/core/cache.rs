@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WorldCache {
     pub width: usize,
     pub height: usize,

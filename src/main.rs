@@ -4,8 +4,11 @@ mod export;
 mod geography;
 mod hydrology;
 mod terrain;
+mod geopolitics;
+mod viewer;
 
 use climate::{simulate_moisture, simulate_temperature, simulate_winds, ClimateConfig};
+use geopolitics::{build_geopolitical_hierarchy, extract_province_graph};
 use core::WorldCache;
 use geography::{generate_provinces, GeographyConfig};
 use hydrology::{
@@ -30,14 +33,13 @@ fn main() {
     let mut save_cache = false;
     let mut load_cache = false;
 
+    let mut run_viewer = false;
+
     for arg in env::args().skip(1) {
-        if arg == "--save" {
-            save_cache = true;
-        } else if arg == "--load" {
-            load_cache = true;
-        } else if let Ok(parsed_seed) = arg.parse::<u64>() {
-            seed = parsed_seed;
-        }
+        if arg == "--save" { save_cache = true; } 
+        else if arg == "--load" { load_cache = true; }
+        else if arg == "--viewer" { run_viewer = true; } // NEW!
+        else if let Ok(parsed_seed) = arg.parse::<u64>() { seed = parsed_seed; }
     }
 
     let world_config = WorldConfig {
@@ -109,6 +111,7 @@ fn main() {
         &cache.temp_grid,
         &cache.precip_grid,
         &cache.flow_grid,
+        &cache.is_lake,
         0.40, // THE BUG FIX: Physical sea level is 0.40, NOT 0.11!!!
         hydro_config.min_river_flow,
         &geo_config,
@@ -116,24 +119,65 @@ fn main() {
     );
     println!("✓ [4/4] Geography & Provinces done:        {:.2?}", p_start.elapsed());
 
+    // --- STAGE 5: GEOPOLITICAL HIERARCHY (AREAS, REGIONS, CONTINENTS) ---
+    let g_start = Instant::now();
+    let extracted = extract_province_graph(&prov_res.province_ids, &cache.heightmap, &cache.is_lake, 0.40);
+    let hierarchy = build_geopolitical_hierarchy(extracted.provinces, seed, cache.width as f32);
+    println!("✓ [5/5] Geopolitical Hierarchy completed:   {:.2?}", g_start.elapsed());
+
     println!("-------------------------------------------------------");
     println!("Total Generation Time:                     {:.2?}", total_start.elapsed());
     println!("-------------------------------------------------------");
 
+    // --- STAGE 6: LAUNCH INTERACTIVE MAP VIEWER ---
+    if run_viewer {
+        println!("Launching Interactive 2D Viewer...");
+        let options = eframe::NativeOptions {
+            viewport: eframe::egui::ViewportBuilder::default().with_inner_size([1280.0, 720.0]),
+            ..Default::default()
+        };
+        
+        eframe::run_native(
+            "Project Genesis - Atlas Viewer",
+            options,
+            Box::new(|_cc| Ok(Box::new(viewer::MapViewer::new(
+                cache.clone(), 
+                hierarchy.clone(), 
+                prov_res.clone()
+            )))),
+        ).unwrap();
+    }
+
     let exp_start = Instant::now();
-    export::save_political_map(
+    export::save_hierarchical_political_map(
         &cache.heightmap,
         &cache.temp_grid,
         &cache.precip_grid,
         &cache.flow_grid,
         &cache.is_lake,
+        &hierarchy,
         &prov_res.province_ids,
-        0.40, // THE BUG FIX: 0.40 Sea Level
+        0.40,
         hydro_config.min_river_flow,
         hydro_config.major_river_flow,
         "world_political_map.png",
     ).expect("Failed to export political map");
 
-    println!("✓ Rendered Political Map in:               {:.2?}", exp_start.elapsed());
+    println!("✓ Rendered Hierarchical Political Map in:   {:.2?}", exp_start.elapsed());
+
+    let phys_start = Instant::now();
+    export::save_physical_map(
+        &cache.heightmap,
+        &cache.temp_grid,
+        &cache.precip_grid,
+        &cache.flow_grid,
+        &cache.is_lake,
+        0.40,
+        hydro_config.min_river_flow,
+        hydro_config.major_river_flow,
+        "world_physical_map.png",
+    ).expect("Failed to export physical map");
+
+    println!("✓ Rendered Physical Relief Map in:         {:.2?}", phys_start.elapsed());
     println!("=======================================================");
 }

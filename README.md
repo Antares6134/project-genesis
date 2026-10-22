@@ -1,39 +1,41 @@
-# Project Genesis 🌍
+# Project Genesis
 
-A high-performance, physically-grounded procedural planetary engine written in Rust.
+A procedural world generator and interactive desktop atlas viewer written in Rust.
 
-Instead of relying on crude 2D heightmap noise, Project Genesis simulates planetary geology, atmospheric circulation, and hydrology across a **3D Unit Sphere** to generate seamless, photorealistic worlds without cylindrical distortion or seam lines.
+The engine generates 8K ($8192 \times 4096$) planetary maps using 3D spherical noise, simulated atmospheric circulation, and hydrology, then partitions the landmasses into a multi-tier geopolitical hierarchy (provinces, areas, regions, superregions, and continents).
 
-![Physical World Map](world_physical_map.png)
+---
 
-## Core Architectural Systems
+## Atlas Viewer
 
-* **3D Spherical Tectonics:** Evaluates multi-octave coherent noise on a 3D unit sphere to eliminate Voronoi polygon seams and polar distortion, generating massive continental cratons, deep ocean basins, and continental shelves.
-* **Continuous Sinuous Orogeny:** Simulates narrow, knife-edge mountain cordilleras (Andes and Himalayas scale) along tectonic fault lines using ridged multi-fractals.
-* **Atmospheric Circulation (The 4-Pillar Model):**
-  * Intertropical Convergence Zone (ITCZ) equatorial convection.
-  * Subtropical Hadley downwelling (arid desert basins).
-  * Prevailing Coriolis wind advection (Westerlies & Trade Winds).
-  * Orographic precipitation and leeward rain shadows.
-* **Hydrology & River Routing:** 
-  * Uses the **Barnes Priority-Flood** algorithm to resolve sinkholes and detect inland tectonic rift lakes.
-  * D8 flow routing with topological accumulation driven by local precipitation.
-  * Anti-aliased arterial river channels with volume-dependent widths.
-* **Cartographic Shaded Relief:** Swiss-style multi-angle hillshading combined with an authentic physical atlas hypsometric palette (Natural Earth / National Geographic style).
-* **Multi-Threaded (Rayon):** Generates complete 2-million pixel ($2048 \times 1024$) worlds with erosion in under 1 second.
+| Physical Map | Regional Map | Provincial Map |
+| :---: | :---: | :---: |
+| ![Physical](atlas_viewer_physical.png) | ![Regions](atlas_viewer_regions.png) | ![Provinces](atlas_viewer_provinces.png) |
 
-## Technology Stack
-* **Language:** Rust
-* **Concurrency:** `rayon` (data-parallelism across all CPU cores)
-* **Procedural Math:** `noise-rs` (OpenSimplex 3D/4D), `rand`, `rand_chacha`
-* **Image Processing:** `image`
+An integrated desktop viewer built with `eframe`/`egui` featuring real-time pan/zoom, map mode toggles, and hover telemetry for individual provinces.
 
-## Quick Start
+---
+
+## Pipeline
+
+1. **Geology & Tectonics:** Continental crust and mountain cordilleras evaluated on a 3D unit sphere to eliminate polar distortion and Voronoi seams. Includes particle-based hydraulic and thermal erosion passes.
+2. **Atmosphere & Climate:** 4-pillar atmospheric model simulating ITCZ convection, subtropical Hadley cell downwelling, Coriolis trade winds, and orographic rain shadows.
+3. **Hydrology:** Barnes Priority-Flood depression resolution, freshwater rift lakes, and D8 flow accumulation driving dendritic river systems.
+4. **Geopolitical Hierarchy:** 
+   - Habitability-weighted seeding (~5,800 provinces) snapping to natural terrain barriers (mountain crests, rivers, coasts).
+   - Graph-based clustering with Lloyd relaxation to partition landmasses into **Areas $\rightarrow$ Regions $\rightarrow$ Superregions $\rightarrow$ Continents**.
+5. **Cartography & Rendering:** Swiss-style multi-angle hillshading combined with a natural atlas hypsometric palette.
+
+---
+
+## Usage
 
 ```bash
-# Build and run with a random seed
-cargo run --release
+# Generate a new world from seed and save cache
+cargo run --release -- 1980 --save
 
-# Run with a specific deterministic seed
-cargo run --release -- 1980
-```
+# Launch the interactive atlas viewer using cached data
+cargo run --release -- 1980 --load --viewer
+
+# Generate headless with a random seed
+cargo run --release

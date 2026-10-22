@@ -1,4 +1,5 @@
 use crate::core::Grid;
+use crate::geopolitics::GeopoliticalHierarchy;
 use image::{ImageBuffer, Luma, Rgb, RgbImage};
 use noise::{NoiseFn, OpenSimplex};
 use rayon::prelude::*;
@@ -78,6 +79,64 @@ pub fn get_atlas_biome_color(temp: f32, precip: f32, altitude: f32) -> [u8; 3] {
             lerp_color(deciduous_forest, rainforest, (precip - 0.46) / 0.54)
         }
     }
+}
+
+pub fn get_biome_name(temp: f32, precip: f32, altitude: f32) -> &'static str {
+    if temp < -3.0 {
+        "Glacial Ice Sheet"
+    } else if temp < 0.5 && altitude > 0.16 {
+        "Alpine Snow Peak"
+    } else if altitude > 0.18 {
+        if precip < 0.35 { "Arid Mountain Plateau" } else { "Alpine Mountain Ridge" }
+    } else if temp < 2.0 {
+        "Arctic Tundra"
+    } else if temp < 14.0 {
+        if precip < 0.30 { "Cold Steppe" } else { "Boreal Taiga" }
+    } else if temp < 24.0 {
+        if precip < 0.16 {
+            "Temperate Semi-Arid Scrub"
+        } else if precip < 0.45 {
+            "Temperate Grassland / Prairie"
+        } else {
+            "Temperate Deciduous Forest"
+        }
+    } else {
+        if precip < 0.18 {
+            "Subtropical Arid Desert"
+        } else if precip < 0.46 {
+            "Tropical Savanna"
+        } else {
+            "Tropical Rainforest"
+        }
+    }
+}
+
+/// Golden-ratio HSV to RGB converter: Generates distinct, harmonious pastel territory colors.
+pub fn id_to_territory_color(id: u32) -> [f32; 3] {
+    if id == 0 {
+        return [0.0, 0.0, 0.0];
+    }
+    let golden_ratio = 0.618033988749895f32;
+    let h = ((id as f32) * golden_ratio).fract(); // Hue [0.0, 1.0)
+    let s = 0.52f32; // Gentle saturation
+    let v = 0.88f32; // Brightness
+
+    let h_i = (h * 6.0).floor() as usize;
+    let f = h * 6.0 - h_i as f32;
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - f * s);
+    let t = v * (1.0 - (1.0 - f) * s);
+
+    let (r, g, b) = match h_i % 6 {
+        0 => (v, t, p),
+        1 => (q, v, p),
+        2 => (p, v, t),
+        3 => (p, q, v),
+        4 => (t, p, v),
+        _ => (v, p, q),
+    };
+
+    [r * 255.0, g * 255.0, b * 255.0]
 }
 
 pub fn save_physical_map<P: AsRef<Path>>(
@@ -166,10 +225,10 @@ pub fn save_physical_map<P: AsRef<Path>>(
     img.save(path)
 }
 
-pub fn save_political_map<P: AsRef<Path>>(
+pub fn save_hierarchical_political_map<P: AsRef<Path>>(
     heightmap: &Grid<f32>, temp_grid: &Grid<f32>, precip_grid: &Grid<f32>,
-    flow_grid: &Grid<f32>, is_lake: &Grid<bool>, province_ids: &Grid<u32>, sea_level: f32,
-    min_river_flow: f32, major_river_flow: f32, path: P,
+    flow_grid: &Grid<f32>, is_lake: &Grid<bool>, hierarchy: &GeopoliticalHierarchy,
+    province_grid: &Grid<u32>, sea_level: f32, min_river_flow: f32, major_river_flow: f32, path: P,
 ) -> Result<(), image::ImageError> {
     let w = heightmap.width as u32;
     let h = heightmap.height as u32;
@@ -177,6 +236,17 @@ pub fn save_political_map<P: AsRef<Path>>(
     let lx = -0.7071f32;
     let ly = -0.7071f32;
     let render_noise = OpenSimplex::new(777);
+
+    // Fast O(1) lookup tables for province tiers
+    let mut area_lut = vec![0u32; hierarchy.provinces.len()];
+    let mut region_lut = vec![0u32; hierarchy.provinces.len()];
+    let mut super_lut = vec![0u32; hierarchy.provinces.len()]; // FIXED: Now defined!
+    
+    for p in &hierarchy.provinces {
+        area_lut[p.id as usize] = p.area_id;
+        region_lut[p.id as usize] = p.region_id;
+        super_lut[p.id as usize] = p.superregion_id; // FIXED: Now populated!
+    }
 
     let raw_pixels: &mut [u8] = img.as_mut();
     raw_pixels.par_chunks_exact_mut((w * 3) as usize).enumerate().for_each(|(y_idx, row)| {
@@ -242,17 +312,67 @@ pub fn save_political_map<P: AsRef<Path>>(
                 ];
             }
 
-            // --- DRAW PROVINCE BORDERS ---
-            let my_id = *province_ids.get(x, y);
-            if my_id != 0 {
-                let mut is_border = false;
-                if x > 0 && *province_ids.get(x - 1, y) != my_id { is_border = true; }
-                if x < w as isize - 1 && *province_ids.get(x + 1, y) != my_id { is_border = true; }
-                if y > 0 && *province_ids.get(x, y - 1) != my_id { is_border = true; }
-                if y < h as isize - 1 && *province_ids.get(x, y + 1) != my_id { is_border = true; }
+            // --- COHESIVE REGIONAL REALM COLOR BLEND ---
+            let my_id = *province_grid.get(x, y);
+            if my_id != 0 && elev > sea_level {
+                let my_reg = region_lut[my_id as usize];
+                let territory_rgb = id_to_territory_color(my_reg);
 
-                if is_border {
-                    final_color = [30.0, 30.0, 35.0]; 
+                final_color = [
+                    final_color[0] * 0.70 + territory_rgb[0] * 0.30,
+                    final_color[1] * 0.70 + territory_rgb[1] * 0.30,
+                    final_color[2] * 0.70 + territory_rgb[2] * 0.30,
+                ];
+            }
+
+            // --- HIERARCHICAL BORDER RENDERING ---
+            if my_id != 0 {
+                let mut is_super = false;
+                let mut is_region = false;
+                let mut is_area = false;
+                let mut is_prov = false;
+
+                for dy in -2..=2isize {
+                    for dx in -2..=2isize {
+                        if dx == 0 && dy == 0 { continue; }
+                        
+                        let nx = province_grid.wrap_x(x + dx) as isize;
+                        let ny = y + dy;
+                        if ny < 0 || ny >= h as isize { continue; }
+
+                        let neighbor_id = *province_grid.get(nx, ny);
+                        let dist_sq = dx * dx + dy * dy;
+
+                        let target_elev = *heightmap.get(nx, ny);
+                        let is_wasteland_neighbor = neighbor_id == 0 && target_elev > sea_level && !*is_lake.get(nx, ny);
+
+                        if is_wasteland_neighbor && dist_sq <= 1 {
+                            is_prov = true;
+                        } else if neighbor_id != 0 && neighbor_id != my_id {
+                            let n_sup = super_lut[neighbor_id as usize];
+                            let n_reg = region_lut[neighbor_id as usize];
+                            let n_area = area_lut[neighbor_id as usize];
+
+                            if n_sup != super_lut[my_id as usize] { is_super = true; }
+                            if n_reg != region_lut[my_id as usize] && dist_sq <= 4 { is_region = true; }
+                            if n_area != area_lut[my_id as usize] && dist_sq <= 2 { is_area = true; }
+                            if dist_sq <= 1 { is_prov = true; }
+                        }
+                    }
+                }
+
+                if is_super {
+                    final_color = [230.0, 235.0, 245.0];
+                } else if is_region {
+                    final_color = [10.0, 10.0, 12.0];
+                } else if is_area {
+                    final_color = [50.0, 50.0, 55.0];
+                } else if is_prov {
+                    final_color = [
+                        final_color[0] * 0.55,
+                        final_color[1] * 0.55,
+                        final_color[2] * 0.55,
+                    ];
                 }
             }
 
