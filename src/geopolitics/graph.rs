@@ -429,3 +429,180 @@ pub fn extract_province_graph(
 
     ExtractedGraph { provinces, max_id }
 }
+
+/// Build the adjacency graph for the marine provinces.
+///
+/// Structurally identical to the land graph — province centres, pixel counts
+/// and cost-weighted edges — but the ocean is a single connected body, so there
+/// are no landmasses to identify here: the top (Continental Basin) tier of the
+/// ocean hierarchy is produced later by clustering, not by island geography.
+/// Consequently `continent_id` and `anchor_id` are left at `0` for every ocean
+/// province.
+pub fn extract_ocean_graph(ocean_ids: &Grid<u32>) -> ExtractedGraph {
+    let w = ocean_ids.width;
+    let h = ocean_ids.height;
+    let wf = w as f32;
+
+    // ── Find maximum province ID ──────────────────────────────────────────────
+    let mut max_id = 0u32;
+    for &id in ocean_ids.raw_slice() {
+        if id > max_id { max_id = id; }
+    }
+    let n = max_id as usize;
+
+    // ── Accumulators for province centres & pixel counts ─────────────────────
+    let mut accs: Vec<ProvinceAccumulator> = (0..=n).map(|_| ProvinceAccumulator {
+        count: 0, sum_cos_x: 0.0, sum_sin_x: 0.0, sum_y: 0.0,
+    }).collect();
+
+    for y in 0..h {
+        let fy = y as f64;
+        for x in 0..w {
+            let id = ocean_ids.raw_slice()[y * w + x];
+            if id == 0 { continue; }
+            let angle = (x as f64 / w as f64) * std::f64::consts::TAU;
+            let acc = &mut accs[id as usize];
+            acc.count += 1;
+            acc.sum_cos_x += angle.cos();
+            acc.sum_sin_x += angle.sin();
+            acc.sum_y += fy;
+        }
+    }
+
+    let mut centers = vec![(0.0f32, 0.0f32); n + 1];
+    for i in 1..=n {
+        let acc = &accs[i];
+        if acc.count == 0 { continue; }
+        let avg_cos = acc.sum_cos_x / acc.count as f64;
+        let avg_sin = acc.sum_sin_x / acc.count as f64;
+        let angle = avg_sin.atan2(avg_cos);
+        let cx = (((angle / std::f64::consts::TAU) + 0.5) * w as f64) as f32;
+        let cy = (acc.sum_y / acc.count as f64) as f32;
+        centers[i] = (cx, cy);
+    }
+
+    // ── Edge weight = shared-border strength (shorter borders cost more) ─────
+    let mut boundary: HashMap<(u32, u32), u32> = HashMap::new();
+
+    for y in 0..h {
+        let dy = y as isize;
+        for x in 0..w {
+            let id = ocean_ids.raw_slice()[y * w + x];
+            if id == 0 { continue; }
+
+            // Right neighbour (wrapping in X)
+            let rx = ocean_ids.wrap_x(x as isize + 1) as isize;
+            let rid = *ocean_ids.get(rx, dy);
+            if rid != 0 && rid != id {
+                let pair = if id < rid { (id, rid) } else { (rid, id) };
+                *boundary.entry(pair).or_insert(0) += 1;
+            }
+
+            // Down neighbour
+            if y + 1 < h {
+                let down_id = *ocean_ids.get(x as isize, dy + 1);
+                if down_id != 0 && down_id != id {
+                    let pair = if id < down_id { (id, down_id) } else { (down_id, id) };
+                    *boundary.entry(pair).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+
+    let mut edges: HashMap<(u32, u32), u32> = HashMap::new();
+    for (&(a, b), &shared) in &boundary {
+        let cost = (4000.0 / shared.max(1) as f32).max(1.0) as u32;
+        edges.insert((a, b), cost);
+    }
+
+
+    // ── Ensure graph connectivity (defensive: the ocean is one body) ─────────
+    let mut full_ds = DisjointSet::new(n + 1);
+    for &(a, b) in edges.keys() { full_ds.union(a as usize, b as usize); }
+
+    let mut comp_members: HashMap<usize, Vec<u32>> = HashMap::new();
+    for i in 1..=n {
+        if accs[i].count > 0 {
+            let root = full_ds.find(i);
+            comp_members.entry(root).or_default().push(i as u32);
+        }
+    }
+
+    if comp_members.len() > 1 {
+        let mut sorted_comps: Vec<_> = comp_members.into_iter().collect();
+        sorted_comps.sort_by_key(|(_, members)| std::cmp::Reverse(members.len()));
+
+        let main_root = sorted_comps[0].0;
+        let main_members = &sorted_comps[0].1;
+
+        for (root, members) in &sorted_comps[1..] {
+            if *root == main_root { continue; }
+            let mut best_pair = (members[0], main_members[0]);
+            let mut min_d2 = f32::MAX;
+
+            for &m in members {
+                let (mx, my) = centers[m as usize];
+                for &other in main_members {
+                    let (ox, oy) = centers[other as usize];
+                    let d2 = wrap_dist_sq(mx, my, ox, oy, wf);
+                    if d2 < min_d2 {
+                        min_d2 = d2;
+                        best_pair = (m, other);
+                    }
+                }
+            }
+
+            let dist = min_d2.sqrt();
+            let cost = 25 + (dist * 4.0) as u32;
+            let (a, b) = if best_pair.0 < best_pair.1 {
+                (best_pair.0, best_pair.1)
+            } else {
+                (best_pair.1, best_pair.0)
+            };
+            edges.insert((a, b), cost);
+            full_ds.union(best_pair.0 as usize, best_pair.1 as usize);
+        }
+    }
+
+    // ── Build final neighbour list per province ───────────────────────────────
+    let mut neighbor_map: Vec<Vec<(u32, u32)>> = vec![Vec::new(); n + 1];
+    for (&(a, b), &cost) in &edges {
+        neighbor_map[a as usize].push((b, cost));
+        neighbor_map[b as usize].push((a, cost));
+    }
+    for list in &mut neighbor_map {
+        list.sort_by_key(|&(nb, _)| nb);
+        list.dedup_by(|a, b| {
+            if a.0 == b.0 { b.1 = b.1.min(a.1); true } else { false }
+        });
+    }
+
+    // ── Build ProvinceNode list ───────────────────────────────────────────────
+    let mut provinces = Vec::with_capacity(n + 1);
+    provinces.push(ProvinceNode {
+        id: 0, center_x: 0.0, center_y: 0.0, pixel_count: 0,
+        neighbors: vec![],
+        area_id: 0, region_id: 0, superregion_id: 0, continent_id: 0,
+        anchor_id: 0,
+    });
+
+    for i in 1..=n {
+        let acc = &accs[i];
+        let (center_x, center_y) = centers[i];
+        provinces.push(ProvinceNode {
+            id: i as u32,
+            center_x,
+            center_y,
+            pixel_count: acc.count,
+            neighbors: neighbor_map[i].clone(),
+            area_id: 0,
+            region_id: 0,
+            superregion_id: 0,
+            continent_id: 0,
+            anchor_id: 0,
+        });
+    }
+
+    ExtractedGraph { provinces, max_id }
+}
+

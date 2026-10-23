@@ -3,13 +3,26 @@ use noise::{NoiseFn, OpenSimplex};
 use rayon::prelude::*;
 use crate::core::{Grid, WorldCache};
 use crate::core::polar::{frozen_sea_name, is_frozen_sea, PACK_ICE_TEMP};
-use crate::geography::ProvinceResult;
+use crate::geography::{OceanResult, ProvinceResult};
 use crate::geopolitics::GeopoliticalHierarchy;
 use crate::export::image::{get_atlas_biome_color, get_biome_name, id_to_territory_color};
 
+/// What political domain the atlas is currently portraying.
 #[derive(PartialEq, Clone, Copy, Debug)]
-pub enum MapMode {
+pub enum MapScope {
+    /// Pure physical relief — no political tinting at all.
     Physical,
+    /// Political subdivision of the landmasses only.
+    Land,
+    /// Hydro-political subdivision of the world ocean only.
+    Water,
+    /// Both land and ocean political subdivisions at once.
+    Everywhere,
+}
+
+/// Which tier of the (land or ocean) hierarchy is being shaded.
+#[derive(PartialEq, Clone, Copy, Debug)]
+pub enum MapTier {
     Provinces,
     Areas,
     Regions,
@@ -20,14 +33,18 @@ pub enum MapMode {
 pub struct MapViewer {
     cache: WorldCache,
     hierarchy: GeopoliticalHierarchy,
+    ocean_hierarchy: GeopoliticalHierarchy,
     province_ids: Grid<u32>,
+    ocean_province_ids: Grid<u32>,
     is_wasteland: Grid<bool>,
-    mode: MapMode,
+    scope: MapScope,
+    tier: MapTier,
     texture: Option<TextureHandle>,
     zoom: f32,
     offset: egui::Vec2,
     show_borders: bool,
 }
+
 
 #[inline(always)]
 fn sample_3d_fbm(noise: &OpenSimplex, x: f64, y: f64, z: f64, octaves: usize, lacunarity: f64, persistence: f64) -> f32 {
@@ -44,14 +61,128 @@ fn sample_3d_fbm(noise: &OpenSimplex, x: f64, y: f64, z: f64, octaves: usize, la
     (total / max_val) as f32
 }
 
+/// Resolve the id that a land or ocean province should be coloured by at the
+/// requested tier. Both hierarchies share the same `ProvinceNode` shape, so a
+/// single helper serves them.
+#[inline(always)]
+fn tier_color_id(hierarchy: &GeopoliticalHierarchy, id: u32, tier: MapTier) -> u32 {
+    let node = &hierarchy.provinces[id as usize];
+    match tier {
+        MapTier::Provinces => node.id,
+        MapTier::Areas => node.area_id,
+        MapTier::Regions => node.region_id,
+        MapTier::Superregions => node.superregion_id,
+        MapTier::Continents => node.continent_id,
+    }
+}
+
+/// Darken a land pixel that sits on a border of the currently displayed tier.
+///
+/// Only the right and down neighbours are inspected, which yields a clean
+/// one-pixel frontier line; `id == 0` (coast or wilderness) always counts as a
+/// border, exactly as before.
+#[inline]
+fn land_border_shade(
+    mut color: [f32; 3],
+    province_ids: &Grid<u32>,
+    hierarchy: &GeopoliticalHierarchy,
+    id: u32,
+    color_id: u32,
+    x: usize,
+    y: usize,
+    h: usize,
+    tier: MapTier,
+) -> [f32; 3] {
+    let rx = province_ids.wrap_x(x as isize + 1) as isize;
+    let right_id = *province_ids.get(rx, y as isize);
+    let down_id = if y + 1 < h {
+        *province_ids.get(x as isize, y as isize + 1)
+    } else {
+        id
+    };
+
+    let differs = |nid: u32| -> bool {
+        if nid == id {
+            return false;
+        }
+        if nid == 0 {
+            return true; // Coast or wasteland
+        }
+        if (nid as usize) >= hierarchy.provinces.len() {
+            return false;
+        }
+        tier_color_id(hierarchy, nid, tier) != color_id
+    };
+
+    if differs(right_id) || differs(down_id) {
+        color[0] *= 0.55;
+        color[1] *= 0.55;
+        color[2] *= 0.55;
+    }
+    color
+}
+
+/// Darken an ocean pixel that sits on a border between two marine realms of the
+/// currently displayed tier.
+///
+/// Coastlines are intentionally *not* drawn: the shore is already unmistakable,
+/// and drawing it would trace every continent with a heavy outline. Only
+/// province-to-province transitions within the ocean produce a frontier line.
+#[inline]
+fn ocean_border_shade(
+    mut color: [f32; 3],
+    ocean_province_ids: &Grid<u32>,
+    ocean_hierarchy: &GeopoliticalHierarchy,
+    ocean_id: u32,
+    color_id: u32,
+    x: usize,
+    y: usize,
+    h: usize,
+    tier: MapTier,
+) -> [f32; 3] {
+    let rx = ocean_province_ids.wrap_x(x as isize + 1) as isize;
+    let right_id = *ocean_province_ids.get(rx, y as isize);
+    let down_id = if y + 1 < h {
+        *ocean_province_ids.get(x as isize, y as isize + 1)
+    } else {
+        ocean_id
+    };
+
+    let differs = |nid: u32| -> bool {
+        if nid == 0 || nid == ocean_id {
+            return false;
+        }
+        if (nid as usize) >= ocean_hierarchy.provinces.len() {
+            return false;
+        }
+        tier_color_id(ocean_hierarchy, nid, tier) != color_id
+    };
+
+    if differs(right_id) || differs(down_id) {
+        color[0] *= 0.55;
+        color[1] *= 0.55;
+        color[2] *= 0.55;
+    }
+    color
+}
+
 impl MapViewer {
-    pub fn new(cache: WorldCache, hierarchy: GeopoliticalHierarchy, prov_res: ProvinceResult) -> Self {
+    pub fn new(
+        cache: WorldCache,
+        hierarchy: GeopoliticalHierarchy,
+        ocean_hierarchy: GeopoliticalHierarchy,
+        prov_res: ProvinceResult,
+        ocean_res: OceanResult,
+    ) -> Self {
         Self {
             cache,
             hierarchy,
+            ocean_hierarchy,
             province_ids: prov_res.province_ids,
+            ocean_province_ids: ocean_res.ocean_province_ids,
             is_wasteland: prov_res.is_wasteland,
-            mode: MapMode::Physical, // Default to stunning physical atlas view!
+            scope: MapScope::Physical, // Default to the stunning physical atlas view!
+            tier: MapTier::Regions,
             texture: None,
             zoom: 0.16,
             offset: egui::vec2(0.0, 0.0),
@@ -62,11 +193,17 @@ impl MapViewer {
     fn generate_texture(&self) -> ColorImage {
         let w = self.cache.width;
         let h = self.cache.height;
-        let mode = self.mode;
+        let scope = self.scope;
+        let tier = self.tier;
         let show_borders = self.show_borders;
         let hierarchy = &self.hierarchy;
+        let ocean_hierarchy = &self.ocean_hierarchy;
         let province_ids = &self.province_ids;
+        let ocean_province_ids = &self.ocean_province_ids;
         let is_wasteland = &self.is_wasteland;
+
+        let land_political = matches!(scope, MapScope::Land | MapScope::Everywhere);
+        let water_political = matches!(scope, MapScope::Water | MapScope::Everywhere);
 
         let heightmap = &self.cache.heightmap;
         let temp_grid = &self.cache.temp_grid;
@@ -88,6 +225,7 @@ impl MapViewer {
             let y = i / w;
             let elev = *heightmap.get(x as isize, y as isize);
             let id = *province_ids.get(x as isize, y as isize);
+            let ocean_id = *ocean_province_ids.get(x as isize, y as isize);
 
             // Coordinates on 3D sphere for seamless spherical noise
             let v = y as f32 / (h - 1) as f32;
@@ -153,54 +291,66 @@ impl MapViewer {
 
             let mut final_color: [f32; 3];
 
-            if mode == MapMode::Physical {
+            if scope == MapScope::Physical {
                 // Pure physical atlas rendering
                 final_color = compute_physical_color();
             } else {
-                // ── Political map modes with authentic Wastelands ─────────
-                // The frozen polar seas read as "polar land" on the atlas and
-                // belong to exactly the same impassable wasteland as the
-                // ice-capped polar continents and the continental wildernesses.
-                let frozen_sea = is_frozen_sea(display_temp, elev, sea_level);
+                // ── Political map modes ────────────────────────────────
+                let is_ocean = elev <= sea_level && !*is_lake.get(x as isize, y as isize);
                 let is_waste = *is_wasteland.get(x as isize, y as isize)
-                    || frozen_sea
                     || (id == 0 && elev > sea_level && !*is_lake.get(x as isize, y as isize));
+                let has_ocean_node = ocean_id != 0
+                    && (ocean_id as usize) < ocean_hierarchy.provinces.len();
+                let has_land_node = id != 0 && (id as usize) < hierarchy.provinces.len();
 
-                if elev <= sea_level && !frozen_sea {
-                    // Open ocean — frozen pixels fall through to the wasteland
-                    // shading instead of being painted as open water.
-                    let depth = (elev / sea_level).clamp(0.0, 1.0);
-                    let shelf = depth.powf(2.8);
-                    let sea_shade = (1.0 + hillshade * 2.2).clamp(0.85, 1.15);
-                    final_color = [
-                        (12.0 * (1.0 - shelf) + 45.0 * shelf) * sea_shade,
-                        (35.0 * (1.0 - shelf) + 125.0 * shelf) * sea_shade,
-                        (75.0 * (1.0 - shelf) + 185.0 * shelf) * sea_shade,
-                    ];
-                } else if *is_lake.get(x as isize, y as isize) {
-                    final_color = [42.0, 125.0, 185.0];
-                } else if is_waste {
-                    // Impassable Wasteland — continental wilderness, ice-capped
-                    // polar continents and frozen polar seas alike: physical
-                    // terrain relief under a subtle neutral shading.
+                if is_ocean && water_political && has_ocean_node {
+                    // ── Hydro-political Ocean Territory ────────────────
+                    // Territory tint over the shaded bathymetry. The frozen
+                    // polar seas are still ocean, so they are tinted too and
+                    // never break the continuity of a marine realm's borders.
+                    let ocean_cid = tier_color_id(ocean_hierarchy, ocean_id, tier);
+                    let territory_rgb = id_to_territory_color(ocean_cid);
                     let phys = compute_physical_color();
                     final_color = [
-                        phys[0] * 0.78 + 35.0,
-                        phys[1] * 0.78 + 35.0,
-                        phys[2] * 0.78 + 40.0,
+                        territory_rgb[0] * 0.60 + phys[0] * 0.40,
+                        territory_rgb[1] * 0.60 + phys[1] * 0.40,
+                        territory_rgb[2] * 0.60 + phys[2] * 0.40,
                     ];
+                    if show_borders {
+                        final_color = ocean_border_shade(
+                            final_color, ocean_province_ids, ocean_hierarchy,
+                            ocean_id, ocean_cid, x, y, h, tier,
+                        );
+                    }
+                } else if is_ocean {
+                    // Water outside the current political scope: plain atlas sea.
+                    final_color = compute_physical_color();
+                } else if *is_lake.get(x as isize, y as isize) {
+                    final_color = [42.0, 125.0, 185.0];
+                } else if is_waste || !land_political || !has_land_node {
+                    // Wasteland, wilderness, or land that the current scope does
+                    // not portray. In the Water scope the continents are muted
+                    // so that the ocean politics stay legible.
+                    let phys = compute_physical_color();
+                    if is_waste {
+                        final_color = [
+                            phys[0] * 0.78 + 35.0,
+                            phys[1] * 0.78 + 35.0,
+                            phys[2] * 0.78 + 40.0,
+                        ];
+                    } else if scope == MapScope::Water {
+                        let grey = (phys[0] + phys[1] + phys[2]) / 3.0;
+                        final_color = [
+                            phys[0] * 0.40 + grey * 0.60,
+                            phys[1] * 0.40 + grey * 0.60,
+                            phys[2] * 0.40 + grey * 0.60,
+                        ];
+                    } else {
+                        final_color = phys;
+                    }
                 } else {
                     // Civilized Populated Province: territory tint over subtle terrain relief
-                    let node = &hierarchy.provinces[id as usize];
-                    let color_id = match mode {
-                        MapMode::Physical => unreachable!(),
-                        MapMode::Provinces => node.id,
-                        MapMode::Areas => node.area_id,
-                        MapMode::Regions => node.region_id,
-                        MapMode::Superregions => node.superregion_id,
-                        MapMode::Continents => node.continent_id,
-                    };
-
+                    let color_id = tier_color_id(hierarchy, id, tier);
                     let territory_rgb = id_to_territory_color(color_id);
                     let altitude = elev - sea_level;
                     let base = get_atlas_biome_color(display_temp, precip, altitude);
@@ -223,55 +373,11 @@ impl MapViewer {
                         ];
                     }
 
-                    // Border darkening
                     if show_borders {
-                        let rx = province_ids.wrap_x(x as isize + 1) as isize;
-                        let right_id = *province_ids.get(rx, y as isize);
-                        let down_id = if y + 1 < h {
-                            *province_ids.get(x as isize, y as isize + 1)
-                        } else {
-                            id
-                        };
-
-                        let is_border = if right_id != id {
-                            if right_id == 0 {
-                                true // Coast or Wasteland border
-                            } else {
-                                let r_node = &hierarchy.provinces[right_id as usize];
-                                let r_cid = match mode {
-                                    MapMode::Physical => unreachable!(),
-                                    MapMode::Provinces => r_node.id,
-                                    MapMode::Areas => r_node.area_id,
-                                    MapMode::Regions => r_node.region_id,
-                                    MapMode::Superregions => r_node.superregion_id,
-                                    MapMode::Continents => r_node.continent_id,
-                                };
-                                r_cid != color_id
-                            }
-                        } else if down_id != id {
-                            if down_id == 0 {
-                                true
-                            } else {
-                                let d_node = &hierarchy.provinces[down_id as usize];
-                                let d_cid = match mode {
-                                    MapMode::Physical => unreachable!(),
-                                    MapMode::Provinces => d_node.id,
-                                    MapMode::Areas => d_node.area_id,
-                                    MapMode::Regions => d_node.region_id,
-                                    MapMode::Superregions => d_node.superregion_id,
-                                    MapMode::Continents => d_node.continent_id,
-                                };
-                                d_cid != color_id
-                            }
-                        } else {
-                            false
-                        };
-
-                        if is_border {
-                            final_color[0] *= 0.55;
-                            final_color[1] *= 0.55;
-                            final_color[2] *= 0.55;
-                        }
+                        final_color = land_border_shade(
+                            final_color, province_ids, hierarchy,
+                            id, color_id, x, y, h, tier,
+                        );
                     }
                 }
             }
@@ -296,32 +402,42 @@ impl eframe::App for MapViewer {
                 ui.heading("🌍 Atlas Viewer");
                 ui.separator();
 
-                // Map Mode Selector Tabs
-                if ui.selectable_value(&mut self.mode, MapMode::Physical, "Physical").clicked() {
+                // ── Map scope: which political domain to portray ──────────────
+                if ui.selectable_value(&mut self.scope, MapScope::Physical, "🗺 Physical").clicked() {
                     visual_changed = true;
                 }
-                ui.separator();
-
-                if ui.selectable_value(&mut self.mode, MapMode::Provinces, "Provinces").clicked() {
+                if ui.selectable_value(&mut self.scope, MapScope::Land, "🏛 Land").clicked() {
                     visual_changed = true;
                 }
-                if ui.selectable_value(&mut self.mode, MapMode::Areas, "Areas").clicked() {
+                if ui.selectable_value(&mut self.scope, MapScope::Water, "🌊 Water").clicked() {
                     visual_changed = true;
                 }
-                if ui.selectable_value(&mut self.mode, MapMode::Regions, "Regions").clicked() {
-                    visual_changed = true;
-                }
-                if ui.selectable_value(&mut self.mode, MapMode::Superregions, "Superregions").clicked() {
-                    visual_changed = true;
-                }
-                if ui.selectable_value(&mut self.mode, MapMode::Continents, "Continents").clicked() {
+                if ui.selectable_value(&mut self.scope, MapScope::Everywhere, "🌍 Everywhere").clicked() {
                     visual_changed = true;
                 }
 
                 ui.separator();
 
-                // Border Toggle (in political modes)
-                if self.mode != MapMode::Physical {
+                // ── Tier selector (only meaningful in the political scopes) ───
+                ui.add_enabled_ui(self.scope != MapScope::Physical, |ui| {
+                    ui.label("Tier:");
+                    for (tier, label) in [
+                        (MapTier::Provinces, "Provinces"),
+                        (MapTier::Areas, "Areas"),
+                        (MapTier::Regions, "Regions"),
+                        (MapTier::Superregions, "Superregions"),
+                        (MapTier::Continents, "Continents"),
+                    ] {
+                        if ui.selectable_value(&mut self.tier, tier, label).clicked() {
+                            visual_changed = true;
+                        }
+                    }
+                });
+
+                ui.separator();
+
+                // Border Toggle (in political scopes)
+                if self.scope != MapScope::Physical {
                     if ui.checkbox(&mut self.show_borders, "Borders").clicked() {
                         visual_changed = true;
                     }
@@ -345,19 +461,31 @@ impl eframe::App for MapViewer {
 
         // ── BOTTOM STATUS BAR ─────────────────────────────────────────────────
         egui::Panel::bottom("bottom_status").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(format!(
-                    "Continents: {} | Superregions: {} | Regions: {} | Areas: {} | Provinces: {}",
-                    self.hierarchy.total_continents,
-                    self.hierarchy.total_superregions,
-                    self.hierarchy.total_regions,
-                    self.hierarchy.total_areas,
-                    self.hierarchy.total_provinces
-                ));
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(format!(
+                        "🏛 LAND  — Continents: {} | Superregions: {} | Regions: {} | Areas: {} | Provinces: {}",
+                        self.hierarchy.total_continents,
+                        self.hierarchy.total_superregions,
+                        self.hierarchy.total_regions,
+                        self.hierarchy.total_areas,
+                        self.hierarchy.total_provinces
+                    ));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(format!(
+                        "🌊 OCEAN — Basins: {} | Superregions: {} | Regions: {} | Areas: {} | Provinces: {}",
+                        self.ocean_hierarchy.total_continents,
+                        self.ocean_hierarchy.total_superregions,
+                        self.ocean_hierarchy.total_regions,
+                        self.ocean_hierarchy.total_areas,
+                        self.ocean_hierarchy.total_provinces
+                    ));
+                });
             });
         });
 
-        // Regenerate texture when mode or borders change
+        // Regenerate texture when scope, tier or borders change
         if self.texture.is_none() || visual_changed {
             let img = self.generate_texture();
             self.texture = Some(ui.ctx().load_texture("map_texture", img, TextureOptions::NEAREST));
@@ -426,29 +554,20 @@ impl eframe::App for MapViewer {
                 let display_temp = temp + micro_noise * 5.5;
 
                 let id = *self.province_ids.get(map_x, map_y);
-                // A frozen polar sea is "polar land": the very same impassable
-                // wasteland as the ice-capped polar continents, never open ocean.
+                let ocean_id = *self.ocean_province_ids.get(map_x, map_y);
+                // A frozen polar sea is "polar land": physically the very same
+                // impassable wasteland as the ice-capped polar continents, but
+                // politically it still belongs to a marine realm.
+                let is_ocean = elev <= sea_level && !*self.cache.is_lake.get(map_x, map_y);
                 let frozen_sea = is_frozen_sea(display_temp, elev, sea_level);
                 let is_waste = *self.is_wasteland.get(map_x, map_y)
-                    || frozen_sea
                     || (id == 0 && elev > sea_level && !*self.cache.is_lake.get(map_x, map_y));
 
                 response.on_hover_ui_at_pointer(|ui| {
-                    if frozen_sea {
-                        // Frozen polar seas: pack ice / glacial ice shelf. Always
-                        // presented as the impassable polar wasteland they are,
-                        // in *every* map mode.
-                        ui.heading(format!("🧊 {}", frozen_sea_name(display_temp)));
-                        ui.strong("Impassable / Uninhabited Polar Wasteland");
-                        ui.separator();
-                        ui.label(format!("Depth: {:.0} m", (sea_level - elev) * 4000.0));
-                        ui.label(format!("Temperature: {:.1} °C", temp));
-                        ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
-                        ui.separator();
-                        ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
-                    } else if self.mode == MapMode::Physical {
-                        let biome_title = if elev <= sea_level {
-                            "Ocean"
+                    if self.scope == MapScope::Physical {
+                        // ── Physical atlas readout ─────────────────────
+                        let biome_title = if is_ocean {
+                            if frozen_sea { frozen_sea_name(display_temp) } else { "Ocean" }
                         } else if *self.cache.is_lake.get(map_x, map_y) {
                             "Inland Freshwater Lake"
                         } else {
@@ -469,6 +588,29 @@ impl eframe::App for MapViewer {
                         }
                         ui.separator();
                         ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                    } else if is_ocean
+                        && ocean_id != 0
+                        && (ocean_id as usize) < self.ocean_hierarchy.provinces.len()
+                    {
+                        // ── Hydro-political marine realm ───────────────
+                        let node = &self.ocean_hierarchy.provinces[ocean_id as usize];
+                        if frozen_sea {
+                            ui.heading(format!("🧊 Ocean Province #{}", ocean_id));
+                            ui.strong(format!("{} · Impassable Polar Wasteland", frozen_sea_name(display_temp)));
+                        } else {
+                            ui.heading(format!("🌊 Ocean Province #{}", ocean_id));
+                        }
+                        ui.separator();
+                        ui.horizontal(|ui| { ui.label("Area:");        ui.strong(format!("#{}", node.area_id)); });
+                        ui.horizontal(|ui| { ui.label("Region:");      ui.strong(format!("#{}", node.region_id)); });
+                        ui.horizontal(|ui| { ui.label("Superregion:"); ui.strong(format!("#{}", node.superregion_id)); });
+                        ui.horizontal(|ui| { ui.label("Ocean Basin:"); ui.strong(format!("#{}", node.continent_id)); });
+                        ui.separator();
+                        ui.label(format!("Size: {} px", node.pixel_count));
+                        ui.label(format!("Depth: {:.0} m", (sea_level - elev) * 4000.0));
+                        ui.label(format!("Temperature: {:.1} °C", temp));
+                        ui.separator();
+                        ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
                     } else if is_waste {
                         if display_temp < PACK_ICE_TEMP {
                             ui.heading("🧊 Polar Ice Wasteland");
@@ -479,6 +621,14 @@ impl eframe::App for MapViewer {
                         }
                         ui.separator();
                         ui.label(format!("Environment: {}", get_biome_name(display_temp, precip, altitude)));
+                        ui.label(format!("Elevation: {:.0} m", altitude * 10000.0));
+                        ui.label(format!("Temperature: {:.1} °C", temp));
+                        ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
+                        ui.separator();
+                        ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                    } else if *self.cache.is_lake.get(map_x, map_y) {
+                        ui.heading("💧 Inland Freshwater Lake");
+                        ui.separator();
                         ui.label(format!("Elevation: {:.0} m", altitude * 10000.0));
                         ui.label(format!("Temperature: {:.1} °C", temp));
                         ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));

@@ -8,9 +8,11 @@ mod geopolitics;
 mod viewer;
 
 use climate::{simulate_moisture, simulate_temperature, simulate_winds, ClimateConfig};
-use geopolitics::{build_geopolitical_hierarchy, extract_province_graph};
+use geopolitics::{
+    build_geopolitical_hierarchy, build_ocean_hierarchy, extract_ocean_graph, extract_province_graph,
+};
 use core::WorldCache;
-use geography::{generate_provinces, GeographyConfig};
+use geography::{generate_ocean_provinces, generate_provinces, GeographyConfig, OceanConfig};
 use hydrology::{
     calculate_flow, extract_rivers_and_basins, fill_depressions_and_find_lakes, HydrologyConfig,
 };
@@ -54,6 +56,7 @@ fn main() {
     let climate_config = ClimateConfig { seed, ..Default::default() };
     let hydro_config = HydrologyConfig { min_lake_depth: 0.015, min_river_flow: 1800.0, major_river_flow: 15000.0, ..Default::default() };
     let geo_config = GeographyConfig::default();
+    let ocean_config = OceanConfig::default();
 
     println!("Active Seed: {} | Canvas: 8192x4096", seed);
     let cache_path = format!("world_{}.bin", seed);
@@ -117,19 +120,48 @@ fn main() {
         &geo_config,
         seed,
     );
-    println!("✓ [4/4] Geography & Provinces done:        {:.2?}", p_start.elapsed());
+    println!("✓ [4/6] Geography & Provinces done:        {:.2?}", p_start.elapsed());
 
     // --- STAGE 5: GEOPOLITICAL HIERARCHY (AREAS, REGIONS, CONTINENTS) ---
     let g_start = Instant::now();
     let extracted = extract_province_graph(&prov_res.province_ids, &cache.heightmap, &cache.is_lake, 0.40);
     let hierarchy = build_geopolitical_hierarchy(extracted.provinces, seed, cache.width as f32);
-    println!("✓ [5/5] Geopolitical Hierarchy completed:   {:.2?}", g_start.elapsed());
+    println!("✓ [5/6] Geopolitical Hierarchy completed:   {:.2?}", g_start.elapsed());
+
+    // --- STAGE 6: HYDRO-POLITICAL HIERARCHY (THE WORLD OCEAN) ---
+    let o_start = Instant::now();
+    let ocean_res = generate_ocean_provinces(
+        &cache.heightmap,
+        &cache.is_lake,
+        0.40,
+        &ocean_config,
+        seed,
+    );
+    let ocean_extracted = extract_ocean_graph(&ocean_res.ocean_province_ids);
+    let ocean_hierarchy = build_ocean_hierarchy(
+        ocean_extracted.provinces,
+        seed,
+        cache.width as f32,
+        &ocean_config,
+    );
+    println!(
+        "✓ [6/6] Hydro-Political Hierarchy completed:{:.2?}",
+        o_start.elapsed()
+    );
+    println!(
+        "         Ocean: {} provinces → {} basins → {} superregions → {} regions → {} areas.",
+        ocean_res.num_provinces,
+        ocean_hierarchy.total_continents,
+        ocean_hierarchy.total_superregions,
+        ocean_hierarchy.total_regions,
+        ocean_hierarchy.total_areas,
+    );
 
     println!("-------------------------------------------------------");
     println!("Total Generation Time:                     {:.2?}", total_start.elapsed());
     println!("-------------------------------------------------------");
 
-    // --- STAGE 6: LAUNCH INTERACTIVE MAP VIEWER ---
+    // --- STAGE 7: LAUNCH INTERACTIVE MAP VIEWER ---
     if run_viewer {
         println!("Launching Interactive 2D Viewer...");
         let options = eframe::NativeOptions {
@@ -141,9 +173,11 @@ fn main() {
             "Project Genesis - Atlas Viewer",
             options,
             Box::new(|_cc| Ok(Box::new(viewer::MapViewer::new(
-                cache.clone(), 
-                hierarchy.clone(), 
-                prov_res.clone()
+                cache.clone(),
+                hierarchy.clone(),
+                ocean_hierarchy.clone(),
+                prov_res.clone(),
+                ocean_res.clone(),
             )))),
         ).unwrap();
     }
@@ -179,5 +213,19 @@ fn main() {
     ).expect("Failed to export physical map");
 
     println!("✓ Rendered Physical Relief Map in:         {:.2?}", phys_start.elapsed());
+
+    let ocean_start = Instant::now();
+    export::save_ocean_political_map(
+        &cache.heightmap,
+        &cache.temp_grid,
+        &cache.precip_grid,
+        &cache.is_lake,
+        &ocean_hierarchy,
+        &ocean_res.ocean_province_ids,
+        0.40,
+        "world_ocean_political_map.png",
+    ).expect("Failed to export ocean political map");
+
+    println!("✓ Rendered Ocean Political Map in:         {:.2?}", ocean_start.elapsed());
     println!("=======================================================");
 }

@@ -1,3 +1,4 @@
+use crate::geography::config::OceanConfig;
 use crate::geopolitics::hierarchy::{GeopoliticalHierarchy, ProvinceNode};
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
@@ -528,6 +529,123 @@ pub fn build_geopolitical_hierarchy(
 
     GeopoliticalHierarchy {
         total_provinces: provinces.len().saturating_sub(1),
+        total_areas,
+        total_regions,
+        total_superregions,
+        total_continents: continent_count,
+        provinces,
+    }
+}
+
+/// Build the five-tier hydro-political hierarchy for the world ocean.
+///
+/// Mirrors the land hierarchy (`Province → Area → Region → Superregion →
+/// Continent`) but every tier is scaled up, as the ocean is the larger domain.
+/// Unlike the land there are no natural landmasses to seed continents from — the
+/// ocean is one connected body — so the top tier is produced by clustering the
+/// marine provinces directly into the great oceanic basins, and each lower tier
+/// is then clustered strictly inside its parent.
+pub fn build_ocean_hierarchy(
+    mut provinces: Vec<ProvinceNode>,
+    seed:      u64,
+    map_width: f32,
+    config:    &OceanConfig,
+) -> GeopoliticalHierarchy {
+    let n = provinces.len();
+    if n <= 1 {
+        return GeopoliticalHierarchy {
+            total_provinces: 0,
+            total_areas: 0,
+            total_regions: 0,
+            total_superregions: 0,
+            total_continents: 0,
+            provinces,
+        };
+    }
+
+    // ── 1. Ocean Continents (the great basins) ────────────────────────────────
+    // The whole ocean is one parent group, so this is a global partition.
+    let roots: Vec<u32> = vec![1; n];
+    let (mut continent_ids, continent_count) = cluster_tier(
+        &provinces,
+        &roots,
+        config.continent_target,
+        8, // at most 8 ocean basins
+        seed.wrapping_add(4),
+        map_width,
+    );
+    for i in 1..n {
+        provinces[i].continent_id = continent_ids[i];
+    }
+    println!("  ✓ Clustered {} Ocean Basin(s).", continent_count);
+
+    // ── 2. Oceanic Superregions (Strictly inside Basins) ──────────────────────
+    let (mut super_ids, _) = cluster_tier(
+        &provinces,
+        &continent_ids,
+        config.superregion_target,
+        50,
+        seed.wrapping_add(3),
+        map_width,
+    );
+    // Undersized superregions are absorbed so no tiny sliver survives between
+    // two large ocean realms.
+    let total_superregions = absorb_small_clusters(
+        &provinces,
+        &mut super_ids,
+        &continent_ids,
+        (config.superregion_target / 5).max(6),
+        map_width,
+    );
+    for i in 1..n {
+        provinces[i].superregion_id = super_ids[i];
+    }
+    println!("  ✓ Clustered {} Oceanic Superregion(s) (undersized absorbed).", total_superregions);
+
+    // ── 3. Oceanic Regions (Strictly inside Superregions) ─────────────────────
+    let (mut region_ids, _) = cluster_tier(
+        &provinces,
+        &super_ids,
+        config.region_target,
+        40,
+        seed.wrapping_add(2),
+        map_width,
+    );
+    let total_regions = absorb_small_clusters(
+        &provinces,
+        &mut region_ids,
+        &super_ids,
+        (config.region_target / 5).max(4),
+        map_width,
+    );
+    for i in 1..n {
+        provinces[i].region_id = region_ids[i];
+    }
+    println!("  ✓ Clustered {} Oceanic Region(s) (undersized absorbed).", total_regions);
+
+    // ── 4. Oceanic Areas (Strictly inside Regions) ────────────────────────────
+    let (mut area_ids, _) = cluster_tier(
+        &provinces,
+        &region_ids,
+        config.area_target,
+        25,
+        seed.wrapping_add(1),
+        map_width,
+    );
+    let total_areas = absorb_small_clusters(
+        &provinces,
+        &mut area_ids,
+        &region_ids,
+        2,
+        map_width,
+    );
+    for i in 1..n {
+        provinces[i].area_id = area_ids[i];
+    }
+    println!("  ✓ Clustered {} Oceanic Area(s) (undersized absorbed).", total_areas);
+
+    GeopoliticalHierarchy {
+        total_provinces: provinces.iter().filter(|p| p.pixel_count > 0).count(),
         total_areas,
         total_regions,
         total_superregions,

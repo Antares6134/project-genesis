@@ -403,3 +403,152 @@ pub fn save_raw_heightmap_16bit<P: AsRef<Path>>(
 
     img.save(path)
 }
+
+/// Render the hydro-political subdivision of the world ocean.
+///
+/// Marine provinces are tinted by the ocean basin (top tier) they belong to,
+/// with the full hierarchical frontier — superregion, region, area and province
+/// — drawn on top. The continents are muted to a low-saturation relief so the
+/// ocean politics dominate the chart, exactly as the Atlas Viewer's *Water*
+/// scope does interactively.
+pub fn save_ocean_political_map<P: AsRef<Path>>(
+    heightmap: &Grid<f32>, temp_grid: &Grid<f32>, precip_grid: &Grid<f32>,
+    is_lake: &Grid<bool>, ocean_hierarchy: &GeopoliticalHierarchy,
+    ocean_province_grid: &Grid<u32>, sea_level: f32, path: P,
+) -> Result<(), image::ImageError> {
+    let w = heightmap.width;
+    let h = heightmap.height;
+    let hw = w as u32;
+    let hh = h as u32;
+    let mut img = RgbImage::new(hw, hh);
+    let lx = -0.7071f32;
+    let ly = -0.7071f32;
+    let render_noise = OpenSimplex::new(777);
+
+    // Fast O(1) lookup tables for every ocean tier.
+    let n = ocean_hierarchy.provinces.len();
+    let mut area_lut = vec![0u32; n];
+    let mut region_lut = vec![0u32; n];
+    let mut super_lut = vec![0u32; n];
+    let mut cont_lut = vec![0u32; n];
+    for p in &ocean_hierarchy.provinces {
+        let i = p.id as usize;
+        if i >= n { continue; }
+        area_lut[i] = p.area_id;
+        region_lut[i] = p.region_id;
+        super_lut[i] = p.superregion_id;
+        cont_lut[i] = p.continent_id;
+    }
+
+    let raw_pixels: &mut [u8] = img.as_mut();
+    raw_pixels.par_chunks_exact_mut((hw * 3) as usize).enumerate().for_each(|(y_idx, row)| {
+        let y = y_idx as isize;
+        let v = y_idx as f32 / (h - 1) as f32;
+        let lat = (0.5 - v) * std::f32::consts::PI;
+
+        for x_idx in 0..w {
+            let x = x_idx as isize;
+            let u = x_idx as f32 / w as f32;
+            let lon = (u - 0.5) * std::f32::consts::TAU;
+
+            let px = (lat.cos() * lon.cos()) as f64;
+            let py = lat.sin() as f64;
+            let pz = (lat.cos() * lon.sin()) as f64;
+            let micro_noise = sample_3d_fbm(&render_noise, px * 35.0, py * 35.0, pz * 35.0, 4, 2.0, 0.5);
+
+            let elev = *heightmap.get(x, y);
+            let temp = *temp_grid.get(x, y);
+            let precip = *precip_grid.get(x, y);
+            let display_temp = temp + micro_noise * 5.5;
+
+            let (gx, gy) = heightmap.gradient(x as f32, y as f32);
+            let slope = (gx * gx + gy * gy).sqrt();
+            let hillshade = -(gx * lx + gy * ly);
+            let mut shade = (1.0 + hillshade * 5.5 - slope * 1.5).clamp(0.65, 1.38);
+            if y < 2 || y > (h as isize - 3) { shade = 1.0; }
+
+            let is_lake_px = *is_lake.get(x, y);
+            let ocean_id = *ocean_province_grid.get(x, y);
+            let mut final_color: [f32; 3];
+
+            if is_lake_px {
+                final_color = [42.0, 125.0, 185.0];
+            } else if elev <= sea_level {
+                // Shaded bathymetry, whether ice-covered or open water.
+                let depth = (elev / sea_level).clamp(0.0, 1.0);
+                let shelf = depth.powf(2.8);
+                let sea_shade = (1.0 + hillshade * 2.2).clamp(0.85, 1.15);
+                let sea = [
+                    (12.0 * (1.0 - shelf) + 45.0 * shelf) * sea_shade,
+                    (35.0 * (1.0 - shelf) + 125.0 * shelf) * sea_shade,
+                    (75.0 * (1.0 - shelf) + 185.0 * shelf) * sea_shade,
+                ];
+
+                if ocean_id == 0 || (ocean_id as usize) >= n {
+                    final_color = sea;
+                } else {
+                    let oid = ocean_id as usize;
+                    let basin_rgb = id_to_territory_color(cont_lut[oid]);
+                    final_color = [
+                        basin_rgb[0] * 0.62 + sea[0] * 0.38,
+                        basin_rgb[1] * 0.62 + sea[1] * 0.38,
+                        basin_rgb[2] * 0.62 + sea[2] * 0.38,
+                    ];
+
+                    // Hierarchical frontiers
+                    let mut is_super = false;
+                    let mut is_region = false;
+                    let mut is_area = false;
+                    let mut is_prov = false;
+                    for dy in -2..=2isize {
+                        for dx in -2..=2isize {
+                            if dx == 0 && dy == 0 { continue; }
+                            let nx = ocean_province_grid.wrap_x(x + dx) as isize;
+                            let ny = y + dy;
+                            if ny < 0 || ny >= h as isize { continue; }
+                            let nid = *ocean_province_grid.get(nx, ny);
+                            if nid == 0 || nid == ocean_id { continue; }
+                            if (nid as usize) >= n { continue; }
+                            let nidx = nid as usize;
+                            let dist_sq = dx * dx + dy * dy;
+                            if super_lut[nidx] != super_lut[oid] { is_super = true; }
+                            if region_lut[nidx] != region_lut[oid] && dist_sq <= 4 { is_region = true; }
+                            if area_lut[nidx] != area_lut[oid] && dist_sq <= 2 { is_area = true; }
+                            if dist_sq <= 1 { is_prov = true; }
+                        }
+                    }
+
+                    if is_super {
+                        final_color = [235.0, 240.0, 250.0];
+                    } else if is_region {
+                        final_color = [8.0, 10.0, 14.0];
+                    } else if is_area {
+                        final_color = [45.0, 50.0, 58.0];
+                    } else if is_prov {
+                        final_color = [final_color[0] * 0.6, final_color[1] * 0.6, final_color[2] * 0.6];
+                    }
+                }
+            } else {
+                // Land: low-saturation relief so the marine chart stays legible.
+                let altitude = elev - sea_level;
+                let base = get_atlas_biome_color(display_temp, precip, altitude);
+                let r = base[0] as f32 * shade;
+                let g = base[1] as f32 * shade;
+                let b = base[2] as f32 * shade;
+                let grey = (r + g + b) / 3.0;
+                final_color = [
+                    r * 0.35 + grey * 0.65,
+                    g * 0.35 + grey * 0.65,
+                    b * 0.35 + grey * 0.65,
+                ];
+            }
+
+            let pixel_idx = (x_idx * 3) as usize;
+            row[pixel_idx]     = final_color[0].clamp(0.0, 255.0) as u8;
+            row[pixel_idx + 1] = final_color[1].clamp(0.0, 255.0) as u8;
+            row[pixel_idx + 2] = final_color[2].clamp(0.0, 255.0) as u8;
+        }
+    });
+
+    img.save(path)
+}
