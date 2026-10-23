@@ -2,6 +2,7 @@ use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
 use noise::{NoiseFn, OpenSimplex};
 use rayon::prelude::*;
 use crate::core::{Grid, WorldCache};
+use crate::core::polar::{frozen_sea_name, is_frozen_sea, PACK_ICE_TEMP};
 use crate::geography::ProvinceResult;
 use crate::geopolitics::GeopoliticalHierarchy;
 use crate::export::image::{get_atlas_biome_color, get_biome_name, id_to_territory_color};
@@ -157,28 +158,31 @@ impl MapViewer {
                 final_color = compute_physical_color();
             } else {
                 // ── Political map modes with authentic Wastelands ─────────
+                // The frozen polar seas read as "polar land" on the atlas and
+                // belong to exactly the same impassable wasteland as the
+                // ice-capped polar continents and the continental wildernesses.
+                let frozen_sea = is_frozen_sea(display_temp, elev, sea_level);
                 let is_waste = *is_wasteland.get(x as isize, y as isize)
+                    || frozen_sea
                     || (id == 0 && elev > sea_level && !*is_lake.get(x as isize, y as isize));
 
-                if elev <= sea_level {
-                    if display_temp < -8.0 {
-                        final_color = [245.0, 248.0, 255.0];
-                    } else if display_temp < -3.0 {
-                        final_color = [175.0, 210.0, 235.0];
-                    } else {
-                        let depth = (elev / sea_level).clamp(0.0, 1.0);
-                        let shelf = depth.powf(2.8);
-                        let sea_shade = (1.0 + hillshade * 2.2).clamp(0.85, 1.15);
-                        final_color = [
-                            (12.0 * (1.0 - shelf) + 45.0 * shelf) * sea_shade,
-                            (35.0 * (1.0 - shelf) + 125.0 * shelf) * sea_shade,
-                            (75.0 * (1.0 - shelf) + 185.0 * shelf) * sea_shade,
-                        ];
-                    }
+                if elev <= sea_level && !frozen_sea {
+                    // Open ocean — frozen pixels fall through to the wasteland
+                    // shading instead of being painted as open water.
+                    let depth = (elev / sea_level).clamp(0.0, 1.0);
+                    let shelf = depth.powf(2.8);
+                    let sea_shade = (1.0 + hillshade * 2.2).clamp(0.85, 1.15);
+                    final_color = [
+                        (12.0 * (1.0 - shelf) + 45.0 * shelf) * sea_shade,
+                        (35.0 * (1.0 - shelf) + 125.0 * shelf) * sea_shade,
+                        (75.0 * (1.0 - shelf) + 185.0 * shelf) * sea_shade,
+                    ];
                 } else if *is_lake.get(x as isize, y as isize) {
                     final_color = [42.0, 125.0, 185.0];
                 } else if is_waste {
-                    // Impassable Wasteland: physical terrain relief with subtle neutral shading
+                    // Impassable Wasteland — continental wilderness, ice-capped
+                    // polar continents and frozen polar seas alike: physical
+                    // terrain relief under a subtle neutral shading.
                     let phys = compute_physical_color();
                     final_color = [
                         phys[0] * 0.78 + 35.0,
@@ -407,24 +411,48 @@ impl eframe::App for MapViewer {
                 let sea_level = 0.40f32;
                 let altitude = elev - sea_level;
 
+                // Reproduce the exact "display temperature" (station temperature
+                // plus the fractal micro-climate jitter) used while painting, so
+                // the tooltip can never disagree with the pixels on screen about
+                // whether a spot is frozen or not.
+                let v = map_y as f32 / (self.cache.height - 1) as f32;
+                let lat = (0.5 - v) * std::f32::consts::PI;
+                let u = map_x as f32 / self.cache.width as f32;
+                let lon = (u - 0.5) * std::f32::consts::TAU;
+                let hx = (lat.cos() * lon.cos()) as f64;
+                let hy = lat.sin() as f64;
+                let hz = (lat.cos() * lon.sin()) as f64;
+                let micro_noise = sample_3d_fbm(&OpenSimplex::new(777), hx * 35.0, hy * 35.0, hz * 35.0, 4, 2.0, 0.5);
+                let display_temp = temp + micro_noise * 5.5;
+
                 let id = *self.province_ids.get(map_x, map_y);
+                // A frozen polar sea is "polar land": the very same impassable
+                // wasteland as the ice-capped polar continents, never open ocean.
+                let frozen_sea = is_frozen_sea(display_temp, elev, sea_level);
                 let is_waste = *self.is_wasteland.get(map_x, map_y)
+                    || frozen_sea
                     || (id == 0 && elev > sea_level && !*self.cache.is_lake.get(map_x, map_y));
 
                 response.on_hover_ui_at_pointer(|ui| {
-                    if self.mode == MapMode::Physical {
+                    if frozen_sea {
+                        // Frozen polar seas: pack ice / glacial ice shelf. Always
+                        // presented as the impassable polar wasteland they are,
+                        // in *every* map mode.
+                        ui.heading(format!("🧊 {}", frozen_sea_name(display_temp)));
+                        ui.strong("Impassable / Uninhabited Polar Wasteland");
+                        ui.separator();
+                        ui.label(format!("Depth: {:.0} m", (sea_level - elev) * 4000.0));
+                        ui.label(format!("Temperature: {:.1} °C", temp));
+                        ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
+                        ui.separator();
+                        ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                    } else if self.mode == MapMode::Physical {
                         let biome_title = if elev <= sea_level {
-                            if temp < -8.0 {
-                                "Polar Glacial Ice Shelf"
-                            } else if temp < -3.0 {
-                                "Polar Pack Sea Ice"
-                            } else {
-                                "Ocean"
-                            }
+                            "Ocean"
                         } else if *self.cache.is_lake.get(map_x, map_y) {
                             "Inland Freshwater Lake"
                         } else {
-                            get_biome_name(temp, precip, altitude)
+                            get_biome_name(display_temp, precip, altitude)
                         };
 
                         ui.heading(format!("🌍 {}", biome_title));
@@ -442,10 +470,15 @@ impl eframe::App for MapViewer {
                         ui.separator();
                         ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
                     } else if is_waste {
-                        ui.heading("🏔️ Wasteland");
-                        ui.strong("Impassable / Uninhabited Wilderness");
+                        if display_temp < PACK_ICE_TEMP {
+                            ui.heading("🧊 Polar Ice Wasteland");
+                            ui.strong("Permanent Ice Sheet / Impassable Wilderness");
+                        } else {
+                            ui.heading("🏔️ Wasteland");
+                            ui.strong("Impassable / Uninhabited Wilderness");
+                        }
                         ui.separator();
-                        ui.label(format!("Environment: {}", get_biome_name(temp, precip, altitude)));
+                        ui.label(format!("Environment: {}", get_biome_name(display_temp, precip, altitude)));
                         ui.label(format!("Elevation: {:.0} m", altitude * 10000.0));
                         ui.label(format!("Temperature: {:.1} °C", temp));
                         ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));

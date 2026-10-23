@@ -125,6 +125,19 @@ pub fn generate_provinces(
     const MIN_WASTE_BLOB: usize = 64;  // discard sub-visible speckle
     const WASTE_CUTOFF: f32 = 0.68;    // hostility threshold
 
+    // ── Permanent polar ice cap (latitudes are absolute radians) ──────────────
+    // Beyond these latitudes the land becomes an unbroken cap of permanent ice:
+    //   • provinces may still nibble at the fringe (≈66–74°), but the deep
+    //     polar land is impassable, so no settlement can sprawl all the way to
+    //     the pole — the converging longitudes there used to stretch single
+    //     provinces into grotesque, thread-thin bands;
+    //   • the frozen seas beyond it — rendered as "polar land" by the atlas —
+    //     are part of the very same wasteland.
+    const POLAR_ICE_START: f32 = 1.15;  // ≈ 65.9° — the ice begins to bite
+    const POLAR_ICE_FULL: f32 = 1.40;   // ≈ 80.2° — solid cap from here inward
+    const POLAR_ICE_NOISE: f32 = 0.34;  // organic wobble of the cap's edge
+    const POLAR_ICE_CUTOFF: f32 = 0.55;
+
     for y in 0..h {
         let v = y as f32 / (h - 1) as f32;
         let lat = (0.5 - v) * std::f32::consts::PI;
@@ -162,6 +175,15 @@ pub fn generate_provinces(
 
             let mut wasteland = false;
             let mut ice = false;
+
+            // ── Permanent polar ice cap ───────────────────────────────────────
+            // Deliberately evaluated for *every* polar land pixel, frozen coasts
+            // included: it is the populated strip along the ice rim that used to
+            // let a single province snake round and round until it stretched
+            // into a paper-thin band reaching the very pole.
+            let polar_ice = ramp(abs_lat, POLAR_ICE_START, POLAR_ICE_FULL)
+                + waste_noise.get([px * 26.0, py * 26.0, pz * 26.0]) as f32 * POLAR_ICE_NOISE
+                > POLAR_ICE_CUTOFF;
 
             if !coastal && !river {
                 let distf    = dist as f32;
@@ -219,8 +241,19 @@ pub fn generate_provinces(
                 wasteland = ice || hostility > WASTE_CUTOFF;
             }
 
+            if polar_ice {
+                // Polar ice overrides every sanctuary: the deep cap can never be
+                // reopened by the coastal/river belt, so no populated strip can
+                // ever ring the pole.
+                wasteland = true;
+                ice = true;
+            }
+
             if ice {
                 is_ice_cap.set(x as isize, y as isize, true);
+                // 255 marks permanent ice: mandatory wilderness that the global
+                // wilderness budget below must never dilute away.
+                hostility_map.set(x as isize, y as isize, 255);
             }
             if wasteland {
                 is_wasteland.set(x as isize, y as isize, true);
@@ -241,25 +274,33 @@ pub fn generate_provinces(
     // Worlds vary enormously in how much hyper-arid or high ground they hold: a
     // supercontinent can easily be 25% desert. Cap the share of land allowed to
     // become impassable so no seed is buried under wilderness — while a mild
-    // world is never given *extra* wasteland.
+    // world is never given *extra* wasteland. Permanent polar ice is left out of
+    // the accounting entirely: it is mandatory wilderness, not a tunable.
     {
         const MAX_WASTE_SHARE: f64 = 0.18;
         let min_q = (WASTE_CUTOFF * 100.0) as usize;
 
         let mut hist = [0u32; 256];
-        let mut land_px = 0u64;
+        let mut total_land_px = 0u64;   // every land pixel, polar ice included
+        let mut budget_land_px = 0u64;  // ice-free land the budget actually governs
         for y in 0..h {
             for x in 0..w {
                 let xi = x as isize;
                 let yi = y as isize;
                 if !is_land(heightmap, is_lake, xi, yi, sea_level) { continue; }
-                land_px += 1;
+                total_land_px += 1;
+                // Permanent polar/glacial ice is geography, not noise: it is
+                // mandatory wilderness, so it must never be budgeted away — nor
+                // allowed to inflate the wilderness share until the
+                // climate-driven deserts are squeezed out of existence.
+                if *is_ice_cap.get(xi, yi) { continue; }
+                budget_land_px += 1;
                 hist[*hostility_map.get(xi, yi) as usize] += 1;
             }
         }
 
         let raw: u64 = hist[min_q.min(255)..].iter().map(|&c| c as u64).sum();
-        let budget = (land_px as f64 * MAX_WASTE_SHARE) as u64;
+        let budget = (budget_land_px as f64 * MAX_WASTE_SHARE) as u64;
 
         if raw > budget {
             let mut acc = 0u64;
@@ -273,8 +314,9 @@ pub fn generate_provinces(
             }
             let cut = cutoff_q.min(255) as u8;
             println!(
-                "✓ Wilderness would cover {:.1}% of the land — raising the threshold to {:.2} (ceiling {:.0}%).",
-                raw as f64 / land_px.max(1) as f64 * 100.0,
+                "✓ Wilderness would cover {:.1}% of the ice-free land ({:.1}% of all land) — raising the threshold to {:.2} (ceiling {:.0}%).",
+                raw as f64 / budget_land_px.max(1) as f64 * 100.0,
+                raw as f64 / total_land_px.max(1) as f64 * 100.0,
                 cut as f32 / 100.0,
                 MAX_WASTE_SHARE * 100.0,
             );
@@ -282,6 +324,8 @@ pub fn generate_provinces(
                 for x in 0..w {
                     let xi = x as isize;
                     let yi = y as isize;
+                    // Ice caps stay impassable however the budget moves.
+                    if *is_ice_cap.get(xi, yi) { continue; }
                     let v = *hostility_map.get(xi, yi);
                     is_wasteland.set(xi, yi, v > 0 && v >= cut);
                 }
@@ -321,7 +365,7 @@ pub fn generate_provinces(
         heightmap, is_lake, &is_wasteland, &is_ice_cap, sea_level,
     );
     println!(
-        "✓ Physical Land: {} px | Wastelands: {} px ({:.1}%)",
+        "✓ Physical Land: {} px | Wastelands (incl. polar ice): {} px ({:.1}%)",
         total_land_px,
         total_waste_px,
         (total_waste_px as f32 / total_land_px.max(1) as f32) * 100.0,
@@ -333,13 +377,13 @@ pub fn generate_provinces(
 
     let (landmasses, networks) = connectivity_stats(heightmap, is_lake, &is_wasteland, sea_level);
     println!(
-        "✓ Landmasses: {} | Populated province networks: {}{}",
+        "✓ Inhabited landmasses: {} | Populated province networks: {}{}",
         landmasses,
         networks,
         if landmasses == networks {
-            " (every landmass fully connected)"
+            " (every inhabited landmass fully connected)"
         } else {
-            "  ⚠ WARNING: a landmass was severed by wilderness!"
+            "  ⚠ WARNING: an inhabited landmass was severed by wilderness!"
         }
     );
 
@@ -955,10 +999,13 @@ fn carve_path(
     }
 }
 
-/// Counts landmasses and populated (non-wasteland) province networks.
+/// Counts inhabited landmasses and populated (non-wasteland) province networks.
 ///
-/// A correctly generated world has exactly one populated network per landmass:
-/// wilderness may never sever a continent into disconnected province clusters.
+/// A correctly generated world has exactly one populated network per inhabited
+/// landmass: wilderness may never sever a continent into disconnected province
+/// clusters. Landmasses that are *entirely* wilderness — a lone ice-capped
+/// polar islet, for instance — are not counted at all, since they could never
+/// host a province network in the first place.
 fn connectivity_stats(
     heightmap: &Grid<f32>,
     is_lake: &Grid<bool>,
@@ -979,11 +1026,12 @@ fn connectivity_stats(
                 if *seen.get(sx, sy) { continue; }
                 if !is_land(heightmap, is_lake, sx, sy, sea_level) { continue; }
                 if populated_only && *is_wasteland.get(sx, sy) { continue; }
-                comps += 1;
                 seen.set(sx, sy, true);
                 q.clear();
                 q.push_back((sx, sy));
+                let mut has_populated = false;
                 while let Some((cx, cy)) = q.pop_front() {
+                    if !*is_wasteland.get(cx, cy) { has_populated = true; }
                     for &(dx, dy) in &dirs {
                         let nx = seen.wrap_x(cx + dx) as isize;
                         let ny = cy + dy;
@@ -994,6 +1042,9 @@ fn connectivity_stats(
                         seen.set(nx, ny, true);
                         q.push_back((nx, ny));
                     }
+                }
+                if populated_only || has_populated {
+                    comps += 1;
                 }
             }
         }

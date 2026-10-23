@@ -24,7 +24,7 @@ An integrated desktop viewer built with `eframe`/`egui` featuring real-time pan/
 4. **Geopolitical Hierarchy:** 
    - Graph-based clustering with Lloyd relaxation to partition landmasses into **Areas $\rightarrow$ Regions $\rightarrow$ Superregions $\rightarrow$ Continents**.
    - Habitability-weighted seeding (thousands of provinces, scaled to the world's settled land) snapping to natural terrain barriers (mountain crests, rivers, coasts).
-   - Impassable "wastelands" driven by geography rather than noise: the hearts of continental deserts, high massifs/plateaus, deep rainforest interiors and polar ice. Coastal belts and river corridors are always settled, so no landmass is ever severed into disconnected province networks. A wilderness budget keeps any single seed from drowning in wasteland.
+   - Impassable "wastelands" driven by geography rather than noise: the hearts of continental deserts, high massifs/plateaus, deep rainforest interiors and polar ice. The permanent polar caps, deep ice-locked continents and the frozen seas the atlas renders as "polar land" — are *mandatory* wasteland: they are never counted against the wilderness budget, and they stop provinces from sprawling to the pole (where the converging longitudes used to stretch single provinces into paper-thin bands). Coastal belts and river corridors are always settled, so no landmass is ever severed into disconnected province networks. A wilderness budget keeps any single seed from drowning in wasteland.
 5. **Cartography & Rendering:** Swiss-style multi-angle hillshading combined with a natural atlas hypsometric palette.
 
 ---
