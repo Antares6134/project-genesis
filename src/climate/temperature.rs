@@ -1,4 +1,4 @@
-use crate::core::Grid;
+use crate::core::{relief, Grid};
 use crate::climate::config::{ClimateConfig, PlanetaryMode};
 use noise::{NoiseFn, OpenSimplex};
 
@@ -47,10 +47,12 @@ pub fn simulate_temperature(
             ]) as f32;
             base_temp += atmospheric_wave * 6.5;
 
-            // 3. Altitude Lapse Rate (higher altitude cools significantly)
+            // 3. Altitude Lapse Rate (higher altitude cools significantly).
+            // Altitude is read through the planet's vertical datum, so the
+            // configured lapse rate is the familiar °C per 1000 m of climb.
             let elev = *heightmap.get(x as isize, y as isize);
-            let altitude_above_sea = (elev - sea_level).max(0.0);
-            let temp = base_temp - altitude_above_sea * config.lapse_rate;
+            let altitude_km = (elev - sea_level).max(0.0) * relief::LAND_M_PER_UNIT / 1000.0;
+            let temp = base_temp - altitude_km * config.lapse_rate;
 
             temp_grid.set(x as isize, y as isize, temp);
         }

@@ -1,23 +1,36 @@
 use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
 use noise::{NoiseFn, OpenSimplex};
 use rayon::prelude::*;
-use crate::core::{Grid, WorldCache};
-use crate::core::polar::{frozen_sea_name, is_frozen_sea, PACK_ICE_TEMP};
+use crate::core::polar::{frozen_sea_name, is_frozen_sea, ICE_SHELF_TEMP, PACK_ICE_TEMP};
+use crate::core::{relief, Grid, WorldCache};
 use crate::geography::{OceanResult, ProvinceResult};
 use crate::geopolitics::GeopoliticalHierarchy;
-use crate::export::image::{get_atlas_biome_color, get_biome_name, id_to_territory_color};
+use crate::export::image::{
+    get_atlas_biome_color, get_biome_name, hypsometric_band, hypsometric_color,
+    hypsometric_range_label, id_to_territory_color, HYPSOMETRIC_COLORS, HYPSOMETRIC_NAMES,
+};
 
 /// What political domain the atlas is currently portraying.
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum MapScope {
     /// Pure physical relief — no political tinting at all.
     Physical,
+    /// Hypsometric survey: terrain colour *is* elevation, above and below water.
+    Topographic,
     /// Political subdivision of the landmasses only.
     Land,
     /// Hydro-political subdivision of the world ocean only.
     Water,
     /// Both land and ocean political subdivisions at once.
     Everywhere,
+}
+
+impl MapScope {
+    /// True for the scopes that portray a political hierarchy, which are the only
+    /// ones the tier selector and the border toggle apply to.
+    fn is_political(self) -> bool {
+        matches!(self, MapScope::Land | MapScope::Water | MapScope::Everywhere)
+    }
 }
 
 /// Which tier of the (land or ocean) hierarchy is being shaded.
@@ -43,6 +56,47 @@ pub struct MapViewer {
     zoom: f32,
     offset: egui::Vec2,
     show_borders: bool,
+    /// World-wide relief extremes in metres, measured once at startup so the
+    /// topographic legend never has to re-scan the 8K heightmap every frame.
+    peak_metres: f32,
+    trench_metres: f32,
+    ocean_share: f32,
+}
+
+/// Highest peak, deepest trench and ocean share of a heightmap, in metres.
+fn measure_relief(heightmap: &Grid<f32>) -> (f32, f32, f32) {
+    let (peak, trench, ocean_px) = heightmap
+        .raw_slice()
+        .par_iter()
+        .fold(
+            || (f32::MIN, f32::MAX, 0usize),
+            |acc, &e| {
+                let m = relief::to_metres(e);
+                (
+                    acc.0.max(m),
+                    acc.1.min(m),
+                    acc.2 + usize::from(e <= relief::SEA_LEVEL),
+                )
+            },
+        )
+        .reduce(
+            || (f32::MIN, f32::MAX, 0usize),
+            |a, b| (a.0.max(b.0), a.1.min(b.1), a.2 + b.2),
+        );
+
+    let total = heightmap.raw_slice().len().max(1);
+    (peak, trench, ocean_px as f32 / total as f32)
+}
+
+/// Linear blend of two float colours, `t = 0` keeping `base`.
+#[inline(always)]
+fn blend_rgb(base: [f32; 3], over: [f32; 3], t: f32) -> [f32; 3] {
+    let t = t.clamp(0.0, 1.0);
+    [
+        base[0] * (1.0 - t) + over[0] * t,
+        base[1] * (1.0 - t) + over[1] * t,
+        base[2] * (1.0 - t) + over[2] * t,
+    ]
 }
 
 
@@ -174,6 +228,7 @@ impl MapViewer {
         prov_res: ProvinceResult,
         ocean_res: OceanResult,
     ) -> Self {
+        let (peak_metres, trench_metres, ocean_share) = measure_relief(&cache.heightmap);
         Self {
             cache,
             hierarchy,
@@ -187,7 +242,45 @@ impl MapViewer {
             zoom: 0.16,
             offset: egui::vec2(0.0, 0.0),
             show_borders: true,
+            peak_metres,
+            trench_metres,
+            ocean_share,
         }
+    }
+
+    /// Select the scope, tier and border style the atlas portrays.
+    ///
+    /// Lets a headless caller render any scope × tier combination without ever
+    /// opening the interactive window.
+    pub fn set_view(&mut self, scope: MapScope, tier: MapTier, show_borders: bool) {
+        self.scope = scope;
+        self.tier = tier;
+        self.show_borders = show_borders;
+    }
+
+    /// Render the current scope/tier straight to a PNG, headlessly.
+    ///
+    /// This is the very same painter the interactive window uses, so a plate
+    /// written here is pixel-identical to what the viewer puts on screen. The
+    /// plate is downscaled by `scale` (e.g. `0.25` for a 2K plate) so exported
+    /// images stay a usable size.
+    pub fn save_png(&self, path: &str, scale: f32) -> Result<(), image::ImageError> {
+        let img = self.generate_texture();
+        let (w, h) = (img.size[0] as u32, img.size[1] as u32);
+        let mut buf = Vec::with_capacity((w * h * 4) as usize);
+        for px in &img.pixels {
+            buf.extend_from_slice(&px.to_array());
+        }
+        let full = image::RgbaImage::from_raw(w, h, buf)
+            .expect("RGBA buffer sized to the atlas texture");
+        let plate = if (scale - 1.0).abs() < f32::EPSILON {
+            full
+        } else {
+            let out_w = ((w as f32 * scale).round() as u32).max(1);
+            let out_h = ((h as f32 * scale).round() as u32).max(1);
+            image::imageops::resize(&full, out_w, out_h, image::imageops::FilterType::Lanczos3)
+        };
+        plate.save(path)
     }
 
     fn generate_texture(&self) -> ColorImage {
@@ -211,7 +304,7 @@ impl MapViewer {
         let flow_grid = &self.cache.flow_grid;
         let is_lake = &self.cache.is_lake;
 
-        let sea_level = 0.40f32;
+        let sea_level = relief::SEA_LEVEL;
         let min_river_flow = 1800.0f32;
         let major_river_flow = 15000.0f32;
         let lx = -0.7071f32;
@@ -289,11 +382,65 @@ impl MapViewer {
                 }
             };
 
+            // ── Topographic (hypsometric) pixel computation ───────────────
+            let compute_topographic_color = || -> [f32; 3] {
+                let metres = relief::to_metres(elev);
+                let band = hypsometric_color(metres);
+                let mut color = [band[0] as f32, band[1] as f32, band[2] as f32];
+
+                if *is_lake.get(x as isize, y as isize) && elev > sea_level {
+                    color = [42.0, 125.0, 185.0];
+                } else if elev <= sea_level {
+                    // Frozen seas read as "polar land": drifting pack ice over
+                    // the shelf, solid ice shelf deeper towards the pole. The
+                    // bathymetry stays faintly visible underneath.
+                    if display_temp < ICE_SHELF_TEMP {
+                        color = blend_rgb(color, [246.0, 249.0, 255.0], 0.90);
+                    } else if display_temp < PACK_ICE_TEMP {
+                        color = blend_rgb(color, [222.0, 236.0, 250.0], 0.70);
+                    }
+                } else {
+                    color = [
+                        color[0] * shade,
+                        color[1] * shade,
+                        color[2] * shade,
+                    ];
+                    // Ice-capped land keeps its relief readable under a
+                    // translucent veneer instead of blanking the survey out.
+                    if display_temp < -3.0 {
+                        color = blend_rgb(color, [238.0, 244.0, 252.0], 0.75);
+                    }
+                    let flow = *flow_grid.get(x as isize, y as isize);
+                    if flow >= min_river_flow {
+                        let river_strength = ((flow - min_river_flow) / major_river_flow).sqrt().clamp(0.30, 1.0);
+                        let blend = (river_strength * 1.4).clamp(0.0, 1.0);
+                        color = blend_rgb(color, [20.0, 75.0, 155.0], blend);
+                    }
+                }
+
+                // A contour line along every hypsometric band boundary, the way
+                // a topographic sheet steps between its elevation tints.
+                let band_idx = hypsometric_band(metres);
+                let right = hypsometric_band(relief::to_metres(*heightmap.get(x as isize + 1, y as isize)));
+                let down = if y + 1 < h {
+                    hypsometric_band(relief::to_metres(*heightmap.get(x as isize, y as isize + 1)))
+                } else {
+                    band_idx
+                };
+                if right != band_idx || down != band_idx {
+                    color = [color[0] * 0.62, color[1] * 0.62, color[2] * 0.62];
+                }
+                color
+            };
+
             let mut final_color: [f32; 3];
 
             if scope == MapScope::Physical {
                 // Pure physical atlas rendering
                 final_color = compute_physical_color();
+            } else if scope == MapScope::Topographic {
+                // Hypsometric survey: colour is elevation, above and below water
+                final_color = compute_topographic_color();
             } else {
                 // ── Political map modes ────────────────────────────────
                 let is_ocean = elev <= sea_level && !*is_lake.get(x as isize, y as isize);
@@ -402,8 +549,11 @@ impl eframe::App for MapViewer {
                 ui.heading("🌍 Atlas Viewer");
                 ui.separator();
 
-                // ── Map scope: which political domain to portray ──────────────
+                // ── Map scope: what the atlas portrays ────────────────────────
                 if ui.selectable_value(&mut self.scope, MapScope::Physical, "🗺 Physical").clicked() {
+                    visual_changed = true;
+                }
+                if ui.selectable_value(&mut self.scope, MapScope::Topographic, "⛰ Topographic").clicked() {
                     visual_changed = true;
                 }
                 if ui.selectable_value(&mut self.scope, MapScope::Land, "🏛 Land").clicked() {
@@ -419,7 +569,7 @@ impl eframe::App for MapViewer {
                 ui.separator();
 
                 // ── Tier selector (only meaningful in the political scopes) ───
-                ui.add_enabled_ui(self.scope != MapScope::Physical, |ui| {
+                ui.add_enabled_ui(self.scope.is_political(), |ui| {
                     ui.label("Tier:");
                     for (tier, label) in [
                         (MapTier::Provinces, "Provinces"),
@@ -437,7 +587,7 @@ impl eframe::App for MapViewer {
                 ui.separator();
 
                 // Border Toggle (in political scopes)
-                if self.scope != MapScope::Physical {
+                if self.scope.is_political() {
                     if ui.checkbox(&mut self.show_borders, "Borders").clicked() {
                         visual_changed = true;
                     }
@@ -485,7 +635,53 @@ impl eframe::App for MapViewer {
             });
         });
 
-        // Regenerate texture when scope, tier or borders change
+        // ── HYPSOMETRIC LEGEND (Topographic scope only) ───────────────────────
+        // The survey sheet is only readable with its scale at hand, so the
+        // Topographic scope carries the palette — every band, its metre range and
+        // its name — plus the world's own relief extremes.
+        if self.scope == MapScope::Topographic {
+            egui::Panel::right("hypsometric_legend")
+                .resizable(false)
+                .exact_size(268.0)
+                .show(ui, |ui| {
+                    ui.heading("⛰ Topographic Scale");
+                    ui.label(
+                        egui::RichText::new("Tint = elevation above / depth below the sea surface.")
+                            .small()
+                            .weak(),
+                    );
+                    ui.separator();
+                    ui.label(format!("🗻 Highest peak    +{:.0} m", self.peak_metres));
+                    ui.label(format!("🌊 Deepest trench  {:.0} m", self.trench_metres));
+                    ui.label(format!("🌍 Surface: {:.0}% ocean", self.ocean_share * 100.0));
+                    ui.separator();
+                    // The band list is the only part that can overflow a short
+                    // window, so it is the part that scrolls.
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for band in (0..HYPSOMETRIC_COLORS.len()).rev() {
+                            let rgb = HYPSOMETRIC_COLORS[band];
+                            ui.horizontal(|ui| {
+                                let (swatch, _) = ui.allocate_exact_size(
+                                    egui::vec2(16.0, 11.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(
+                                    swatch,
+                                    2.0,
+                                    Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
+                                );
+                                ui.label(
+                                    egui::RichText::new(hypsometric_range_label(band)).small(),
+                                );
+                                ui.label(
+                                    egui::RichText::new(HYPSOMETRIC_NAMES[band]).small().weak(),
+                                );
+                            });
+                        }
+                    });
+                });
+        }
+
         if self.texture.is_none() || visual_changed {
             let img = self.generate_texture();
             self.texture = Some(ui.ctx().load_texture("map_texture", img, TextureOptions::NEAREST));
@@ -536,8 +732,12 @@ impl eframe::App for MapViewer {
                 let temp = *self.cache.temp_grid.get(map_x, map_y);
                 let precip = *self.cache.precip_grid.get(map_x, map_y);
                 let flow = *self.cache.flow_grid.get(map_x, map_y);
-                let sea_level = 0.40f32;
+                let sea_level = relief::SEA_LEVEL;
+                // `altitude` stays in heightmap units: the biome palette's own
+                // thresholds are expressed in those units. Everything that is
+                // *reported to the user* goes through the vertical datum.
                 let altitude = elev - sea_level;
+                let metres = relief::to_metres(elev);
 
                 // Reproduce the exact "display temperature" (station temperature
                 // plus the fractal micro-climate jitter) used while painting, so
@@ -564,7 +764,45 @@ impl eframe::App for MapViewer {
                     || (id == 0 && elev > sea_level && !*self.cache.is_lake.get(map_x, map_y));
 
                 response.on_hover_ui_at_pointer(|ui| {
-                    if self.scope == MapScope::Physical {
+                    if self.scope == MapScope::Topographic {
+                        // ── Hypsometric survey readout ────────────────────────
+                        let band = hypsometric_band(metres);
+                        let surface = if is_ocean {
+                            if frozen_sea { frozen_sea_name(display_temp) } else { "Open Ocean" }
+                        } else if *self.cache.is_lake.get(map_x, map_y) {
+                            "Inland Freshwater Lake"
+                        } else if display_temp < -3.0 {
+                            "Ice-capped Land"
+                        } else {
+                            get_biome_name(display_temp, precip, altitude)
+                        };
+
+                        ui.heading(format!("⛰ {}", surface));
+                        ui.separator();
+                        if elev > sea_level {
+                            ui.label(format!("Elevation: {:.0} m above sea level", relief::altitude_metres(elev)));
+                        } else {
+                            ui.label(format!("Depth: {:.0} m below sea level", relief::depth_metres(elev)));
+                        }
+                        ui.label(format!(
+                            "Relief band: {}  ({})",
+                            HYPSOMETRIC_NAMES[band],
+                            hypsometric_range_label(band)
+                        ));
+                        // Every surface reports a temperature — the land its
+                        // station temperature, the sea its surface temperature.
+                        if is_ocean {
+                            ui.label(format!("Sea-Surface Temperature: {:.1} °C", temp));
+                        } else {
+                            ui.label(format!("Temperature: {:.1} °C", temp));
+                            ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
+                        }
+                        if !is_ocean && flow >= 1800.0 {
+                            ui.label(format!("River Flow: {:.0} m³/s", flow));
+                        }
+                        ui.separator();
+                        ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                    } else if self.scope == MapScope::Physical {
                         // ── Physical atlas readout ─────────────────────
                         let biome_title = if is_ocean {
                             if frozen_sea { frozen_sea_name(display_temp) } else { "Ocean" }
@@ -577,9 +815,9 @@ impl eframe::App for MapViewer {
                         ui.heading(format!("🌍 {}", biome_title));
                         ui.separator();
                         if elev > sea_level {
-                            ui.label(format!("Elevation: {:.0} m", altitude * 10000.0));
+                            ui.label(format!("Elevation: {:.0} m", relief::altitude_metres(elev)));
                         } else {
-                            ui.label(format!("Depth: {:.0} m", (sea_level - elev) * 4000.0));
+                            ui.label(format!("Depth: {:.0} m", relief::depth_metres(elev)));
                         }
                         ui.label(format!("Temperature: {:.1} °C", temp));
                         ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
@@ -607,7 +845,7 @@ impl eframe::App for MapViewer {
                         ui.horizontal(|ui| { ui.label("Ocean Basin:"); ui.strong(format!("#{}", node.continent_id)); });
                         ui.separator();
                         ui.label(format!("Size: {} px", node.pixel_count));
-                        ui.label(format!("Depth: {:.0} m", (sea_level - elev) * 4000.0));
+                        ui.label(format!("Sea Floor Depth: {:.0} m", relief::depth_metres(elev)));
                         ui.label(format!("Temperature: {:.1} °C", temp));
                         ui.separator();
                         ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
@@ -621,7 +859,7 @@ impl eframe::App for MapViewer {
                         }
                         ui.separator();
                         ui.label(format!("Environment: {}", get_biome_name(display_temp, precip, altitude)));
-                        ui.label(format!("Elevation: {:.0} m", altitude * 10000.0));
+                        ui.label(format!("Elevation: {:.0} m", relief::altitude_metres(elev)));
                         ui.label(format!("Temperature: {:.1} °C", temp));
                         ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
                         ui.separator();
@@ -629,7 +867,7 @@ impl eframe::App for MapViewer {
                     } else if *self.cache.is_lake.get(map_x, map_y) {
                         ui.heading("💧 Inland Freshwater Lake");
                         ui.separator();
-                        ui.label(format!("Elevation: {:.0} m", altitude * 10000.0));
+                        ui.label(format!("Lake Surface: {:.0} m", relief::altitude_metres(elev)));
                         ui.label(format!("Temperature: {:.1} °C", temp));
                         ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
                         ui.separator();
@@ -663,11 +901,13 @@ impl eframe::App for MapViewer {
                         }
                         ui.separator();
                         ui.label(format!("Size: {} px", node.pixel_count));
-                        ui.label(format!("Elevation: {:.0} m", altitude * 10000.0));
+                        ui.label(format!("Elevation: {:.0} m", relief::altitude_metres(elev)));
+                        ui.label(format!("Temperature: {:.1} °C", temp));
+                        ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
                         ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
                     } else {
                         ui.heading("🌊 Ocean");
-                        ui.label(format!("Depth: {:.0} m", (sea_level - elev) * 4000.0));
+                        ui.label(format!("Depth: {:.0} m", relief::depth_metres(elev)));
                         ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
                     }
                 });

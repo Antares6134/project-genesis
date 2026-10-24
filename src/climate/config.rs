@@ -12,7 +12,7 @@ pub struct ClimateConfig {
     // Temperatures in Celsius
     pub equator_temp: f32, // e.g. 30.0 °C
     pub pole_temp: f32,    // e.g. -25.0 °C
-    pub lapse_rate: f32,   // Temperature drop per elevation unit (e.g. 50.0 °C)
+    pub lapse_rate: f32,   // Temperature drop per kilometre of altitude (°C/km), e.g. 6.5
 
     // Moisture & Precipitation
     pub evaporation_rate: f32,    // How fast oceans vaporize moisture into winds
@@ -26,7 +26,7 @@ impl Default for ClimateConfig {
             mode: PlanetaryMode::RotatingStandard { axial_tilt_deg: 23.5 },
             equator_temp: 32.0,
             pole_temp: -28.0,
-            lapse_rate: 45.0,
+            lapse_rate: 6.5,
             evaporation_rate: 0.12,
             rain_shadow_decay: 0.08,
             wind_passes: 45,

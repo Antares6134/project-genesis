@@ -2,7 +2,7 @@ use crate::geography::config::OceanConfig;
 use crate::geopolitics::hierarchy::{GeopoliticalHierarchy, ProvinceNode};
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeMap, BinaryHeap, HashSet};
 
 // ─── Priority-queue state for Dijkstra ───────────────────────────────────────
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -34,6 +34,10 @@ fn wrap_dist_sq(x1: f32, y1: f32, x2: f32, y2: f32, w: f32) -> f32 {
 
 /// Cluster a set of provinces into `k` balanced groups using capacity-aware
 /// Dijkstra with Lloyd centroid relaxation.
+///
+/// Every map below is a `BTreeMap`: the clustering consumes a seeded RNG while
+/// iterating parent groups, so a stable iteration order is what makes the whole
+/// hierarchy reproducible for a given seed.
 fn cluster_group(
     members:      &[u32],
     member_set:   &HashSet<u32>,
@@ -42,8 +46,8 @@ fn cluster_group(
     first_cid:    u32,
     rng:          &mut ChaCha8Rng,
     map_width:    f32,
-) -> HashMap<u32, u32> {
-    let mut assignments: HashMap<u32, u32> = HashMap::with_capacity(members.len());
+) -> BTreeMap<u32, u32> {
+    let mut assignments: BTreeMap<u32, u32> = BTreeMap::new();
 
     if k == 1 {
         for &m in members { assignments.insert(m, first_cid); }
@@ -57,7 +61,7 @@ fn cluster_group(
     seeds.push(*members.choose(rng).unwrap());
 
     for _ in 1..k {
-        let mut dist: HashMap<u32, u32> = HashMap::with_capacity(members.len());
+        let mut dist: BTreeMap<u32, u32> = BTreeMap::new();
         let mut heap: BinaryHeap<DijkState> = BinaryHeap::new();
 
         for &s in &seeds {
@@ -117,7 +121,7 @@ fn cluster_group(
         let is_final = pass == 1;
         assignments.clear();
 
-        let mut best: HashMap<u32, u32> = HashMap::with_capacity(members.len());
+        let mut best: BTreeMap<u32, u32> = BTreeMap::new();
         let mut heap: BinaryHeap<DijkState> = BinaryHeap::new();
         let mut cluster_claimed = vec![0usize; k];
 
@@ -235,7 +239,7 @@ fn cluster_tier(
     let n = provinces.len();
     let mut assignments = vec![0u32; n];
 
-    let mut parent_groups: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut parent_groups: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     for p in provinces.iter() {
         if p.id == 0 || p.pixel_count == 0 { continue; }
         if (p.id as usize) >= parent_ids.len() { continue; }
@@ -283,9 +287,9 @@ fn absorb_small_clusters(
     let n = provinces.len();
 
     loop {
-        let mut cluster_sizes: HashMap<u32, usize> = HashMap::new();
-        let mut cluster_parent: HashMap<u32, u32> = HashMap::new();
-        let mut parent_cluster_count: HashMap<u32, usize> = HashMap::new();
+        let mut cluster_sizes: BTreeMap<u32, usize> = BTreeMap::new();
+        let mut cluster_parent: BTreeMap<u32, u32> = BTreeMap::new();
+        let mut parent_cluster_count: BTreeMap<u32, usize> = BTreeMap::new();
 
         for p in provinces.iter() {
             if p.id == 0 || p.pixel_count == 0 { continue; }
@@ -330,7 +334,7 @@ fn absorb_small_clusters(
                 continue;
             }
 
-            let mut neighbor_scores: HashMap<u32, u32> = HashMap::new();
+            let mut neighbor_scores: BTreeMap<u32, u32> = BTreeMap::new();
 
             for &m in &members {
                 for &(nb, cost) in &provinces[m as usize].neighbors {
@@ -384,7 +388,7 @@ fn absorb_small_clusters(
     unique_ids.sort_unstable();
     unique_ids.dedup();
 
-    let remap: HashMap<u32, u32> = unique_ids
+    let remap: BTreeMap<u32, u32> = unique_ids
         .iter()
         .enumerate()
         .map(|(idx, &old)| (old, (idx + 1) as u32))

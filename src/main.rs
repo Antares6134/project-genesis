@@ -11,7 +11,7 @@ use climate::{simulate_moisture, simulate_temperature, simulate_winds, ClimateCo
 use geopolitics::{
     build_geopolitical_hierarchy, build_ocean_hierarchy, extract_ocean_graph, extract_province_graph,
 };
-use core::WorldCache;
+use core::{relief, Grid, WorldCache};
 use geography::{generate_ocean_provinces, generate_provinces, GeographyConfig, OceanConfig};
 use hydrology::{
     calculate_flow, extract_rivers_and_basins, fill_depressions_and_find_lakes, HydrologyConfig,
@@ -36,11 +36,13 @@ fn main() {
     let mut load_cache = false;
 
     let mut run_viewer = false;
+    let mut run_plates = false;
 
     for arg in env::args().skip(1) {
         if arg == "--save" { save_cache = true; } 
         else if arg == "--load" { load_cache = true; }
-        else if arg == "--viewer" { run_viewer = true; } // NEW!
+        else if arg == "--viewer" { run_viewer = true; }
+        else if arg == "--plates" { run_plates = true; }
         else if let Ok(parsed_seed) = arg.parse::<u64>() { seed = parsed_seed; }
     }
 
@@ -79,14 +81,14 @@ fn main() {
         println!("✓ [1/3] Geology & Erosion completed:       {:.2?}", t_start.elapsed());
 
         let c_start = Instant::now();
-        let temp_grid = simulate_temperature(&result.heightmap, 0.40, &climate_config);
+        let temp_grid = simulate_temperature(&result.heightmap, relief::SEA_LEVEL, &climate_config);
         let winds = simulate_winds(world_config.width, world_config.height, &climate_config);
-        let moisture = simulate_moisture(&result.heightmap, &temp_grid, &winds, 0.40, &climate_config);
+        let moisture = simulate_moisture(&result.heightmap, &temp_grid, &winds, relief::SEA_LEVEL, &climate_config);
         println!("✓ [2/3] Atmospheric Climate completed:     {:.2?}", c_start.elapsed());
 
         let h_start = Instant::now();
-        let pit_res = fill_depressions_and_find_lakes(&result.heightmap, 0.40, &hydro_config);
-        let flow_res = calculate_flow(&pit_res.filled_heightmap, &moisture.precipitation, 0.40, &hydro_config);
+        let pit_res = fill_depressions_and_find_lakes(&result.heightmap, relief::SEA_LEVEL, &hydro_config);
+        let flow_res = calculate_flow(&pit_res.filled_heightmap, &moisture.precipitation, relief::SEA_LEVEL, &hydro_config);
         // Rivers extracted here if needed later
         println!("✓ [3/3] Hydrology & River routing done:    {:.2?}", h_start.elapsed());
 
@@ -107,6 +109,9 @@ fn main() {
         new_cache
     };
 
+    // --- RELIEF REPORT: the finished world's hypsometric profile, in metres ---
+    report_relief(&cache.heightmap);
+
     // --- STAGE 4: POLITICAL GEOGRAPHY (PROVINCES) ---
     let p_start = Instant::now();
     let prov_res = generate_provinces(
@@ -115,7 +120,7 @@ fn main() {
         &cache.precip_grid,
         &cache.flow_grid,
         &cache.is_lake,
-        0.40, // THE BUG FIX: Physical sea level is 0.40, NOT 0.11!!!
+        relief::SEA_LEVEL, // The planet's own vertical datum (the old 0.11 threshold is only the *noise* water line)
         hydro_config.min_river_flow,
         &geo_config,
         seed,
@@ -124,7 +129,7 @@ fn main() {
 
     // --- STAGE 5: GEOPOLITICAL HIERARCHY (AREAS, REGIONS, CONTINENTS) ---
     let g_start = Instant::now();
-    let extracted = extract_province_graph(&prov_res.province_ids, &cache.heightmap, &cache.is_lake, 0.40);
+    let extracted = extract_province_graph(&prov_res.province_ids, &cache.heightmap, &cache.is_lake, relief::SEA_LEVEL);
     let hierarchy = build_geopolitical_hierarchy(extracted.provinces, seed, cache.width as f32);
     println!("✓ [5/6] Geopolitical Hierarchy completed:   {:.2?}", g_start.elapsed());
 
@@ -133,7 +138,7 @@ fn main() {
     let ocean_res = generate_ocean_provinces(
         &cache.heightmap,
         &cache.is_lake,
-        0.40,
+        relief::SEA_LEVEL,
         &ocean_config,
         seed,
     );
@@ -191,7 +196,7 @@ fn main() {
         &cache.is_lake,
         &hierarchy,
         &prov_res.province_ids,
-        0.40,
+        relief::SEA_LEVEL,
         hydro_config.min_river_flow,
         hydro_config.major_river_flow,
         "world_political_map.png",
@@ -206,7 +211,7 @@ fn main() {
         &cache.precip_grid,
         &cache.flow_grid,
         &cache.is_lake,
-        0.40,
+        relief::SEA_LEVEL,
         hydro_config.min_river_flow,
         hydro_config.major_river_flow,
         "world_physical_map.png",
@@ -214,18 +219,137 @@ fn main() {
 
     println!("✓ Rendered Physical Relief Map in:         {:.2?}", phys_start.elapsed());
 
-    let ocean_start = Instant::now();
-    export::save_ocean_political_map(
+    let topo_start = Instant::now();
+    export::save_topographic_map(
         &cache.heightmap,
         &cache.temp_grid,
-        &cache.precip_grid,
+        &cache.flow_grid,
         &cache.is_lake,
-        &ocean_hierarchy,
-        &ocean_res.ocean_province_ids,
-        0.40,
-        "world_ocean_political_map.png",
-    ).expect("Failed to export ocean political map");
+        relief::SEA_LEVEL,
+        hydro_config.min_river_flow,
+        hydro_config.major_river_flow,
+        "world_topographic_map.png",
+    ).expect("Failed to export topographic map");
 
-    println!("✓ Rendered Ocean Political Map in:         {:.2?}", ocean_start.elapsed());
+    println!("✓ Rendered Topographic Survey Map in:      {:.2?}", topo_start.elapsed());
+
+    // --- STAGE 8: HEADLESS ATLAS PLATES (optional) ---
+    // The very same painter the interactive window uses, exported straight to
+    // 2K PNGs. Handy for regenerating the README's scope and tier tables in one
+    // shot: `cargo run --release -- <seed> --load --plates`.
+    if run_plates {
+        let plate_start = Instant::now();
+        let plates: [(&str, viewer::MapScope, viewer::MapTier); 13] = [
+            ("atlas_physical.png",            viewer::MapScope::Physical,    viewer::MapTier::Regions),
+            ("atlas_topographic.png",         viewer::MapScope::Topographic, viewer::MapTier::Regions),
+            ("atlas_land_provinces.png",      viewer::MapScope::Land,        viewer::MapTier::Provinces),
+            ("atlas_land_areas.png",          viewer::MapScope::Land,        viewer::MapTier::Areas),
+            ("atlas_land_regions.png",        viewer::MapScope::Land,        viewer::MapTier::Regions),
+            ("atlas_land_superregions.png",   viewer::MapScope::Land,        viewer::MapTier::Superregions),
+            ("atlas_land_continents.png",     viewer::MapScope::Land,        viewer::MapTier::Continents),
+            ("atlas_water_provinces.png",     viewer::MapScope::Water,       viewer::MapTier::Provinces),
+            ("atlas_water_areas.png",         viewer::MapScope::Water,       viewer::MapTier::Areas),
+            ("atlas_water_regions.png",       viewer::MapScope::Water,       viewer::MapTier::Regions),
+            ("atlas_water_superregions.png",  viewer::MapScope::Water,       viewer::MapTier::Superregions),
+            ("atlas_water_basins.png",        viewer::MapScope::Water,       viewer::MapTier::Continents),
+            ("atlas_everywhere_regions.png",  viewer::MapScope::Everywhere,  viewer::MapTier::Regions),
+        ];
+
+        let mut plate_viewer = viewer::MapViewer::new(
+            cache.clone(),
+            hierarchy.clone(),
+            ocean_hierarchy.clone(),
+            prov_res.clone(),
+            ocean_res.clone(),
+        );
+        for (path, scope, tier) in plates {
+            plate_viewer.set_view(scope, tier, true);
+            plate_viewer
+                .save_png(path, 0.25)
+                .unwrap_or_else(|e| panic!("Failed to render atlas plate {path}: {e}"));
+            println!("✓ Rendered atlas plate:                    {path}");
+        }
+        println!("✓ Rendered {} atlas plates in:             {:.2?}", plates.len(), plate_start.elapsed());
+    }
+
     println!("=======================================================");
+}
+
+/// Print the finished world's hypsometric profile in metres.
+///
+/// This is the quickest sanity check that the vertical datum came out sane —
+/// how much of the surface ended up as ocean, where the median shore and sea
+/// floor sit, how much shelf there is, and what the extremes are. It is printed
+/// for cached worlds too, so a world generated under an older datum announces
+/// itself instead of quietly reporting a 400 m-deep ocean.
+fn report_relief(heightmap: &Grid<f32>) {
+    const BIN_M: f32 = 100.0;
+    const BINS: usize = 200; // the datum spans -11 000 m … +9 000 m
+
+    let mut bins = vec![0u64; BINS];
+    let (mut land, mut ocean) = (0u64, 0u64);
+    let (mut peak, mut trench) = (f32::MIN, f32::MAX);
+
+    for &elev in heightmap.raw_slice() {
+        let metres = relief::to_metres(elev);
+        if metres > 0.0 {
+            land += 1;
+            peak = peak.max(metres);
+        } else {
+            ocean += 1;
+            trench = trench.min(metres);
+        }
+        let bin = (((metres + relief::DEEPEST_TRENCH_M) / BIN_M) as isize)
+            .clamp(0, BINS as isize - 1) as usize;
+        bins[bin] += 1;
+    }
+
+    let surface = (land + ocean).max(1) as f64;
+    let (land_seen, ocean_seen) = (land.max(1) as f64, ocean.max(1) as f64);
+    let (mut deep, mut high) = (0f64, 0f64);
+    let (mut shelf, mut median_depth) = (0u64, 0f32);
+    let (mut median_altitude, mut altitude_90) = (0f32, 0f32);
+    let (mut have_depth, mut have_alt, mut have_alt90) = (false, false, false);
+
+    for bin in 0..BINS {
+        let metres = bin as f32 * BIN_M - relief::DEEPEST_TRENCH_M + BIN_M * 0.5;
+        let count = bins[bin] as f64;
+        if metres <= 0.0 {
+            deep += count;
+            if metres >= -200.0 {
+                shelf += bins[bin];
+            }
+            if !have_depth && deep >= ocean_seen * 0.5 {
+                median_depth = metres;
+                have_depth = true;
+            }
+        } else {
+            high += count;
+            if !have_alt && high >= land_seen * 0.5 {
+                median_altitude = metres;
+                have_alt = true;
+            }
+            if !have_alt90 && high >= land_seen * 0.9 {
+                altitude_90 = metres;
+                have_alt90 = true;
+            }
+        }
+    }
+
+    println!("── Planetary relief (vertical datum applied) ──────────");
+    println!(
+        "   Surface : {:.1}% land / {:.1}% ocean",
+        100.0 * land as f64 / surface,
+        100.0 * ocean as f64 / surface
+    );
+    println!(
+        "   Land    : median +{:.0} m | 90% below +{:.0} m | highest peak +{:.0} m",
+        median_altitude, altitude_90, peak
+    );
+    println!(
+        "   Ocean   : median {:.0} m | {:.1}% continental shelf (<= -200 m) | deepest trench {:.0} m",
+        median_depth,
+        100.0 * shelf as f64 / ocean_seen,
+        trench
+    );
 }
