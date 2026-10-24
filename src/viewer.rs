@@ -1,6 +1,8 @@
 use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
 use noise::{NoiseFn, OpenSimplex};
 use rayon::prelude::*;
+use crate::civilization::{Civilization, CivilizationWorld};
+use crate::core::fmt::{thousands, thousands_u64};
 use crate::core::polar::{frozen_sea_name, is_frozen_sea, ICE_SHELF_TEMP, PACK_ICE_TEMP};
 use crate::core::{relief, Grid, WorldCache};
 use crate::geography::{OceanResult, ProvinceResult};
@@ -17,6 +19,8 @@ pub enum MapScope {
     Physical,
     /// Hypsometric survey: terrain colour *is* elevation, above and below water.
     Topographic,
+    /// The dawn of history: the physical world with the civilizations on it.
+    Civilizations,
     /// Political subdivision of the landmasses only.
     Land,
     /// Hydro-political subdivision of the world ocean only.
@@ -30,6 +34,11 @@ impl MapScope {
     /// ones the tier selector and the border toggle apply to.
     fn is_political(self) -> bool {
         matches!(self, MapScope::Land | MapScope::Water | MapScope::Everywhere)
+    }
+
+    /// True for the scope whose subject *is* the dawn civilizations.
+    fn is_civilizations(self) -> bool {
+        matches!(self, MapScope::Civilizations)
     }
 }
 
@@ -50,12 +59,16 @@ pub struct MapViewer {
     province_ids: Grid<u32>,
     ocean_province_ids: Grid<u32>,
     is_wasteland: Grid<bool>,
+    /// The world's dawn: its civilizations, and who holds which province.
+    civilizations: CivilizationWorld,
     scope: MapScope,
     tier: MapTier,
     texture: Option<TextureHandle>,
     zoom: f32,
     offset: egui::Vec2,
     show_borders: bool,
+    /// Tint the civilizations of the dawn over *any* scope, not just their own.
+    show_civilizations: bool,
     /// World-wide relief extremes in metres, measured once at startup so the
     /// topographic legend never has to re-scan the 8K heightmap every frame.
     peak_metres: f32,
@@ -220,6 +233,220 @@ fn ocean_border_shade(
     color
 }
 
+/// Darken a pixel standing on a civilization's edge, or on an internal boundary
+/// of the currently displayed tier.
+///
+/// Two weights, because the two lines mean different things. A realm's outer edge
+/// is drawn hard — it is the one frontier history actually argued about — while the
+/// subdivisions *inside* a realm are drawn faintly, exactly where the tier
+/// selector says they belong. The overlay on other scopes draws the frontier only,
+/// since those scopes already draw their own internal lines.
+#[inline]
+fn civ_border_shade(
+    mut color: [f32; 3],
+    province_ids: &Grid<u32>,
+    hierarchy: &GeopoliticalHierarchy,
+    civilizations: &CivilizationWorld,
+    id: u32,
+    x: usize,
+    y: usize,
+    h: usize,
+    tier: MapTier,
+    internal: bool,
+) -> [f32; 3] {
+    let owner = civilizations.owner_of(id);
+    let color_id = tier_color_id(hierarchy, id, tier);
+
+    let rx = province_ids.wrap_x(x as isize + 1) as isize;
+    let right_id = *province_ids.get(rx, y as isize);
+    let down_id = if y + 1 < h {
+        *province_ids.get(x as isize, y as isize + 1)
+    } else {
+        id
+    };
+
+    // Coast or wilderness always counts as the edge of the realm.
+    let frontier = |nid: u32| -> bool {
+        nid == 0 || civilizations.owner_of(nid) != owner
+    };
+    let internal_edge = |nid: u32| -> bool {
+        if nid == 0 || nid == id || civilizations.owner_of(nid) != owner {
+            return false;
+        }
+        if (nid as usize) >= hierarchy.provinces.len() {
+            return false;
+        }
+        tier_color_id(hierarchy, nid, tier) != color_id
+    };
+
+    if frontier(right_id) || frontier(down_id) {
+        color = [color[0] * 0.50, color[1] * 0.50, color[2] * 0.50];
+    } else if internal && (internal_edge(right_id) || internal_edge(down_id)) {
+        color = [color[0] * 0.84, color[1] * 0.84, color[2] * 0.84];
+    }
+    color
+}
+
+/// The full dossier of one civilization, as the Civilizations map mode shows it on
+/// hover: the reasoning first, then what the realm became.
+///
+/// The "why here" bullets are not decoration — they are the measurements
+/// [`crate::civilization::generate_civilizations`] actually used, so a reader can
+/// audit why this spot and not the valley next door.
+fn civilization_dossier(
+    ui: &mut egui::Ui,
+    civ: &Civilization,
+    world: &CivilizationWorld,
+    province_id: u32,
+    province_population: u64,
+) {
+    ui.horizontal(|ui| {
+        let (swatch, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+        ui.painter().rect_filled(
+            swatch,
+            2.0,
+            Color32::from_rgb(civ.color[0], civ.color[1], civ.color[2]),
+        );
+        ui.heading(civ.name.as_str());
+    });
+    ui.strong(format!(
+        "{} · {}",
+        civ.cradle_kind.label(),
+        civ.scale.label()
+    ));
+    ui.label(egui::RichText::new(civ.scale.analogue()).small().weak());
+
+    ui.separator();
+    ui.horizontal(|ui| {
+        ui.label("Founded:");
+        ui.strong(format!(
+            "{} — age {}",
+            civ.year_label(),
+            thousands(civ.age_years as f32)
+        ));
+    });
+    ui.strong(civ.era.label());
+    ui.label(egui::RichText::new(civ.era.describe()).small().weak());
+    ui.strong(civ.isolation.label());
+    ui.label(egui::RichText::new(civ.isolation.describe()).small().weak());
+
+    ui.separator();
+    ui.label(format!(
+        "Territory: {} provinces · {} km²",
+        thousands(civ.provinces.len() as f32),
+        thousands(civ.area_km2)
+    ));
+    ui.label(format!(
+        "Population: {} people ({:.1}/km²)",
+        thousands_u64(civ.population),
+        civ.density_per_km2
+    ));
+    ui.label(format!(
+        "This province: #{} · {} people",
+        province_id,
+        thousands_u64(province_population)
+    ));
+    ui.label(egui::RichText::new(civ.rise.seat.as_str()).small().weak());
+    ui.label(
+        egui::RichText::new(format!(
+            "Cradle at {:.1}° {} {:.1}° {}",
+            civ.seat_latitude_deg.abs(),
+            if civ.seat_latitude_deg >= 0.0 { "N" } else { "S" },
+            civ.seat_longitude_deg.abs(),
+            if civ.seat_longitude_deg >= 0.0 { "E" } else { "W" },
+        ))
+        .small()
+        .weak(),
+    );
+
+    ui.separator();
+    ui.heading(format!("Why here — {}", civ.rise.kind.label()));
+    ui.label(egui::RichText::new(civ.rise.headline.as_str()).small());
+    for reason in &civ.rise.reasons {
+        ui.label(format!("• {reason}"));
+    }
+
+    ui.separator();
+    ui.heading("Culture");
+    ui.label(format!("{} · {}", civ.culture.subsistence.label(), civ.culture.kinship.label()));
+    ui.label(format!(
+        "{} · {} · {}",
+        civ.culture.outlook.label(),
+        civ.culture.craft.label(),
+        civ.culture.literacy.label()
+    ));
+    ui.label(format!(
+        "Hallmark: {} · Arts: {}",
+        civ.culture.architecture,
+        civ.culture.arts.join(", ")
+    ));
+    ui.label(egui::RichText::new(civ.culture.note.as_str()).small().weak());
+
+    ui.separator();
+    ui.heading("Faith");
+    ui.label(format!("{} · kept by {}", civ.faith.kind.label(), civ.faith.clergy));
+    ui.label(format!("{}; {}", civ.faith.kind.creed(), civ.faith.note));
+    for practice in &civ.faith.practices {
+        ui.label(format!("• {practice}"));
+    }
+
+    if !civ.kin.is_empty() {
+        ui.separator();
+        ui.heading("Ancestral stock");
+        ui.label(format!(
+            "{} family, shared with {}",
+            civ.language_family,
+            kin_list(world, &civ.kin)
+        ));
+    }
+
+    if !civ.influences.is_empty() {
+        ui.separator();
+        ui.heading("Before it existed");
+        for influence in &civ.influences {
+            ui.label(format!(
+                "• took up {} from {}",
+                influence.borrowed.join(", "),
+                world.name_of(influence.other)
+            ))
+            .on_hover_text(influence.note.as_str());
+        }
+    }
+
+    ui.separator();
+    if civ.contacts.is_empty() {
+        ui.label("Contact: none — it rose with the world to itself.");
+        ui.label(egui::RichText::new(civ.isolation.describe()).small().weak());
+    } else {
+        ui.label("Contact:");
+        for contact in &civ.contacts {
+            ui.label(format!(
+                "• {} — {} ({}, ≈{} km)",
+                world.name_of(contact.other),
+                contact.relation,
+                contact.kind.label(),
+                thousands(contact.distance_km)
+            ))
+            .on_hover_text(contact.note.as_str());
+        }
+        ui.label(egui::RichText::new("Hover a neighbouring realm to read its side of these relations.").small().weak());
+    }
+}
+
+/// `Civilization #2 and #3` — a kin list rendered by name.
+fn kin_list(world: &CivilizationWorld, ids: &[u32]) -> String {
+    let names: Vec<String> = ids.iter().map(|&id| world.name_of(id).to_string()).collect();
+    match names.len() {
+        0 => String::new(),
+        1 => names[0].clone(),
+        _ => format!(
+            "{} and {}",
+            names[..names.len() - 1].join(", "),
+            names[names.len() - 1]
+        ),
+    }
+}
+
 impl MapViewer {
     pub fn new(
         cache: WorldCache,
@@ -227,6 +454,7 @@ impl MapViewer {
         ocean_hierarchy: GeopoliticalHierarchy,
         prov_res: ProvinceResult,
         ocean_res: OceanResult,
+        civilizations: CivilizationWorld,
     ) -> Self {
         let (peak_metres, trench_metres, ocean_share) = measure_relief(&cache.heightmap);
         Self {
@@ -236,12 +464,17 @@ impl MapViewer {
             province_ids: prov_res.province_ids,
             ocean_province_ids: ocean_res.ocean_province_ids,
             is_wasteland: prov_res.is_wasteland,
+            civilizations,
             scope: MapScope::Physical, // Default to the stunning physical atlas view!
             tier: MapTier::Regions,
             texture: None,
             zoom: 0.16,
             offset: egui::vec2(0.0, 0.0),
             show_borders: true,
+            // The overlay is opt-in: the Physical scope stays pure relief until the
+            // reader asks for the dawn on top of it. The Civilizations scope itself
+            // always shows the realms, overlay or not.
+            show_civilizations: false,
             peak_metres,
             trench_metres,
             ocean_share,
@@ -297,6 +530,11 @@ impl MapViewer {
 
         let land_political = matches!(scope, MapScope::Land | MapScope::Everywhere);
         let water_political = matches!(scope, MapScope::Water | MapScope::Everywhere);
+        let civ_scope = scope.is_civilizations();
+        // The civilizations' own scope always shows them; every other scope shows
+        // them only when the reader asks for the overlay.
+        let show_civs = self.show_civilizations || civ_scope;
+        let civilizations = &self.civilizations;
 
         let heightmap = &self.cache.heightmap;
         let temp_grid = &self.cache.temp_grid;
@@ -441,6 +679,113 @@ impl MapViewer {
             } else if scope == MapScope::Topographic {
                 // Hypsometric survey: colour is elevation, above and below water
                 final_color = compute_topographic_color();
+            } else if civ_scope {
+                // ── Civilizations scope ────────────────────────────────
+                // The physical world wearing its history: ocean and ice exactly as
+                // the atlas paints them, unclaimed land muted to grey-green so the
+                // cradles are the only colour on the plate, and each realm in its
+                // own tint over subtle relief.
+                let lake = *is_lake.get(x as isize, y as isize);
+                let is_ocean = elev <= sea_level && !lake;
+                let is_waste = *is_wasteland.get(x as isize, y as isize)
+                    || (id == 0 && elev > sea_level && !lake);
+                let owner = civilizations.owner_of(id);
+                let has_land_node = id != 0 && (id as usize) < hierarchy.provinces.len();
+
+                if is_ocean {
+                    final_color = compute_physical_color();
+                } else if lake {
+                    final_color = [42.0, 125.0, 185.0];
+                } else if owner != 0 && has_land_node {
+                    let civ_rgb = civilizations.color_of(owner);
+                    let phys = compute_physical_color();
+                    // Flat enough to read as one political patch, tinted enough to
+                    // keep the rivers, coasts and hills underneath legible.
+                    final_color = [
+                        civ_rgb[0] as f32 * 0.72 + phys[0] * 0.28,
+                        civ_rgb[1] as f32 * 0.72 + phys[1] * 0.28,
+                        civ_rgb[2] as f32 * 0.72 + phys[2] * 0.28,
+                    ];
+
+                    // The cradle itself: a small dark dot on the seat province,
+                    // the one spot on the map where this realm actually began.
+                    if let Some(civ) = civilizations.civilization(owner) {
+                        let dx = {
+                            let mut d = (x as f32 - civ.seat_x).abs();
+                            let width = w as f32;
+                            if d > width * 0.5 {
+                                d = width - d;
+                            }
+                            d
+                        };
+                        let dy = (y as f32 - civ.seat_y).abs();
+                        if dx.max(dy) <= 1.0 {
+                            final_color = blend_rgb(final_color, [28.0, 22.0, 18.0], 0.8);
+                        }
+                    }
+
+                    let flow = *flow_grid.get(x as isize, y as isize);
+                    if flow >= min_river_flow {
+                        let river_strength = ((flow - min_river_flow) / major_river_flow)
+                            .sqrt()
+                            .clamp(0.30, 1.0);
+                        let blend = (river_strength * 1.3).clamp(0.0, 1.0);
+                        final_color = blend_rgb(final_color, [20.0, 75.0, 155.0], blend);
+                    }
+
+                    if show_borders {
+                        final_color = civ_border_shade(
+                            final_color,
+                            province_ids,
+                            hierarchy,
+                            civilizations,
+                            id,
+                            x,
+                            y,
+                            h,
+                            tier,
+                            true,
+                        );
+                    }
+                } else if is_waste {
+                    let phys = compute_physical_color();
+                    final_color = [
+                        phys[0] * 0.78 + 35.0,
+                        phys[1] * 0.78 + 35.0,
+                        phys[2] * 0.78 + 40.0,
+                    ];
+                } else {
+                    // Unclaimed land: the same relief, drained of colour, so the
+                    // cradles are the only politics on the plate.
+                    let phys = compute_physical_color();
+                    let grey = (phys[0] + phys[1] + phys[2]) / 3.0;
+                    final_color = [
+                        (phys[0] * 0.30 + grey * 0.70) * 0.92,
+                        (phys[1] * 0.30 + grey * 0.70) * 0.92,
+                        (phys[2] * 0.30 + grey * 0.70) * 0.92,
+                    ];
+
+                    // A dark ring on the wilderness side of every frontier, so that
+                    // even a single-province realm reads as a place on a world map
+                    // instead of a smudge of colour.
+                    if show_borders {
+                        let wraps = |nid: u32| nid != 0 && civilizations.owner_of(nid) != 0;
+                        let right = *province_ids
+                            .get(province_ids.wrap_x(x as isize + 1) as isize, y as isize);
+                        let down = if y + 1 < h {
+                            *province_ids.get(x as isize, y as isize + 1)
+                        } else {
+                            0
+                        };
+                        if wraps(right) || wraps(down) {
+                            final_color = [
+                                final_color[0] * 0.55,
+                                final_color[1] * 0.55,
+                                final_color[2] * 0.55,
+                            ];
+                        }
+                    }
+                }
             } else {
                 // ── Political map modes ────────────────────────────────
                 let is_ocean = elev <= sea_level && !*is_lake.get(x as isize, y as isize);
@@ -529,6 +874,40 @@ impl MapViewer {
                 }
             }
 
+            // ── Civilizations overlay on every other scope ────────────────
+            // The dawn can be laid over the physical relief, the survey sheet or
+            // either political hierarchy: the realm tint never replaces the layer
+            // underneath, it just claims the ground its provinces stand on. On the
+            // political scopes the blend is lighter, so both layers stay readable.
+            if show_civs && !civ_scope {
+                let lake = *is_lake.get(x as isize, y as isize);
+                let is_ocean = elev <= sea_level && !lake;
+                let owner = civilizations.owner_of(id);
+                if !is_ocean && !lake && owner != 0 && id != 0 {
+                    let civ_rgb = civilizations.color_of(owner);
+                    let weight = if land_political || water_political { 0.45 } else { 0.62 };
+                    final_color = blend_rgb(
+                        final_color,
+                        [civ_rgb[0] as f32, civ_rgb[1] as f32, civ_rgb[2] as f32],
+                        weight,
+                    );
+                    if show_borders {
+                        final_color = civ_border_shade(
+                            final_color,
+                            province_ids,
+                            hierarchy,
+                            civilizations,
+                            id,
+                            x,
+                            y,
+                            h,
+                            tier,
+                            false,
+                        );
+                    }
+                }
+            }
+
             pixel[0] = final_color[0].clamp(0.0, 255.0) as u8;
             pixel[1] = final_color[1].clamp(0.0, 255.0) as u8;
             pixel[2] = final_color[2].clamp(0.0, 255.0) as u8;
@@ -556,6 +935,9 @@ impl eframe::App for MapViewer {
                 if ui.selectable_value(&mut self.scope, MapScope::Topographic, "⛰ Topographic").clicked() {
                     visual_changed = true;
                 }
+                if ui.selectable_value(&mut self.scope, MapScope::Civilizations, "🏺 Civilizations").clicked() {
+                    visual_changed = true;
+                }
                 if ui.selectable_value(&mut self.scope, MapScope::Land, "🏛 Land").clicked() {
                     visual_changed = true;
                 }
@@ -568,8 +950,10 @@ impl eframe::App for MapViewer {
 
                 ui.separator();
 
-                // ── Tier selector (only meaningful in the political scopes) ───
-                ui.add_enabled_ui(self.scope.is_political(), |ui| {
+                // Tier selector: the political tiers when a political scope is on,
+                // and the internal subdivision of the realms in the Civilizations
+                // scope (a realm's own provinces, areas, regions…).
+                ui.add_enabled_ui(self.scope.is_political() || self.scope.is_civilizations(), |ui| {
                     ui.label("Tier:");
                     for (tier, label) in [
                         (MapTier::Provinces, "Provinces"),
@@ -586,9 +970,28 @@ impl eframe::App for MapViewer {
 
                 ui.separator();
 
-                // Border Toggle (in political scopes)
-                if self.scope.is_political() {
+                // Border Toggle (in political and civilization scopes)
+                if self.scope.is_political() || self.scope.is_civilizations() {
                     if ui.checkbox(&mut self.show_borders, "Borders").clicked() {
+                        visual_changed = true;
+                    }
+                    ui.separator();
+                }
+
+                // ── Civilizations overlay ─────────────────────────────────────
+                // The dawn is viewable on the physical atlas, the survey sheet and
+                // both political hierarchies, not only on its own map mode.
+                if !self.scope.is_civilizations() && !self.civilizations.is_empty() {
+                    let world = &self.civilizations;
+                    let label = format!("🏺 Civilizations ({})", world.civilizations.len());
+                    if ui
+                        .checkbox(&mut self.show_civilizations, label)
+                        .on_hover_text(format!(
+                            "{}\nThe overlay tints the provinces each realm holds, on top of whatever this scope already paints.",
+                            world.map_year_label()
+                        ))
+                        .clicked()
+                    {
                         visual_changed = true;
                     }
                     ui.separator();
@@ -632,6 +1035,21 @@ impl eframe::App for MapViewer {
                         self.ocean_hierarchy.total_provinces
                     ));
                 });
+                // ── The dawn of history ───────────────────────────────────────
+                if !self.civilizations.is_empty() {
+                    let world = &self.civilizations;
+                    ui.horizontal(|ui| {
+                        ui.label(format!(
+                            "🏺 CIVILIZATIONS — Year Zero: {} | Map date: {} | {} realms | {} civilized provinces | population {} | {:.1} people/km²",
+                            world.year_zero_label(),
+                            world.map_year_label(),
+                            world.civilizations.len(),
+                            world.civilized_provinces,
+                            thousands_u64(world.total_population),
+                            world.mean_density_per_km2(),
+                        ));
+                    });
+                }
             });
         });
 
@@ -677,6 +1095,104 @@ impl eframe::App for MapViewer {
                                     egui::RichText::new(HYPSOMETRIC_NAMES[band]).small().weak(),
                                 );
                             });
+                        }
+                    });
+                });
+        }
+
+        // ── CIVILIZATIONS LEGEND (Civilizations scope only) ───────────────────
+        // The subject of this map mode is a handful of realms, so the panel can
+        // carry the whole history at once: the world's own calendar, then every
+        // civilization with its colour, cradle, era and population.
+        if self.scope.is_civilizations() {
+            egui::Panel::right("civilizations_legend")
+                .resizable(false)
+                .exact_size(300.0)
+                .show(ui, |ui| {
+                    ui.heading("🏺 The Dawn of Civilization");
+                    let world = &self.civilizations;
+                    if world.is_empty() {
+                        ui.label("No civilization rose on this world.");
+                        ui.label(
+                            egui::RichText::new(
+                                "The history stage only runs when it is asked for: pass --civs (it is on automatically with --viewer and --plates).",
+                            )
+                            .small()
+                            .weak(),
+                        );
+                        return;
+                    }
+
+                    ui.label(egui::RichText::new(world.year_zero_label()).small());
+                    ui.label(egui::RichText::new(world.map_year_label()).small().weak());
+                    ui.separator();
+                    ui.label(format!(
+                        "{} realms on {} civilized provinces",
+                        world.civilizations.len(),
+                        thousands(world.civilized_provinces as f32),
+                    ));
+                    ui.label(format!(
+                        "{} km² held · world population {}",
+                        thousands(world.civilized_area_km2),
+                        thousands_u64(world.total_population),
+                    ));
+                    ui.label(format!(
+                        "Mean density {:.1} people/km²",
+                        world.mean_density_per_km2()
+                    ));
+                    ui.label(
+                        egui::RichText::new(
+                            "Each realm's cradle — the province it began in — carries a small dark dot; a hard line is a frontier, a faint one an internal subdivision of the chosen tier.",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                    ui.separator();
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for civ in &world.civilizations {
+                            ui.horizontal(|ui| {
+                                let (swatch, _) = ui.allocate_exact_size(
+                                    egui::vec2(16.0, 12.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(
+                                    swatch,
+                                    2.0,
+                                    Color32::from_rgb(civ.color[0], civ.color[1], civ.color[2]),
+                                );
+                                ui.strong(civ.name.as_str());
+                                ui.label(egui::RichText::new(civ.scale.label()).small().weak());
+                            });
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} · founded Year {} · {} · {}",
+                                    civ.cradle_kind.label(),
+                                    civ.founding_year,
+                                    civ.era.label(),
+                                    civ.isolation.label(),
+                                ))
+                                .small(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} provinces · {} km² · {} people",
+                                    civ.provinces.len(),
+                                    thousands(civ.area_km2),
+                                    thousands_u64(civ.population),
+                                ))
+                                .small()
+                                .weak(),
+                            );
+                            ui.label(
+                                egui::RichText::new(match civ.nearest_contact_km() {
+                                    Some(km) => format!("nearest realm ≈{} km", thousands(km)),
+                                    None => "no realm within reach".to_string(),
+                                })
+                                .small()
+                                .weak(),
+                            );
+                            ui.separator();
                         }
                     });
                 });
@@ -764,7 +1280,61 @@ impl eframe::App for MapViewer {
                     || (id == 0 && elev > sea_level && !*self.cache.is_lake.get(map_x, map_y));
 
                 response.on_hover_ui_at_pointer(|ui| {
-                    if self.scope == MapScope::Topographic {
+                    if self.scope == MapScope::Civilizations {
+                        // ── The dawn of history readout ───────────────────────
+                        // The whole point of this map mode: hovering a rising
+                        // civilization explains why *this* spot became one.
+                        let owner = self.civilizations.owner_of(id);
+                        let lake = *self.cache.is_lake.get(map_x, map_y);
+                        if owner != 0 && !is_ocean && !lake {
+                            let civ = self
+                                .civilizations
+                                .civilization(owner)
+                                .expect("owner id always indexes a civilization");
+                            civilization_dossier(
+                                ui,
+                                civ,
+                                &self.civilizations,
+                                id,
+                                self.civilizations.population_of(id),
+                            );
+                        } else if lake {
+                            ui.heading("💧 Inland Freshwater Lake");
+                            ui.label("No realm claims the water itself.");
+                            ui.separator();
+                            ui.label(format!("Lake Surface: {:.0} m", relief::altitude_metres(elev)));
+                            ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                        } else if is_ocean {
+                            ui.heading("🌊 Uncivilized Sea");
+                            ui.label(format!("Depth: {:.0} m", relief::depth_metres(elev)));
+                            ui.separator();
+                            ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                        } else if is_waste {
+                            ui.heading("🏔️ Wasteland Beyond History");
+                            ui.strong("Impassable or unclaimed wilderness");
+                            ui.separator();
+                            ui.label(format!("Environment: {}", get_biome_name(display_temp, precip, altitude)));
+                            ui.label(format!("Elevation: {:.0} m", relief::altitude_metres(elev)));
+                            ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                        } else {
+                            ui.heading("🌾 Unclaimed Land");
+                            ui.strong("No civilization has risen here");
+                            ui.label(
+                                egui::RichText::new(
+                                    "Fertile enough to live on, but never the best ground in reach: nothing here outperformed the cradles.",
+                                )
+                                .small()
+                                .weak(),
+                            );
+                            ui.separator();
+                            ui.label(format!("Environment: {}", get_biome_name(display_temp, precip, altitude)));
+                            ui.label(format!("Elevation: {:.0} m", relief::altitude_metres(elev)));
+                            ui.label(format!("Temperature: {:.1} °C", temp));
+                            ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
+                            ui.separator();
+                            ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                        }
+                    } else if self.scope == MapScope::Topographic {
                         // ── Hypsometric survey readout ────────────────────────
                         let band = hypsometric_band(metres);
                         let surface = if is_ocean {
@@ -899,8 +1469,41 @@ impl eframe::App for MapViewer {
                                 ui.strong(format!("Province #{}", node.anchor_id));
                             });
                         }
+                        // ── The realm this province belongs to ────────────────
+                        // Shown in every scope, because the province's population
+                        // and its civilization are facts about the province, not
+                        // about the map mode currently on screen.
+                        let owner = self.civilizations.owner_of(id);
+                        if owner != 0 {
+                            ui.horizontal(|ui| {
+                                ui.label("Civilization:");
+                                ui.strong(self.civilizations.name_of(owner));
+                            });
+                        }
                         ui.separator();
                         ui.label(format!("Size: {} px", node.pixel_count));
+                        if owner != 0 {
+                            ui.label(format!(
+                                "Population: {} people ({:.1}/km²)",
+                                thousands_u64(self.civilizations.population_of(id)),
+                                self.civilizations.population_of(id) as f32
+                                    / (node.pixel_count as f32
+                                        * crate::core::sphere::pixel_area_km2(
+                                            map_y as usize,
+                                            self.cache.height,
+                                            self.cache.width
+                                        ))
+                                        .max(1.0),
+                            ));
+                            ui.label(format!(
+                                "Realm population: {} people",
+                                thousands_u64(
+                                    self.civilizations
+                                        .civilization(owner)
+                                        .map_or(0, |civ| civ.population)
+                                )
+                            ));
+                        }
                         ui.label(format!("Elevation: {:.0} m", relief::altitude_metres(elev)));
                         ui.label(format!("Temperature: {:.1} °C", temp));
                         ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));

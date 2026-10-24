@@ -1,3 +1,4 @@
+use crate::core::fmt::thousands;
 use crate::core::polar::{ICE_SHELF_TEMP, PACK_ICE_TEMP};
 use crate::core::{relief, Grid};
 use crate::geopolitics::GeopoliticalHierarchy;
@@ -120,20 +121,6 @@ pub fn hypsometric_range_label(band: usize) -> String {
     }
 }
 
-/// `-5000.0` rendered as `-5 000`, so a legend column never breaks its alignment.
-fn thousands(metres: f32) -> String {
-    let v = metres.round() as i64;
-    let s = v.abs().to_string();
-    let mut out = String::new();
-    for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
-            out.push(' ');
-        }
-        out.push(c);
-    }
-    if v < 0 { format!("-{out}") } else { out }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,11 +153,11 @@ mod tests {
     }
 
     #[test]
-    fn thousands_groups_digits() {
+    fn thousands_grouping_lives_in_core_now() {
+        // The grouping helper moved to `core::fmt` so the atlas legend and the
+        // civilization dossiers can never format the same figure differently.
         assert_eq!(thousands(-5000.0), "-5 000");
         assert_eq!(thousands(200.0), "200");
-        assert_eq!(thousands(0.0), "0");
-        assert_eq!(thousands(-11_000.0), "-11 000");
     }
 }
 

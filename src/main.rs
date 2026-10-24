@@ -5,9 +5,13 @@ mod geography;
 mod hydrology;
 mod terrain;
 mod geopolitics;
+mod civilization;
 mod viewer;
 
 use climate::{simulate_moisture, simulate_temperature, simulate_winds, ClimateConfig};
+use civilization::{
+    generate_civilizations, report_civilizations, CivilizationConfig, CivilizationWorld,
+};
 use geopolitics::{
     build_geopolitical_hierarchy, build_ocean_hierarchy, extract_ocean_graph, extract_province_graph,
 };
@@ -37,12 +41,14 @@ fn main() {
 
     let mut run_viewer = false;
     let mut run_plates = false;
+    let mut run_civilizations = false;
 
     for arg in env::args().skip(1) {
         if arg == "--save" { save_cache = true; } 
         else if arg == "--load" { load_cache = true; }
         else if arg == "--viewer" { run_viewer = true; }
         else if arg == "--plates" { run_plates = true; }
+        else if arg == "--civs" { run_civilizations = true; }
         else if let Ok(parsed_seed) = arg.parse::<u64>() { seed = parsed_seed; }
     }
 
@@ -59,6 +65,7 @@ fn main() {
     let hydro_config = HydrologyConfig { min_lake_depth: 0.015, min_river_flow: 1800.0, major_river_flow: 15000.0, ..Default::default() };
     let geo_config = GeographyConfig::default();
     let ocean_config = OceanConfig::default();
+    let civ_config = CivilizationConfig::default();
 
     println!("Active Seed: {} | Canvas: 8192x4096", seed);
     let cache_path = format!("world_{}.bin", seed);
@@ -125,13 +132,13 @@ fn main() {
         &geo_config,
         seed,
     );
-    println!("✓ [4/6] Geography & Provinces done:        {:.2?}", p_start.elapsed());
+    println!("✓ [4/7] Geography & Provinces done:        {:.2?}", p_start.elapsed());
 
     // --- STAGE 5: GEOPOLITICAL HIERARCHY (AREAS, REGIONS, CONTINENTS) ---
     let g_start = Instant::now();
     let extracted = extract_province_graph(&prov_res.province_ids, &cache.heightmap, &cache.is_lake, relief::SEA_LEVEL);
     let hierarchy = build_geopolitical_hierarchy(extracted.provinces, seed, cache.width as f32);
-    println!("✓ [5/6] Geopolitical Hierarchy completed:   {:.2?}", g_start.elapsed());
+    println!("✓ [5/7] Geopolitical Hierarchy completed:   {:.2?}", g_start.elapsed());
 
     // --- STAGE 6: HYDRO-POLITICAL HIERARCHY (THE WORLD OCEAN) ---
     let o_start = Instant::now();
@@ -150,7 +157,7 @@ fn main() {
         &ocean_config,
     );
     println!(
-        "✓ [6/6] Hydro-Political Hierarchy completed:{:.2?}",
+        "✓ [6/7] Hydro-Political Hierarchy completed:{:.2?}",
         o_start.elapsed()
     );
     println!(
@@ -162,11 +169,47 @@ fn main() {
         ocean_hierarchy.total_areas,
     );
 
+    // --- STAGE 7: THE DAWN OF HISTORY (CIVILIZATIONS) ---
+    // Where people stop being a landscape and start being a story. The stage is
+    // only run when it is wanted (`--civs`, `--viewer` or `--plates`), because a
+    // world without a history is still a finished world.
+    let want_civilizations = run_civilizations || run_viewer || run_plates;
+    let civ_start = Instant::now();
+    let civilizations = if want_civilizations {
+        let world = generate_civilizations(
+            &cache.heightmap,
+            &cache.temp_grid,
+            &cache.precip_grid,
+            &cache.flow_grid,
+            &cache.is_lake,
+            &prov_res.habitability,
+            &prov_res.province_ids,
+            &hierarchy,
+            relief::SEA_LEVEL,
+            hydro_config.min_river_flow,
+            &civ_config,
+            seed,
+        );
+        println!(
+            "✓ [7/7] Dawn of Civilization completed:     {:.2?}",
+            civ_start.elapsed()
+        );
+        if run_civilizations {
+            println!();
+            report_civilizations(&world);
+        }
+        world
+    } else {
+        println!("· [7/7] Dawn of Civilization skipped (pass --civs to wake the world up).");
+        CivilizationWorld::empty(seed)
+    };
+
+
     println!("-------------------------------------------------------");
     println!("Total Generation Time:                     {:.2?}", total_start.elapsed());
     println!("-------------------------------------------------------");
 
-    // --- STAGE 7: LAUNCH INTERACTIVE MAP VIEWER ---
+    // --- STAGE 8: LAUNCH INTERACTIVE MAP VIEWER ---
     if run_viewer {
         println!("Launching Interactive 2D Viewer...");
         let options = eframe::NativeOptions {
@@ -183,6 +226,7 @@ fn main() {
                 ocean_hierarchy.clone(),
                 prov_res.clone(),
                 ocean_res.clone(),
+                civilizations.clone(),
             )))),
         ).unwrap();
     }
@@ -233,26 +277,50 @@ fn main() {
 
     println!("✓ Rendered Topographic Survey Map in:      {:.2?}", topo_start.elapsed());
 
-    // --- STAGE 8: HEADLESS ATLAS PLATES (optional) ---
+    // --- STAGE 9: CIVILIZATIONS MAP (optional) ---
+    // The very same painter the viewer's Civilizations scope uses, exported at
+    // full 8K so it sits alongside the other `world_*.png` plates.
+    if want_civilizations && !civilizations.is_empty() {
+        let civ_start = Instant::now();
+        let mut civ_viewer = viewer::MapViewer::new(
+            cache.clone(),
+            hierarchy.clone(),
+            ocean_hierarchy.clone(),
+            prov_res.clone(),
+            ocean_res.clone(),
+            civilizations.clone(),
+        );
+        civ_viewer.set_view(viewer::MapScope::Civilizations, viewer::MapTier::Regions, true);
+        civ_viewer
+            .save_png("world_civilizations_map.png", 1.0)
+            .unwrap_or_else(|e| panic!("Failed to render civilizations map: {e}"));
+        println!(
+            "✓ Rendered Civilizations Map in:           {:.2?}",
+            civ_start.elapsed()
+        );
+    }
+
+    // --- STAGE 10: HEADLESS ATLAS PLATES (optional) ---
     // The very same painter the interactive window uses, exported straight to
     // 2K PNGs. Handy for regenerating the README's scope and tier tables in one
     // shot: `cargo run --release -- <seed> --load --plates`.
     if run_plates {
         let plate_start = Instant::now();
-        let plates: [(&str, viewer::MapScope, viewer::MapTier); 13] = [
-            ("atlas_physical.png",            viewer::MapScope::Physical,    viewer::MapTier::Regions),
-            ("atlas_topographic.png",         viewer::MapScope::Topographic, viewer::MapTier::Regions),
-            ("atlas_land_provinces.png",      viewer::MapScope::Land,        viewer::MapTier::Provinces),
-            ("atlas_land_areas.png",          viewer::MapScope::Land,        viewer::MapTier::Areas),
-            ("atlas_land_regions.png",        viewer::MapScope::Land,        viewer::MapTier::Regions),
-            ("atlas_land_superregions.png",   viewer::MapScope::Land,        viewer::MapTier::Superregions),
-            ("atlas_land_continents.png",     viewer::MapScope::Land,        viewer::MapTier::Continents),
-            ("atlas_water_provinces.png",     viewer::MapScope::Water,       viewer::MapTier::Provinces),
-            ("atlas_water_areas.png",         viewer::MapScope::Water,       viewer::MapTier::Areas),
-            ("atlas_water_regions.png",       viewer::MapScope::Water,       viewer::MapTier::Regions),
-            ("atlas_water_superregions.png",  viewer::MapScope::Water,       viewer::MapTier::Superregions),
-            ("atlas_water_basins.png",        viewer::MapScope::Water,       viewer::MapTier::Continents),
-            ("atlas_everywhere_regions.png",  viewer::MapScope::Everywhere,  viewer::MapTier::Regions),
+        let plates: [(&str, viewer::MapScope, viewer::MapTier); 14] = [
+            ("atlas_physical.png",            viewer::MapScope::Physical,      viewer::MapTier::Regions),
+            ("atlas_topographic.png",         viewer::MapScope::Topographic,   viewer::MapTier::Regions),
+            ("atlas_civilizations.png",       viewer::MapScope::Civilizations, viewer::MapTier::Regions),
+            ("atlas_land_provinces.png",      viewer::MapScope::Land,          viewer::MapTier::Provinces),
+            ("atlas_land_areas.png",          viewer::MapScope::Land,          viewer::MapTier::Areas),
+            ("atlas_land_regions.png",        viewer::MapScope::Land,          viewer::MapTier::Regions),
+            ("atlas_land_superregions.png",   viewer::MapScope::Land,          viewer::MapTier::Superregions),
+            ("atlas_land_continents.png",     viewer::MapScope::Land,          viewer::MapTier::Continents),
+            ("atlas_water_provinces.png",     viewer::MapScope::Water,         viewer::MapTier::Provinces),
+            ("atlas_water_areas.png",         viewer::MapScope::Water,         viewer::MapTier::Areas),
+            ("atlas_water_regions.png",       viewer::MapScope::Water,         viewer::MapTier::Regions),
+            ("atlas_water_superregions.png",  viewer::MapScope::Water,         viewer::MapTier::Superregions),
+            ("atlas_water_basins.png",        viewer::MapScope::Water,         viewer::MapTier::Continents),
+            ("atlas_everywhere_regions.png",  viewer::MapScope::Everywhere,    viewer::MapTier::Regions),
         ];
 
         let mut plate_viewer = viewer::MapViewer::new(
@@ -261,6 +329,7 @@ fn main() {
             ocean_hierarchy.clone(),
             prov_res.clone(),
             ocean_res.clone(),
+            civilizations.clone(),
         );
         for (path, scope, tier) in plates {
             plate_viewer.set_view(scope, tier, true);

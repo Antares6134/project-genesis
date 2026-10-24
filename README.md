@@ -3,10 +3,13 @@
 A procedural world generator and interactive desktop atlas viewer written in Rust.
 
 The engine grows an 8K ($8192 \times 4096$) planet from 3D spherical noise, simulated
-atmospheric circulation and hydrology, and then partitions **both the landmasses and the
-world ocean** into a matching five-tier political hierarchy. Everything below was rendered
-from a single cached world (seed `3286592765982`), and a given seed always reproduces
-the same planet — every stage is order-stable.
+atmospheric circulation and hydrology, partitions **both the landmasses and the
+world ocean** into a matching five-tier political hierarchy, and then **gives that
+world a history**: a handful of civilizations rise where the planet is genuinely
+best, spread until wilderness, mountains or an older neighbour stops them, and
+carry a cradle, a culture, a faith and a population of their own. Everything below
+was rendered from a single cached world (seed `3286592765982`), and a given seed
+always reproduces the same planet.
 
 ---
 
@@ -18,13 +21,19 @@ the same planet — every stage is order-stable.
 | :--- | :--- |
 | **🗺 Physical** | Pure relief: hillshaded hypsometric palette, biomes, rivers and ice. No politics. |
 | **⛰ Topographic** | A survey sheet: colour *is* elevation, contoured at every band boundary, with metre readouts on hover. |
+| **🏺 Civilizations** | The dawn of history: the physical world with the realms that rose on it, each in its own colour, with a dark dot on the cradle province where it began. |
 | **🏛 Land** | Political subdivision of the landmasses only; the ocean is plain water. |
 | **🌊 Water** | The hydro-political subdivision of the world ocean only; the continents are muted. |
 | **🌍 Everywhere** | Both hierarchies portrayed at once. |
 
-| 🗺 Physical | ⛰ Topographic | 🏛 Land | 🌊 Water | 🌍 Everywhere |
-| :---: | :---: | :---: | :---: | :---: |
-| [![Physical](atlas_physical.png)](atlas_physical.png) | [![Topographic](atlas_topographic.png)](atlas_topographic.png) | [![Land](atlas_land_regions.png)](atlas_land_regions.png) | [![Water](atlas_water_regions.png)](atlas_water_regions.png) | [![Everywhere](atlas_everywhere_regions.png)](atlas_everywhere_regions.png) |
+The dawn is not confined to its own scope: the **Civilizations overlay** checkbox in
+the toolbar tints the provinces each realm holds on top of *any* scope — physical,
+survey, land or everywhere — so the same history can be read against the relief, the
+elevation or either political hierarchy.
+
+| 🗺 Physical | ⛰ Topographic | 🏺 Civilizations | 🏛 Land | 🌊 Water | 🌍 Everywhere |
+| :---: | :---: | :---: | :---: | :---: | :---: |
+| [![Physical](atlas_physical.png)](atlas_physical.png) | [![Topographic](atlas_topographic.png)](atlas_topographic.png) | [![Civilizations](atlas_civilizations.png)](atlas_civilizations.png) | [![Land](atlas_land_regions.png)](atlas_land_regions.png) | [![Water](atlas_water_regions.png)](atlas_water_regions.png) | [![Everywhere](atlas_everywhere_regions.png)](atlas_everywhere_regions.png) |
 
 ### Land tiers
 
@@ -57,6 +66,8 @@ scaled up because it is one connected, far larger domain.
 | Median ocean depth | **−3 950 m** |
 | Deepest trench | **−10 725 m** |
 | Continental shelf (≤ −200 m) | **9.3 % of the ocean** |
+| Inhabited provinces | **11 522** (wastelands and polar ice excepted) |
+| Civilizations at Year 2 248 | **8 realms · 800 provinces · 51 573 063 people** |
 
 ---
 
@@ -102,6 +113,50 @@ depth) there, and the usual land rules — biomes, wasteland, provinces — appl
 6. **Cartography & Rendering** — multi-angle hillshading, an atlas hypsometric palette, and
    the contoured *Topographic* survey sheet, shared verbatim by the headless exporter and the
    interactive viewer so the two can never disagree.
+7. **Dawn of History** — the civilizations stage ([`src/civilization/`](src/civilization/)):
+   a province census in real km², cradle scoring, a continent-aware handful of rising
+   civilizations, fertile-cost expansion over the province graph, population by carrying
+   capacity, contact, ancestral stocks and pre-founding inheritance, and a full dossier per
+   realm — economy, social order, craft, script, faith, era and population.
+
+---
+
+## The dawn of civilization
+
+The history stage answers one question: **where did people stop being a landscape and start
+being a story?**
+
+1. **Census.** Every province is measured once: real ground area in km² (integrated over
+   latitude), mean habitability, peak river discharge, mean climate, relief, how much of it
+   touches sea or lake, and its carrying capacity in people.
+2. **Cradles.** Provinces are scored as potential homes — habitability, a river to irrigate and
+   to travel, a shore for fish and salt, gentle ploughable ground — and a continent-aware quota
+   picks a well-spread handful of them. Only 5–10 civilizations ever rise, so the world stays a
+   wilderness with a few bright corners.
+3. **Expansion.** Each cradle floods outward through the province graph cheapest-first: a step
+   costs what the terrain between two provinces costs, discounted by how fertile the target is
+   and multiplied hard by the length of any jump. That one rule bends frontiers along river
+   valleys, stalls them on mountain walls, hops straits to the next island, and stops them dead
+   at an older realm's border. The oldest realm always claims first, and a latecomer whose valley
+   has already been taken settles the nearest free country instead — and its dossier says so.
+4. **Populations.** Every civilized province carries its own population — its carrying capacity
+   times its realm's development — so every realm has a total, a density and an area in km².
+5. **Contact, ancestry and inheritance.** Realms whose provinces touch share a *land frontier*;
+   those across a strait share a *sea route*; those merely within a traveller's reach know each
+   other as a *distant rumour*; the rest rose completely alone. Realms that grew out of the same
+   stretch of country share an **ancestral stock** — one tongue family, and often one temple form
+   and one creed — and a younger realm in contact with an older one may have taken up its crops,
+   rites or script *centuries before* founding a city of its own.
+
+### Year Zero
+
+There is no CE and no BCE on a planet nobody has inhabited yet, so this world fixes its own
+epoch: **Year Zero is the founding of Civilization #1**, exactly as our own historiography is
+fixed by Sumer around 3500 BCE. Every other realm is dated after it. A later cradle being a
+later cradle because the good ground was already taken, because the sea had to be crossed, or
+because the planet isolated it. The atlas then portrays the world at one date, a few centuries
+after the youngest realm began, so that every civilization on the map has a history rather than
+only a founding.
 
 ---
 
@@ -117,11 +172,17 @@ cargo run --release -- 3286592765982 --load --viewer
 # Generate headless with a random seed
 cargo run --release
 
+# Give the world a history and read its dossier: who rose where, and why
+cargo run --release -- 3286592765982 --load --civs
+
 # Re-render every README plate (all scopes × tiers) from a cached world
 cargo run --release -- 3286592765982 --load --plates
 ```
 
 Every headless run prints the world's hypsometric profile in metres and exports
 `world_physical_map.png`, `world_topographic_map.png` (banded elevation survey) and
-`world_political_map.png` (land hierarchy). Passing `--plates` additionally writes the
-`atlas_*.png` scope and tier plates used above, straight from the viewer's own painter.
+`world_political_map.png` (land hierarchy). Passing `--civs` wakes the world up: it prints the
+civilization dossier to the console and exports `world_civilizations_map.png`, the full 8K
+Civilizations plate. The history stage is on automatically with `--viewer` and `--plates`, so the
+atlas always has a dawn to show; `--plates` additionally writes the `atlas_*.png` scope and tier
+plates used above, straight from the viewer's own painter.
