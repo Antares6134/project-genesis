@@ -21,6 +21,9 @@ always reproduces the same planet.
 | :--- | :--- |
 | **🗺 Physical** | Pure relief: hillshaded hypsometric palette, biomes, rivers and ice. No politics. |
 | **⛰ Topographic** | A survey sheet: colour *is* elevation, contoured at every band boundary, with metre readouts on hover. |
+| **🌦 Climate** | Climate zones: land classified by mean temperature, annual rainfall and altitude; the sea by its surface temperature. |
+| **🌡 Temperature** | Thermal belts as a number line, from deep violet cold to red-hot tropics, with a thin line on every 5 °C isotherm. |
+| **🪨 Terrain** | Landform and bathymetry classes: abyssal plain, shelf, coastal lowland, hill country, upland, mountain and high mountain. |
 | **🏺 Civilizations** | The dawn of history: the physical world with the realms that rose on it, each in its own colour, with a dark dot on the cradle province where it began. |
 | **🏛 Land** | Political subdivision of the landmasses only; the ocean is plain water. |
 | **🌊 Water** | The hydro-political subdivision of the world ocean only; the continents are muted. |
@@ -28,12 +31,28 @@ always reproduces the same planet.
 
 The dawn is not confined to its own scope: the **Civilizations overlay** checkbox in
 the toolbar tints the provinces each realm holds on top of *any* scope — physical,
-survey, land or everywhere — so the same history can be read against the relief, the
-elevation or either political hierarchy.
+survey, climatic, land or everywhere — so the same history can be read against the
+relief, the climate or either political hierarchy.
 
-| 🗺 Physical | ⛰ Topographic | 🏺 Civilizations | 🏛 Land | 🌊 Water | 🌍 Everywhere |
-| :---: | :---: | :---: | :---: | :---: | :---: |
-| [![Physical](atlas_physical.png)](atlas_physical.png) | [![Topographic](atlas_topographic.png)](atlas_topographic.png) | [![Civilizations](atlas_civilizations.png)](atlas_civilizations.png) | [![Land](atlas_land_regions.png)](atlas_land_regions.png) | [![Water](atlas_water_regions.png)](atlas_water_regions.png) | [![Everywhere](atlas_everywhere_regions.png)](atlas_everywhere_regions.png) |
+Every scope opens fitted to the window and stays readable: **⤢ Fit** re-fits the whole
+planet to the current canvas, hovering a province gives a short readout, and the
+legends are live. In the **Topographic** scope the *Highest peak* and *Deepest trench*
+figures are buttons that fly the map to the summit or the trench and ring it; in the
+**Civilizations** scope, clicking a realm in the right-hand list flies the map to its
+cradle and rings it. Hover cards stay short on purpose — a few lines on why a realm
+rose, how it lives and what it believes; the full dossier is printed by `--civs`.
+
+| 🗺 Physical | ⛰ Topographic | 🌦 Climate |
+| :---: | :---: | :---: |
+| [![Physical](atlas_physical.png)](atlas_physical.png) | [![Topographic](atlas_topographic.png)](atlas_topographic.png) | [![Climate](atlas_climate.png)](atlas_climate.png) |
+
+| 🌡 Temperature | 🪨 Terrain | 🏺 Civilizations |
+| :---: | :---: | :---: |
+| [![Temperature](atlas_temperature.png)](atlas_temperature.png) | [![Terrain](atlas_terrain.png)](atlas_terrain.png) | [![Civilizations](atlas_civilizations.png)](atlas_civilizations.png) |
+
+| 🏛 Land | 🌊 Water | 🌍 Everywhere |
+| :---: | :---: | :---: |
+| [![Land](atlas_land_regions.png)](atlas_land_regions.png) | [![Water](atlas_water_regions.png)](atlas_water_regions.png) | [![Everywhere](atlas_everywhere_regions.png)](atlas_everywhere_regions.png) |
 
 ### Land tiers
 
@@ -167,13 +186,7 @@ only a founding.
 cargo run --release -- 3286592765982 --save
 
 # Launch the interactive atlas viewer from cached data
-cargo run --release -- 3286592765982 --load --viewer
-
-# Generate headless with a random seed
-cargo run --release
-
-# Give the world a history and read its dossier: who rose where, and why
-cargo run --release -- 3286592765982 --load --civs
+cargo run --release -- 3286592765982 --load --viewer --civs
 
 # Re-render every README plate (all scopes × tiers) from a cached world
 cargo run --release -- 3286592765982 --load --plates

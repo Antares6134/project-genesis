@@ -212,8 +212,14 @@ fn main() {
     // --- STAGE 8: LAUNCH INTERACTIVE MAP VIEWER ---
     if run_viewer {
         println!("Launching Interactive 2D Viewer...");
+        // An atlas is a window application, not a pop-up: open at a proper size
+        // for a modern desktop and start maximised, while keeping a sane
+        // restore size and a floor below which the toolbar would have to wrap.
         let options = eframe::NativeOptions {
-            viewport: eframe::egui::ViewportBuilder::default().with_inner_size([1280.0, 720.0]),
+            viewport: eframe::egui::ViewportBuilder::default()
+                .with_inner_size([1720.0, 1040.0])
+                .with_min_inner_size([1100.0, 700.0])
+                .with_maximized(true),
             ..Default::default()
         };
         
@@ -306,9 +312,12 @@ fn main() {
     // shot: `cargo run --release -- <seed> --load --plates`.
     if run_plates {
         let plate_start = Instant::now();
-        let plates: [(&str, viewer::MapScope, viewer::MapTier); 14] = [
+        let plates: [(&str, viewer::MapScope, viewer::MapTier); 17] = [
             ("atlas_physical.png",            viewer::MapScope::Physical,      viewer::MapTier::Regions),
             ("atlas_topographic.png",         viewer::MapScope::Topographic,   viewer::MapTier::Regions),
+            ("atlas_climate.png",             viewer::MapScope::Climate,       viewer::MapTier::Regions),
+            ("atlas_temperature.png",         viewer::MapScope::Temperature,   viewer::MapTier::Regions),
+            ("atlas_terrain.png",             viewer::MapScope::Terrain,       viewer::MapTier::Regions),
             ("atlas_civilizations.png",       viewer::MapScope::Civilizations, viewer::MapTier::Regions),
             ("atlas_land_provinces.png",      viewer::MapScope::Land,          viewer::MapTier::Provinces),
             ("atlas_land_areas.png",          viewer::MapScope::Land,          viewer::MapTier::Areas),

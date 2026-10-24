@@ -65,8 +65,8 @@ fn report_one(world: &CivilizationWorld, civ: &Civilization) {
         thousands_u64(civ.population),
         civ.density_per_km2,
     );
-    println!("      Scale: {} — {}", civ.scale.label(), civ.scale.analogue());
     println!("      Rise: {}", civ.rise.headline);
+    println!("      Told short: {}", civ.rise.highlights.join(" · "));
     for reason in &civ.rise.reasons {
         println!("        • {reason}");
     }
@@ -91,7 +91,12 @@ fn report_one(world: &CivilizationWorld, civ: &Civilization) {
         civ.faith.clergy
     );
     println!("      {}", civ.faith.note);
+    println!(
+        "      Observances: {}",
+        civ.faith.practices.join(" · ")
+    );
     println!("      Era detail: {}", civ.era.describe());
+    println!("      Posture: {}", civ.isolation.describe());
 
     if civ.kin.is_empty() {
         println!("      Ancestry: none shared with another realm — a wholly separate stock.");

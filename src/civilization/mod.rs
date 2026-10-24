@@ -545,15 +545,6 @@ impl ScaleClass {
             ScaleClass::Large => "Large realm",
         }
     }
-
-    /// The real-world analogue the scale is calibrated against.
-    pub fn analogue(self) -> &'static str {
-        match self {
-            ScaleClass::Small => "Olmec / Sumer scale — a fertile pocket of city-states",
-            ScaleClass::Medium => "Egyptian scale — a river kingdom with a subject countryside",
-            ScaleClass::Large => "Indus / Chinese scale — a heartland a continent-quarter wide",
-        }
-    }
 }
 
 /// How two realms know about each other.
@@ -593,6 +584,10 @@ pub struct RiseProfile {
     pub headline: String,
     /// Bullet points: the measurements behind the choice.
     pub reasons: Vec<String>,
+    /// Two to four *short* phrases a hover card can carry without covering the
+    /// map: "A great river at its door", "A shore for fish and salt". These say
+    /// the same thing as [`RiseProfile::reasons`] without the figures.
+    pub highlights: Vec<String>,
     /// Where the seat sits in the political hierarchy.
     pub seat: String,
 }
@@ -717,14 +712,6 @@ pub struct Civilization {
 }
 
 impl Civilization {
-    /// Nearest other realm, in kilometres, or `None` if it rose alone.
-    pub fn nearest_contact_km(&self) -> Option<f32> {
-        self.contacts
-            .iter()
-            .map(|c| c.distance_km)
-            .fold(None, |acc: Option<f32>, d| Some(acc.map_or(d, |a| a.min(d))))
-    }
-
     /// `Year 1 240` — the realm's own calendar at the map date.
     pub fn year_label(&self) -> String {
         format!("Year {}", crate::core::fmt::thousands(self.age_years as f32))

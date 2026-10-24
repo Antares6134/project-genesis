@@ -1885,10 +1885,37 @@ fn build_rise(
         ));
     }
 
+    // The same story in a handful of words, for the atlas hover card: no
+    // figures, no province ids, just the things a traveller would have noticed.
+    let mut highlights: Vec<String> = Vec::new();
+    if sk.displaced_from.is_some() {
+        highlights.push("Settled the best ground still free".to_string());
+    }
+    if s.flow_max >= great_river_flow {
+        highlights.push("A great river at its door".to_string());
+    } else if s.flow_max >= min_river_flow {
+        highlights.push("A navigable river through its fields".to_string());
+    } else {
+        highlights.push("Rain-fed fields, no river needed".to_string());
+    }
+    if s.is_coastal() {
+        highlights.push("A shore for fish and salt".to_string());
+    }
+    if s.lake_px > 0 {
+        highlights.push("A lake for fish, reeds and fresh water".to_string());
+    }
+    if s.elev_mean_m() >= 900.0 {
+        highlights.push("High, defensible ground".to_string());
+    }
+    if richest_rank == 0 {
+        highlights.push("Ground nobody had taken".to_string());
+    }
+
     RiseProfile {
         kind,
         headline: format!("{} — {}.", kind.label(), kind.describe()),
         reasons,
+        highlights,
         seat: format!(
             "Seat province #{} · area #{} · region #{} · superregion #{} · continent #{} · {:.1}° {}",
             sk.cradle.prov,

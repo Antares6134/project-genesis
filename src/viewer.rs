@@ -1,4 +1,6 @@
-use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
+mod themes;
+
+use eframe::egui::{self, Color32, ColorImage, Stroke, TextureHandle, TextureOptions};
 use noise::{NoiseFn, OpenSimplex};
 use rayon::prelude::*;
 use crate::civilization::{Civilization, CivilizationWorld};
@@ -11,6 +13,17 @@ use crate::export::image::{
     get_atlas_biome_color, get_biome_name, hypsometric_band, hypsometric_color,
     hypsometric_range_label, id_to_territory_color, HYPSOMETRIC_COLORS, HYPSOMETRIC_NAMES,
 };
+use themes::{ClimateZone, TerrainClass, TEMPERATURE_LEGEND_ROWS};
+
+/// How far the atlas can be zoomed out and in.
+const MIN_ZOOM: f32 = 0.03;
+const MAX_ZOOM: f32 = 8.0;
+/// Zoom used when the reader asks the atlas to fly to a civilization's cradle.
+/// A realm is a country, not a planet: the whole world stays in view, just
+/// closer than the fit that shows everything.
+const CIV_FOCUS_ZOOM: f32 = 0.55;
+/// Zoom used when flying to one of the world's relief extremes.
+const RELIEF_FOCUS_ZOOM: f32 = 0.55;
 
 /// What political domain the atlas is currently portraying.
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -19,6 +32,13 @@ pub enum MapScope {
     Physical,
     /// Hypsometric survey: terrain colour *is* elevation, above and below water.
     Topographic,
+    /// Climate zones: land classified by temperature and rainfall, sea by its
+    /// surface temperature.
+    Climate,
+    /// Thermal belts: mean annual temperature, banded by isotherms.
+    Temperature,
+    /// Landform classes: coastal lowland to high mountain, shelf to abyssal plain.
+    Terrain,
     /// The dawn of history: the physical world with the civilizations on it.
     Civilizations,
     /// Political subdivision of the landmasses only.
@@ -69,36 +89,132 @@ pub struct MapViewer {
     show_borders: bool,
     /// Tint the civilizations of the dawn over *any* scope, not just their own.
     show_civilizations: bool,
-    /// World-wide relief extremes in metres, measured once at startup so the
-    /// topographic legend never has to re-scan the 8K heightmap every frame.
+    /// World-wide relief extremes, measured once at startup so the topographic
+    /// legend never has to re-scan the 8K heightmap every frame. The positions
+    /// travel with the measurements so the legend can fly the reader there.
+    relief: ReliefExtremes,
+    /// Set until the map has been fitted to the canvas for the first time, and
+    /// again whenever the reader presses **Fit**.
+    pending_fit: bool,
+    /// A place the reader asked to be flown to (map pixel x, y and target zoom),
+    /// applied once the canvas rectangle for the frame is known.
+    pending_focus: Option<(f32, f32, f32)>,
+    /// The last place the atlas flew to, ringed on the map so the reader can see
+    /// where they landed.
+    marker: Option<(f32, f32)>,
+    /// The realm whose entry in the legend was last clicked.
+    selected_civ: Option<u32>,
+}
+
+/// The world's relief extremes, in metres, together with where they are.
+#[derive(Clone, Copy, Debug)]
+struct ReliefExtremes {
     peak_metres: f32,
+    peak_x: f32,
+    peak_y: f32,
     trench_metres: f32,
+    trench_x: f32,
+    trench_y: f32,
     ocean_share: f32,
 }
 
-/// Highest peak, deepest trench and ocean share of a heightmap, in metres.
-fn measure_relief(heightmap: &Grid<f32>) -> (f32, f32, f32) {
-    let (peak, trench, ocean_px) = heightmap
+/// Partial result of one lane of the relief scan.
+#[derive(Clone, Copy)]
+struct ReliefScan {
+    peak_metres: f32,
+    peak_index: usize,
+    trench_metres: f32,
+    trench_index: usize,
+    ocean_px: usize,
+}
+
+impl ReliefScan {
+    const START: Self = Self {
+        peak_metres: f32::MIN,
+        peak_index: usize::MAX,
+        trench_metres: f32::MAX,
+        trench_index: usize::MAX,
+        ocean_px: 0,
+    };
+
+    /// Merge two lanes. Ties are broken by the lowest pixel index so the answer
+    /// never depends on how the work happened to be split between threads.
+    fn merge(self, other: Self) -> Self {
+        let (peak_metres, peak_index) = if other.peak_metres > self.peak_metres
+            || (other.peak_metres == self.peak_metres && other.peak_index < self.peak_index)
+        {
+            (other.peak_metres, other.peak_index)
+        } else {
+            (self.peak_metres, self.peak_index)
+        };
+        let (trench_metres, trench_index) = if other.trench_metres < self.trench_metres
+            || (other.trench_metres == self.trench_metres && other.trench_index < self.trench_index)
+        {
+            (other.trench_metres, other.trench_index)
+        } else {
+            (self.trench_metres, self.trench_index)
+        };
+        Self {
+            peak_metres,
+            peak_index,
+            trench_metres,
+            trench_index,
+            ocean_px: self.ocean_px + other.ocean_px,
+        }
+    }
+}
+
+/// Highest peak, deepest trench and ocean share of a heightmap, in metres, with
+/// the pixel each extreme sits on.
+fn measure_relief(heightmap: &Grid<f32>) -> ReliefExtremes {
+    let scanned = heightmap
         .raw_slice()
         .par_iter()
+        .enumerate()
         .fold(
-            || (f32::MIN, f32::MAX, 0usize),
-            |acc, &e| {
+            || ReliefScan::START,
+            |acc, (index, &e)| {
                 let m = relief::to_metres(e);
-                (
-                    acc.0.max(m),
-                    acc.1.min(m),
-                    acc.2 + usize::from(e <= relief::SEA_LEVEL),
-                )
+                ReliefScan {
+                    peak_metres: acc.peak_metres.max(m),
+                    peak_index: if m > acc.peak_metres { index } else { acc.peak_index },
+                    trench_metres: acc.trench_metres.min(m),
+                    trench_index: if m < acc.trench_metres { index } else { acc.trench_index },
+                    ocean_px: acc.ocean_px + usize::from(e <= relief::SEA_LEVEL),
+                }
             },
         )
-        .reduce(
-            || (f32::MIN, f32::MAX, 0usize),
-            |a, b| (a.0.max(b.0), a.1.min(b.1), a.2 + b.2),
-        );
+        .reduce(|| ReliefScan::START, ReliefScan::merge);
 
     let total = heightmap.raw_slice().len().max(1);
-    (peak, trench, ocean_px as f32 / total as f32)
+    let width = heightmap.width.max(1);
+    let at = |index: usize| -> (f32, f32) {
+        let index = index.min(total - 1);
+        ((index % width) as f32, (index / width) as f32)
+    };
+    let (peak_x, peak_y) = at(scanned.peak_index);
+    let (trench_x, trench_y) = at(scanned.trench_index);
+
+    ReliefExtremes {
+        peak_metres: scanned.peak_metres,
+        peak_x,
+        peak_y,
+        trench_metres: scanned.trench_metres,
+        trench_x,
+        trench_y,
+        ocean_share: scanned.ocean_px as f32 / total as f32,
+    }
+}
+
+/// `52.3° N · 14.8° E` — a map position, written the way an atlas writes it.
+fn lat_lon_label(lat: f32, lon: f32) -> String {
+    format!(
+        "{:.1}° {} · {:.1}° {}",
+        lat.abs(),
+        if lat >= 0.0 { "N" } else { "S" },
+        lon.abs(),
+        if lon >= 0.0 { "E" } else { "W" },
+    )
 }
 
 /// Linear blend of two float colours, `t = 0` keeping `base`.
@@ -287,19 +403,14 @@ fn civ_border_shade(
     color
 }
 
-/// The full dossier of one civilization, as the Civilizations map mode shows it on
-/// hover: the reasoning first, then what the realm became.
-///
-/// The "why here" bullets are not decoration — they are the measurements
-/// [`crate::civilization::generate_civilizations`] actually used, so a reader can
-/// audit why this spot and not the valley next door.
-fn civilization_dossier(
-    ui: &mut egui::Ui,
-    civ: &Civilization,
-    world: &CivilizationWorld,
-    province_id: u32,
-    province_population: u64,
-) {
+/// A short dossier for one civilization, as the Civilizations map mode shows it
+/// on hover: where it rose and why, how it lives, what it believes, and how many
+/// people it holds. Deliberately a card, not a monograph — the full measurements
+/// stay in the console report (`--civs`), where they belong.
+fn civilization_dossier(ui: &mut egui::Ui, civ: &Civilization, world: &CivilizationWorld) {
+    // A hover card has to stay a card: at 360 px wide it never swallows the map.
+    ui.set_max_width(360.0);
+
     ui.horizontal(|ui| {
         let (swatch, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
         ui.painter().rect_filled(
@@ -309,141 +420,75 @@ fn civilization_dossier(
         );
         ui.heading(civ.name.as_str());
     });
-    ui.strong(format!(
-        "{} · {}",
-        civ.cradle_kind.label(),
-        civ.scale.label()
-    ));
-    ui.label(egui::RichText::new(civ.scale.analogue()).small().weak());
-
-    ui.separator();
-    ui.horizontal(|ui| {
-        ui.label("Founded:");
-        ui.strong(format!(
-            "{} — age {}",
-            civ.year_label(),
-            thousands(civ.age_years as f32)
-        ));
-    });
-    ui.strong(civ.era.label());
-    ui.label(egui::RichText::new(civ.era.describe()).small().weak());
-    ui.strong(civ.isolation.label());
-    ui.label(egui::RichText::new(civ.isolation.describe()).small().weak());
-
-    ui.separator();
-    ui.label(format!(
-        "Territory: {} provinces · {} km²",
-        thousands(civ.provinces.len() as f32),
-        thousands(civ.area_km2)
-    ));
-    ui.label(format!(
-        "Population: {} people ({:.1}/km²)",
-        thousands_u64(civ.population),
-        civ.density_per_km2
-    ));
-    ui.label(format!(
-        "This province: #{} · {} people",
-        province_id,
-        thousands_u64(province_population)
-    ));
-    ui.label(egui::RichText::new(civ.rise.seat.as_str()).small().weak());
     ui.label(
         egui::RichText::new(format!(
-            "Cradle at {:.1}° {} {:.1}° {}",
-            civ.seat_latitude_deg.abs(),
-            if civ.seat_latitude_deg >= 0.0 { "N" } else { "S" },
-            civ.seat_longitude_deg.abs(),
-            if civ.seat_longitude_deg >= 0.0 { "E" } else { "W" },
+            "{} · founded Year {} · {}",
+            civ.rise.kind.label(),
+            civ.founding_year,
+            civ.era.label()
         ))
         .small()
         .weak(),
     );
+    ui.label(
+        egui::RichText::new(format!("{} · {}", civ.year_label(), civ.isolation.label()))
+            .small()
+            .weak(),
+    );
 
     ui.separator();
-    ui.heading(format!("Why here — {}", civ.rise.kind.label()));
-    ui.label(egui::RichText::new(civ.rise.headline.as_str()).small());
-    for reason in &civ.rise.reasons {
-        ui.label(format!("• {reason}"));
+    ui.label(egui::RichText::new(civ.cradle_kind.describe()).small());
+    for highlight in civ.rise.highlights.iter().take(3) {
+        ui.label(format!("• {highlight}"));
     }
 
     ui.separator();
-    ui.heading("Culture");
-    ui.label(format!("{} · {}", civ.culture.subsistence.label(), civ.culture.kinship.label()));
+    ui.label(
+        egui::RichText::new(format!(
+            "{} · {}",
+            civ.culture.subsistence.label(),
+            civ.culture.kinship.label()
+        ))
+        .strong(),
+    );
+    ui.label(
+        egui::RichText::new(format!(
+            "{} · {} · {}",
+            civ.culture.outlook.label(),
+            civ.culture.craft.label(),
+            civ.culture.literacy.label()
+        ))
+        .small(),
+    );
+
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(civ.faith.kind.label()).strong());
+    ui.label(egui::RichText::new(civ.faith.kind.creed()).small());
+
+    ui.separator();
     ui.label(format!(
-        "{} · {} · {}",
-        civ.culture.outlook.label(),
-        civ.culture.craft.label(),
-        civ.culture.literacy.label()
+        "{} people · {} provinces · {} km²",
+        thousands_u64(civ.population),
+        civ.provinces.len(),
+        thousands(civ.area_km2)
     ));
-    ui.label(format!(
-        "Hallmark: {} · Arts: {}",
-        civ.culture.architecture,
-        civ.culture.arts.join(", ")
-    ));
-    ui.label(egui::RichText::new(civ.culture.note.as_str()).small().weak());
-
-    ui.separator();
-    ui.heading("Faith");
-    ui.label(format!("{} · kept by {}", civ.faith.kind.label(), civ.faith.clergy));
-    ui.label(format!("{}; {}", civ.faith.kind.creed(), civ.faith.note));
-    for practice in &civ.faith.practices {
-        ui.label(format!("• {practice}"));
-    }
-
-    if !civ.kin.is_empty() {
-        ui.separator();
-        ui.heading("Ancestral stock");
-        ui.label(format!(
-            "{} family, shared with {}",
-            civ.language_family,
-            kin_list(world, &civ.kin)
-        ));
-    }
-
-    if !civ.influences.is_empty() {
-        ui.separator();
-        ui.heading("Before it existed");
-        for influence in &civ.influences {
-            ui.label(format!(
-                "• took up {} from {}",
-                influence.borrowed.join(", "),
-                world.name_of(influence.other)
-            ))
-            .on_hover_text(influence.note.as_str());
-        }
-    }
-
-    ui.separator();
     if civ.contacts.is_empty() {
-        ui.label("Contact: none — it rose with the world to itself.");
-        ui.label(egui::RichText::new(civ.isolation.describe()).small().weak());
+        ui.label(
+            egui::RichText::new("No neighbour within reach.")
+                .small()
+                .weak(),
+        );
     } else {
-        ui.label("Contact:");
-        for contact in &civ.contacts {
-            ui.label(format!(
-                "• {} — {} ({}, ≈{} km)",
-                world.name_of(contact.other),
-                contact.relation,
-                contact.kind.label(),
-                thousands(contact.distance_km)
-            ))
-            .on_hover_text(contact.note.as_str());
-        }
-        ui.label(egui::RichText::new("Hover a neighbouring realm to read its side of these relations.").small().weak());
-    }
-}
-
-/// `Civilization #2 and #3` — a kin list rendered by name.
-fn kin_list(world: &CivilizationWorld, ids: &[u32]) -> String {
-    let names: Vec<String> = ids.iter().map(|&id| world.name_of(id).to_string()).collect();
-    match names.len() {
-        0 => String::new(),
-        1 => names[0].clone(),
-        _ => format!(
-            "{} and {}",
-            names[..names.len() - 1].join(", "),
-            names[names.len() - 1]
-        ),
+        let neighbours: Vec<&str> = civ
+            .contacts
+            .iter()
+            .map(|contact| world.name_of(contact.other))
+            .collect();
+        ui.label(
+            egui::RichText::new(format!("Neighbours: {}", neighbours.join(", ")))
+                .small()
+                .weak(),
+        );
     }
 }
 
@@ -456,7 +501,7 @@ impl MapViewer {
         ocean_res: OceanResult,
         civilizations: CivilizationWorld,
     ) -> Self {
-        let (peak_metres, trench_metres, ocean_share) = measure_relief(&cache.heightmap);
+        let relief = measure_relief(&cache.heightmap);
         Self {
             cache,
             hierarchy,
@@ -468,6 +513,8 @@ impl MapViewer {
             scope: MapScope::Physical, // Default to the stunning physical atlas view!
             tier: MapTier::Regions,
             texture: None,
+            // Replaced by a real fit on the first painted frame, once the window
+            // (and therefore the canvas) has a size.
             zoom: 0.16,
             offset: egui::vec2(0.0, 0.0),
             show_borders: true,
@@ -475,10 +522,56 @@ impl MapViewer {
             // reader asks for the dawn on top of it. The Civilizations scope itself
             // always shows the realms, overlay or not.
             show_civilizations: false,
-            peak_metres,
-            trench_metres,
-            ocean_share,
+            relief,
+            pending_fit: true,
+            pending_focus: None,
+            marker: None,
+            selected_civ: None,
         }
+    }
+
+    /// Fit the whole world into `rect`, centred, with a small margin.
+    ///
+    /// This is what the **Fit** button does — and what the viewer does once, on
+    /// its first frame, so the atlas opens showing the entire planet whatever
+    /// size the window happens to be.
+    fn fit_to(&mut self, rect: egui::Rect) {
+        let available = rect.size();
+        if available.x < 64.0 || available.y < 64.0 {
+            return; // the panel layout has not settled yet; try next frame
+        }
+        let margin = 12.0;
+        let map_w = self.cache.width as f32;
+        let map_h = self.cache.height as f32;
+        let zoom_x = (available.x - margin * 2.0) / map_w;
+        let zoom_y = (available.y - margin * 2.0) / map_h;
+        self.zoom = zoom_x.min(zoom_y).clamp(MIN_ZOOM, MAX_ZOOM);
+        self.offset = egui::vec2(
+            (available.x - map_w * self.zoom) * 0.5,
+            (available.y - map_h * self.zoom) * 0.5,
+        );
+    }
+
+    /// Bring a map pixel to the centre of the canvas at `zoom`.
+    fn focus_on(&mut self, rect: egui::Rect, x: f32, y: f32, zoom: f32) {
+        if rect.width() < 64.0 || rect.height() < 64.0 {
+            // Not laid out yet: remember the request and apply it next frame.
+            self.pending_focus = Some((x, y, zoom));
+            return;
+        }
+        self.zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+        self.offset = egui::vec2(
+            rect.width() * 0.5 - x * self.zoom,
+            rect.height() * 0.5 - y * self.zoom,
+        );
+        self.marker = Some((x, y));
+    }
+
+    /// Latitude and longitude, in degrees, of a map pixel.
+    fn pixel_lat_lon(&self, x: f32, y: f32) -> (f32, f32) {
+        let v = (y / (self.cache.height.saturating_sub(1)).max(1) as f32).clamp(0.0, 1.0);
+        let u = (x / self.cache.width.max(1) as f32).clamp(0.0, 1.0);
+        ((0.5 - v) * 180.0, (u - 0.5) * 360.0)
     }
 
     /// Select the scope, tier and border style the atlas portrays.
@@ -679,6 +772,88 @@ impl MapViewer {
             } else if scope == MapScope::Topographic {
                 // Hypsometric survey: colour is elevation, above and below water
                 final_color = compute_topographic_color();
+            } else if scope == MapScope::Climate {
+                // ── Climate zones ────────────────────────────────────────
+                // Land is classified by mean temperature, rainfall and altitude;
+                // the sea by its surface temperature. A little of the hillshade is
+                // kept so the reader can still see where the mountains are.
+                let lake = *is_lake.get(x as isize, y as isize);
+                let base: [u8; 3] = if lake {
+                    [58, 138, 178]
+                } else if elev <= sea_level {
+                    themes::ocean_climate_color(temp)
+                } else {
+                    ClimateZone::classify(display_temp, precip, elev - sea_level).color()
+                };
+                let relief_tint = if elev > sea_level && !lake {
+                    (0.88 + 0.14 * shade).clamp(0.82, 1.08)
+                } else {
+                    1.0
+                };
+                final_color = [
+                    (base[0] as f32 * relief_tint).clamp(0.0, 255.0),
+                    (base[1] as f32 * relief_tint).clamp(0.0, 255.0),
+                    (base[2] as f32 * relief_tint).clamp(0.0, 255.0),
+                ];
+            } else if scope == MapScope::Temperature {
+                // ── Thermal belts ────────────────────────────────────────
+                // The mean annual temperature as a number line: violet cold, red
+                // hot, with a thin dark isotherm wherever the 5 °C band changes.
+                let band = themes::isotherm_band(temp);
+                let base = themes::temperature_color(temp);
+                let right_band =
+                    themes::isotherm_band(*temp_grid.get(x as isize + 1, y as isize));
+                let down_band = if y + 1 < h {
+                    themes::isotherm_band(*temp_grid.get(x as isize, y as isize + 1))
+                } else {
+                    band
+                };
+                let on_isotherm = right_band != band || down_band != band;
+                let tint = if on_isotherm { 0.66 } else { 1.0 };
+                let mut color = [
+                    (base[0] as f32 * tint).clamp(0.0, 255.0),
+                    (base[1] as f32 * tint).clamp(0.0, 255.0),
+                    (base[2] as f32 * tint).clamp(0.0, 255.0),
+                ];
+
+                // Temperature is continuous, so the plate would be an unreadable
+                // gradient without a shoreline: draw it as a thin dark line.
+                let here_land = elev > sea_level;
+                let right_land = *heightmap.get(x as isize + 1, y as isize) > sea_level;
+                let down_land = if y + 1 < h {
+                    *heightmap.get(x as isize, y as isize + 1) > sea_level
+                } else {
+                    here_land
+                };
+                if here_land != right_land || here_land != down_land {
+                    color = blend_rgb(color, [46.0, 40.0, 54.0], 0.55);
+                }
+                final_color = color;
+            } else if scope == MapScope::Terrain {
+                // ── Landform classes ─────────────────────────────────────
+                // One flat colour per landform band, shaded enough to keep the
+                // ridges readable, with the rivers drawn as on the physical atlas.
+                let lake = *is_lake.get(x as isize, y as isize);
+                let metres = relief::to_metres(elev);
+                let class = TerrainClass::classify(metres, lake, display_temp);
+                let base = class.color();
+                let mut color = [base[0] as f32, base[1] as f32, base[2] as f32];
+                if elev > sea_level && !lake && class != TerrainClass::Ice {
+                    let relief_tint = (0.86 + 0.16 * shade).clamp(0.80, 1.10);
+                    color = [
+                        color[0] * relief_tint,
+                        color[1] * relief_tint,
+                        color[2] * relief_tint,
+                    ];
+                    let flow = *flow_grid.get(x as isize, y as isize);
+                    if flow >= min_river_flow {
+                        let river_strength = ((flow - min_river_flow) / major_river_flow)
+                            .sqrt()
+                            .clamp(0.30, 1.0);
+                        color = blend_rgb(color, [20.0, 75.0, 155.0], river_strength);
+                    }
+                }
+                final_color = color;
             } else if civ_scope {
                 // ── Civilizations scope ────────────────────────────────
                 // The physical world wearing its history: ocean and ice exactly as
@@ -921,35 +1096,43 @@ impl MapViewer {
 impl eframe::App for MapViewer {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let mut visual_changed = false;
+        // Panel clicks cannot move the map directly: the canvas rectangle for
+        // this frame is only known once the panels have been laid out. Requests
+        // are collected here and applied right after the canvas is allocated.
+        let mut fit_request = false;
+        let mut focus_request: Option<(f32, f32, f32)> = None;
+        let mut clicked_civ: Option<u32> = None;
 
         // ── TOP CONTROLS BAR ──────────────────────────────────────────────────
+        // Two rows, because the atlas now has nine map modes: what it shows, then
+        // how it shows it. Both rows wrap, so a narrow window never clips a button.
         egui::Panel::top("top_controls").show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.heading("🌍 Atlas Viewer");
                 ui.separator();
 
                 // ── Map scope: what the atlas portrays ────────────────────────
-                if ui.selectable_value(&mut self.scope, MapScope::Physical, "🗺 Physical").clicked() {
-                    visual_changed = true;
+                for (scope, label) in [
+                    (MapScope::Physical, "🗺 Physical"),
+                    (MapScope::Topographic, "⛰ Topographic"),
+                    (MapScope::Climate, "🌦 Climate"),
+                    (MapScope::Temperature, "🌡 Temperature"),
+                    (MapScope::Terrain, "🪨 Terrain"),
+                    (MapScope::Civilizations, "🏺 Civilizations"),
+                    (MapScope::Land, "🏛 Land"),
+                    (MapScope::Water, "🌊 Water"),
+                    (MapScope::Everywhere, "🌍 Everywhere"),
+                ] {
+                    if ui.selectable_value(&mut self.scope, scope, label).clicked() {
+                        visual_changed = true;
+                        // Every scope carries its own legend (and so its own canvas
+                        // width), so switching opens the new map whole.
+                        fit_request = true;
+                    }
                 }
-                if ui.selectable_value(&mut self.scope, MapScope::Topographic, "⛰ Topographic").clicked() {
-                    visual_changed = true;
-                }
-                if ui.selectable_value(&mut self.scope, MapScope::Civilizations, "🏺 Civilizations").clicked() {
-                    visual_changed = true;
-                }
-                if ui.selectable_value(&mut self.scope, MapScope::Land, "🏛 Land").clicked() {
-                    visual_changed = true;
-                }
-                if ui.selectable_value(&mut self.scope, MapScope::Water, "🌊 Water").clicked() {
-                    visual_changed = true;
-                }
-                if ui.selectable_value(&mut self.scope, MapScope::Everywhere, "🌍 Everywhere").clicked() {
-                    visual_changed = true;
-                }
+            });
 
-                ui.separator();
-
+            ui.horizontal_wrapped(|ui| {
                 // Tier selector: the political tiers when a political scope is on,
                 // and the internal subdivision of the realms in the Civilizations
                 // scope (a realm's own provinces, areas, regions…).
@@ -997,17 +1180,25 @@ impl eframe::App for MapViewer {
                     ui.separator();
                 }
 
-                // Zoom controls
-                if ui.button("➖").on_hover_text("Zoom Out").clicked() {
-                    self.zoom = (self.zoom * 0.75).clamp(0.04, 8.0);
+                // Zoom controls. **Fit** measures the canvas and shows the whole
+                // planet; it is applied after the panels settle, further down.
+                if ui
+                    .button("➖")
+                    .on_hover_text("Zoom out")
+                    .clicked()
+                {
+                    self.zoom = (self.zoom * 0.75).clamp(MIN_ZOOM, MAX_ZOOM);
                 }
                 ui.label(format!("{:.0}%", self.zoom * 100.0));
-                if ui.button("➕").on_hover_text("Zoom In").clicked() {
-                    self.zoom = (self.zoom * 1.33).clamp(0.04, 8.0);
+                if ui.button("➕").on_hover_text("Zoom in").clicked() {
+                    self.zoom = (self.zoom * 1.33).clamp(MIN_ZOOM, MAX_ZOOM);
                 }
-                if ui.button("Fit").on_hover_text("Reset View").clicked() {
-                    self.zoom = 0.16;
-                    self.offset = egui::vec2(0.0, 0.0);
+                if ui
+                    .button("⤢ Fit")
+                    .on_hover_text("Fit the whole world in the window")
+                    .clicked()
+                {
+                    fit_request = true;
                 }
             });
         });
@@ -1056,11 +1247,18 @@ impl eframe::App for MapViewer {
         // ── HYPSOMETRIC LEGEND (Topographic scope only) ───────────────────────
         // The survey sheet is only readable with its scale at hand, so the
         // Topographic scope carries the palette — every band, its metre range and
-        // its name — plus the world's own relief extremes.
+        // its name — plus the world's own relief extremes. Both extremes are
+        // clickable: a figure the reader cannot find is a figure worth nothing.
         if self.scope == MapScope::Topographic {
+            let relief = self.relief;
+            let (peak_lat, peak_lon) = self.pixel_lat_lon(relief.peak_x, relief.peak_y);
+            let (trench_lat, trench_lon) = self.pixel_lat_lon(relief.trench_x, relief.trench_y);
+            let peak_where = lat_lon_label(peak_lat, peak_lon);
+            let trench_where = lat_lon_label(trench_lat, trench_lon);
+
             egui::Panel::right("hypsometric_legend")
                 .resizable(false)
-                .exact_size(268.0)
+                .exact_size(286.0)
                 .show(ui, |ui| {
                     ui.heading("⛰ Topographic Scale");
                     ui.label(
@@ -1069,10 +1267,45 @@ impl eframe::App for MapViewer {
                             .weak(),
                     );
                     ui.separator();
-                    ui.label(format!("🗻 Highest peak    +{:.0} m", self.peak_metres));
-                    ui.label(format!("🌊 Deepest trench  {:.0} m", self.trench_metres));
-                    ui.label(format!("🌍 Surface: {:.0}% ocean", self.ocean_share * 100.0));
+
+                    let peak_label = format!("🗻 Highest peak   +{:.0} m", relief.peak_metres);
+                    if ui
+                        .add(egui::Button::new(peak_label).frame(false))
+                        .on_hover_text(format!("{peak_where}\nClick to fly to the summit"))
+                        .clicked()
+                    {
+                        // Never zoom *out* to fly somewhere: a reader who is already
+                        // closer than the default keeps their scale.
+                        let zoom = RELIEF_FOCUS_ZOOM.max(self.zoom);
+                        focus_request = Some((relief.peak_x, relief.peak_y, zoom));
+                    }
+                    ui.label(egui::RichText::new(peak_where).small().weak());
+
+                    let trench_label =
+                        format!("🌊 Deepest trench  {:.0} m", relief.trench_metres);
+                    if ui
+                        .add(egui::Button::new(trench_label).frame(false))
+                        .on_hover_text(format!(
+                            "{trench_where}\nClick to fly to the deepest point"
+                        ))
+                        .clicked()
+                    {
+                        let zoom = RELIEF_FOCUS_ZOOM.max(self.zoom);
+                        focus_request = Some((relief.trench_x, relief.trench_y, zoom));
+                    }
+                    ui.label(egui::RichText::new(trench_where).small().weak());
+
+                    ui.label(format!(
+                        "🌍 Surface: {:.0}% ocean",
+                        relief.ocean_share * 100.0
+                    ));
+                    ui.label(
+                        egui::RichText::new("Click a figure above to centre the map on it.")
+                            .small()
+                            .weak(),
+                    );
                     ui.separator();
+
                     // The band list is the only part that can overflow a short
                     // window, so it is the part that scrolls.
                     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1100,10 +1333,112 @@ impl eframe::App for MapViewer {
                 });
         }
 
+        // ── CLIMATE LEGEND (Climate scope only) ───────────────────────────────
+        if self.scope == MapScope::Climate {
+            egui::Panel::right("climate_legend")
+                .resizable(false)
+                .exact_size(300.0)
+                .show(ui, |ui| {
+                    ui.heading("🌦 Climate Zones");
+                    ui.label(
+                        egui::RichText::new(
+                            "Land is classified by mean temperature, annual rainfall and altitude; the sea by its surface temperature.",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for zone in ClimateZone::ALL {
+                            themes::legend_row(ui, zone.color(), zone.label(), "");
+                        }
+                        ui.separator();
+                        for (label, sample_temp) in [
+                            ("Frozen sea", -8.0),
+                            ("Polar sea", 0.0),
+                            ("Cold temperate sea", 9.0),
+                            ("Warm temperate sea", 19.0),
+                            ("Tropical sea", 26.0),
+                            ("Equatorial sea", 30.0),
+                        ] {
+                            themes::legend_row(
+                                ui,
+                                themes::ocean_climate_color(sample_temp),
+                                label,
+                                "",
+                            );
+                        }
+                    });
+                });
+        }
+
+        // ── TEMPERATURE LEGEND (Temperature scope only) ───────────────────────
+        if self.scope == MapScope::Temperature {
+            egui::Panel::right("temperature_legend")
+                .resizable(false)
+                .exact_size(300.0)
+                .show(ui, |ui| {
+                    ui.heading("🌡 Temperature");
+                    ui.label(
+                        egui::RichText::new(
+                            "Mean annual surface temperature: land station means, sea-surface means over the ocean.",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for row in 0..TEMPERATURE_LEGEND_ROWS {
+                            themes::legend_row(
+                                ui,
+                                themes::temperature_legend_color(row),
+                                &themes::temperature_legend_label(row),
+                                "",
+                            );
+                        }
+                    });
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new("A thin dark line marks every 5 °C isotherm.")
+                            .small()
+                            .weak(),
+                    );
+                });
+        }
+
+        // ── TERRAIN LEGEND (Terrain scope only) ───────────────────────────────
+        if self.scope == MapScope::Terrain {
+            egui::Panel::right("terrain_legend")
+                .resizable(false)
+                .exact_size(300.0)
+                .show(ui, |ui| {
+                    ui.heading("🪨 Terrain Types");
+                    ui.label(
+                        egui::RichText::new(
+                            "Landform bands from the vertical datum; the ocean floor is classified by depth.",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for class in TerrainClass::ALL {
+                            themes::legend_row(
+                                ui,
+                                class.color(),
+                                class.label(),
+                                &class.range_label(),
+                            );
+                        }
+                    });
+                });
+        }
+
         // ── CIVILIZATIONS LEGEND (Civilizations scope only) ───────────────────
         // The subject of this map mode is a handful of realms, so the panel can
         // carry the whole history at once: the world's own calendar, then every
-        // civilization with its colour, cradle, era and population.
+        // civilization with its colour, cradle, era and population. A realm's
+        // entry is a button: clicking it flies the map to its cradle.
         if self.scope.is_civilizations() {
             egui::Panel::right("civilizations_legend")
                 .resizable(false)
@@ -1141,16 +1476,15 @@ impl eframe::App for MapViewer {
                         world.mean_density_per_km2()
                     ));
                     ui.label(
-                        egui::RichText::new(
-                            "Each realm's cradle — the province it began in — carries a small dark dot; a hard line is a frontier, a faint one an internal subdivision of the chosen tier.",
-                        )
-                        .small()
-                        .weak(),
+                        egui::RichText::new("Click a realm to fly to its cradle.")
+                            .small()
+                            .weak(),
                     );
                     ui.separator();
 
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        for civ in &world.civilizations {
+                        for (index, civ) in world.civilizations.iter().enumerate() {
+                            let id = index as u32 + 1;
                             ui.horizontal(|ui| {
                                 let (swatch, _) = ui.allocate_exact_size(
                                     egui::vec2(16.0, 12.0),
@@ -1161,34 +1495,33 @@ impl eframe::App for MapViewer {
                                     2.0,
                                     Color32::from_rgb(civ.color[0], civ.color[1], civ.color[2]),
                                 );
-                                ui.strong(civ.name.as_str());
-                                ui.label(egui::RichText::new(civ.scale.label()).small().weak());
+                                let selected = self.selected_civ == Some(id);
+                                if ui
+                                    .selectable_label(
+                                        selected,
+                                        egui::RichText::new(civ.name.as_str()).strong(),
+                                    )
+                                    .on_hover_text("Click to fly to this realm's cradle")
+                                    .clicked()
+                                {
+                                    clicked_civ = Some(id);
+                                }
                             });
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "{} · founded Year {} · {} · {}",
+                                    "{} · founded Year {} · {}",
                                     civ.cradle_kind.label(),
                                     civ.founding_year,
                                     civ.era.label(),
-                                    civ.isolation.label(),
                                 ))
                                 .small(),
                             );
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "{} provinces · {} km² · {} people",
+                                    "{} provinces · {} people",
                                     civ.provinces.len(),
-                                    thousands(civ.area_km2),
                                     thousands_u64(civ.population),
                                 ))
-                                .small()
-                                .weak(),
-                            );
-                            ui.label(
-                                egui::RichText::new(match civ.nearest_contact_km() {
-                                    Some(km) => format!("nearest realm ≈{} km", thousands(km)),
-                                    None => "no realm within reach".to_string(),
-                                })
                                 .small()
                                 .weak(),
                             );
@@ -1196,6 +1529,15 @@ impl eframe::App for MapViewer {
                         }
                     });
                 });
+        }
+
+        // A click on a realm's legend entry flies the map to that realm.
+        if let Some(id) = clicked_civ {
+            self.selected_civ = Some(id);
+            if let Some(civ) = self.civilizations.civilization(id) {
+                let zoom = CIV_FOCUS_ZOOM.max(self.zoom);
+                focus_request = Some((civ.seat_x, civ.seat_y, zoom));
+            }
         }
 
         if self.texture.is_none() || visual_changed {
@@ -1206,6 +1548,22 @@ impl eframe::App for MapViewer {
         // ── INTERACTIVE MAP CANVAS ────────────────────────────────────────────
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
 
+        // The canvas is the only thing that knows how big the map area really is,
+        // so both "fit" and "fly to" are resolved here, in the same frame the
+        // click happened.
+        if fit_request || self.pending_fit {
+            if rect.width() >= 64.0 && rect.height() >= 64.0 {
+                self.fit_to(rect);
+                self.pending_fit = false;
+            }
+        }
+        // A fly-to request from this frame wins over one left over from a frame
+        // whose canvas had not been laid out yet; either way it is applied here,
+        // and `focus_on` re-queues it if the canvas is still too small.
+        if let Some((x, y, zoom)) = focus_request.take().or(self.pending_focus.take()) {
+            self.focus_on(rect, x, y, zoom);
+        }
+
         if response.dragged() {
             self.offset += response.drag_delta();
         }
@@ -1214,7 +1572,8 @@ impl eframe::App for MapViewer {
             let scroll = ui.ctx().input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
                 let old_zoom = self.zoom;
-                self.zoom = (self.zoom + scroll * 0.001 * self.zoom * 4.0).clamp(0.04, 8.0);
+                self.zoom =
+                    (self.zoom + scroll * 0.001 * self.zoom * 4.0).clamp(MIN_ZOOM, MAX_ZOOM);
 
                 if let Some(mouse_pos) = ui.ctx().pointer_hover_pos() {
                     let zoom_ratio = self.zoom / old_zoom;
@@ -1236,6 +1595,25 @@ impl eframe::App for MapViewer {
             );
 
             ui.painter().with_clip_rect(rect).add(egui::Shape::mesh(mesh));
+
+            // The place the atlas was last flown to, ringed so the reader can see
+            // what the "Highest peak" or a clicked realm actually points at.
+            if let Some((mx, my)) = self.marker {
+                let at = map_rect.min + egui::vec2(mx * self.zoom, my * self.zoom);
+                if rect.expand(16.0).contains(at) {
+                    let painter = ui.painter().with_clip_rect(rect);
+                    painter.circle_stroke(
+                        at,
+                        14.0,
+                        Stroke::new(2.0, Color32::from_rgb(255, 236, 170)),
+                    );
+                    painter.circle_stroke(
+                        at,
+                        5.0,
+                        Stroke::new(1.5, Color32::from_rgb(60, 46, 24)),
+                    );
+                }
+            }
         }
 
         // ── HOVER INSPECTION TOOLTIP ──────────────────────────────────────────
@@ -1291,13 +1669,7 @@ impl eframe::App for MapViewer {
                                 .civilizations
                                 .civilization(owner)
                                 .expect("owner id always indexes a civilization");
-                            civilization_dossier(
-                                ui,
-                                civ,
-                                &self.civilizations,
-                                id,
-                                self.civilizations.population_of(id),
-                            );
+                            civilization_dossier(ui, civ, &self.civilizations);
                         } else if lake {
                             ui.heading("💧 Inland Freshwater Lake");
                             ui.label("No realm claims the water itself.");
@@ -1370,6 +1742,100 @@ impl eframe::App for MapViewer {
                         if !is_ocean && flow >= 1800.0 {
                             ui.label(format!("River Flow: {:.0} m³/s", flow));
                         }
+                        ui.separator();
+                        ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                    } else if self.scope == MapScope::Climate {
+                        // ── Climate readout ────────────────────────────
+                        let lake = *self.cache.is_lake.get(map_x, map_y);
+                        if lake {
+                            ui.heading("🌦 Inland Lake");
+                            ui.label("Fresh water, read with the climate of its shores.");
+                        } else if is_ocean {
+                            ui.heading(format!("🌦 {}", themes::ocean_climate_label(temp)));
+                            ui.separator();
+                            ui.label(format!("Sea-surface temperature: {:.1} °C", temp));
+                            if frozen_sea {
+                                ui.label("Perennial sea ice.");
+                            }
+                        } else {
+                            let zone = ClimateZone::classify(display_temp, precip, altitude);
+                            ui.heading(format!("🌦 {}", zone.label()));
+                            ui.label(egui::RichText::new(zone.describe()).small().weak());
+                            ui.separator();
+                            ui.label(format!("Mean temperature: {:.1} °C", temp));
+                            ui.label(format!(
+                                "Annual rainfall: {:.0} mm/yr",
+                                precip * 1200.0
+                            ));
+                            ui.label(format!(
+                                "Elevation: {:.0} m",
+                                relief::altitude_metres(elev)
+                            ));
+                        }
+                        ui.separator();
+                        ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                    } else if self.scope == MapScope::Temperature {
+                        // ── Thermal readout ────────────────────────────
+                        let band = themes::isotherm_band(temp);
+                        let lake = *self.cache.is_lake.get(map_x, map_y);
+                        let surface = if is_ocean {
+                            if frozen_sea {
+                                "Sea ice"
+                            } else {
+                                "Sea surface"
+                            }
+                        } else if lake {
+                            "Lake surface"
+                        } else if display_temp < -3.0 {
+                            "Ice-capped land"
+                        } else {
+                            "Land surface"
+                        };
+                        ui.heading(format!("🌡 {:.1} °C", temp));
+                        ui.label(egui::RichText::new(surface).small().weak());
+                        ui.separator();
+                        ui.label(format!(
+                            "Isotherm band: {}",
+                            themes::isotherm_band_label(band)
+                        ));
+                        if elev > sea_level {
+                            ui.label(format!(
+                                "Elevation: {:.0} m",
+                                relief::altitude_metres(elev)
+                            ));
+                        }
+                        ui.separator();
+                        ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                    } else if self.scope == MapScope::Terrain {
+                        // ── Terrain readout ────────────────────────────
+                        let lake = *self.cache.is_lake.get(map_x, map_y);
+                        let metres = relief::to_metres(elev);
+                        let class = TerrainClass::classify(metres, lake, display_temp);
+                        let (gx, gy) =
+                            self.cache.heightmap.gradient(map_x as f32, map_y as f32);
+                        let slope = (gx * gx + gy * gy).sqrt();
+                        ui.heading(format!("🪨 {}", class.label()));
+                        ui.separator();
+                        if elev > sea_level {
+                            ui.label(format!(
+                                "Elevation: {:.0} m",
+                                relief::altitude_metres(elev)
+                            ));
+                        } else {
+                            ui.label(format!(
+                                "Depth: {:.0} m",
+                                relief::depth_metres(elev)
+                            ));
+                        }
+                        ui.label(format!("Band: {}", class.range_label()));
+                        if !is_ocean && !lake && class != TerrainClass::Ice {
+                            ui.label(format!(
+                                "Ground: {} ({:.0} m rise per pixel)",
+                                themes::slope_label(slope),
+                                slope * relief::LAND_M_PER_UNIT
+                            ));
+                        }
+                        ui.label(format!("Temperature: {:.1} °C", temp));
                         ui.separator();
                         ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
                     } else if self.scope == MapScope::Physical {
