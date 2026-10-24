@@ -41,6 +41,7 @@ pub fn generate_provinces(
     precip_grid: &Grid<f32>,
     flow_grid: &Grid<f32>,
     is_lake: &Grid<bool>,
+    permanent_ice: &Grid<bool>,
     sea_level: f32,
     min_river_flow: f32,
     config: &GeographyConfig,
@@ -125,18 +126,16 @@ pub fn generate_provinces(
     const MIN_WASTE_BLOB: usize = 64;  // discard sub-visible speckle
     const WASTE_CUTOFF: f32 = 0.68;    // hostility threshold
 
-    // ── Permanent polar ice cap (latitudes are absolute radians) ──────────────
-    // Beyond these latitudes the land becomes an unbroken cap of permanent ice:
-    //   • provinces may still nibble at the fringe (≈66–74°), but the deep
-    //     polar land is impassable, so no settlement can sprawl all the way to
-    //     the pole — the converging longitudes there used to stretch single
-    //     provinces into grotesque, thread-thin bands;
-    //   • the frozen seas beyond it — rendered as "polar land" by the atlas —
-    //     are part of the very same wasteland.
-    const POLAR_ICE_START: f32 = 1.15;  // ≈ 65.9° — the ice begins to bite
-    const POLAR_ICE_FULL: f32 = 1.40;   // ≈ 80.2° — solid cap from here inward
-    const POLAR_ICE_NOISE: f32 = 0.34;  // organic wobble of the cap's edge
-    const POLAR_ICE_CUTOFF: f32 = 0.55;
+    // ── Permanent polar ice ───────────────────────────────────────────────────
+    // The belt is not this generator's own invention: `polar::permanent_polar_ice`
+    // decides where the world's permanent ice lies (the polar belt with its ragged
+    // equatorward edge, plus every landmass cut off from a pole), the temperature
+    // grid is pinned to match, and the finished mask arrives here as
+    // `permanent_ice`. Ice overrides every sanctuary below, so no populated strip
+    // can ring a pole or hug a polar coast — while a pole-connected continent may
+    // still keep a ragged handful of provinces right at the rim of the ice. The
+    // frozen seas beyond it — rendered as "polar land" by the atlas — are part of
+    // the very same wasteland.
 
     for y in 0..h {
         let v = y as f32 / (h - 1) as f32;
@@ -176,14 +175,11 @@ pub fn generate_provinces(
             let mut wasteland = false;
             let mut ice = false;
 
-            // ── Permanent polar ice cap ───────────────────────────────────────
-            // Deliberately evaluated for *every* polar land pixel, frozen coasts
-            // included: it is the populated strip along the ice rim that used to
-            // let a single province snake round and round until it stretched
-            // into a paper-thin band reaching the very pole.
-            let polar_ice = ramp(abs_lat, POLAR_ICE_START, POLAR_ICE_FULL)
-                + waste_noise.get([px * 26.0, py * 26.0, pz * 26.0]) as f32 * POLAR_ICE_NOISE
-                > POLAR_ICE_CUTOFF;
+            // Permanent polar ice — read once, for every land pixel, frozen
+            // coasts included. It is the populated strip along the ice rim that
+            // used to let a single province snake round and round until it
+            // stretched into a paper-thin band reaching the very pole.
+            let on_polar_ice = *permanent_ice.get(x as isize, y as isize);
 
             if !coastal && !river {
                 let distf    = dist as f32;
@@ -241,10 +237,10 @@ pub fn generate_provinces(
                 wasteland = ice || hostility > WASTE_CUTOFF;
             }
 
-            if polar_ice {
-                // Polar ice overrides every sanctuary: the deep cap can never be
-                // reopened by the coastal/river belt, so no populated strip can
-                // ever ring the pole.
+            if on_polar_ice {
+                // Permafrost overrides every sanctuary: the coastal and river
+                // belts can never reopen the ice, so no populated strip can ring
+                // a pole or hug a polar coast.
                 wasteland = true;
                 ice = true;
             }
@@ -339,22 +335,47 @@ pub fn generate_provinces(
     dilate_non_ice_wasteland(&mut is_wasteland, &is_ice_cap, &is_sanctuary, heightmap, is_lake, sea_level, 1);
 
     // Carve populated corridors through remaining barriers (Maghreb ↔ West Africa).
+    // The carver measures itself in province widths, so a corridor can never grow
+    // into a province-long sliver (see [`carve_habitable_corridors`]).
+    let corridor_span = province_span(
+        hab_grid.raw_slice().iter().filter(|&&v| v > 0.0).count() as f32,
+        config.num_provinces,
+    );
     carve_habitable_corridors(
         heightmap,
         is_lake,
         &mut is_wasteland,
-        &mut is_ice_cap,
+        &is_ice_cap,
         &is_sanctuary,
         &dist_to_water,
         sea_level,
+        (MAX_CORRIDOR_SPANS * corridor_span).round() as usize,
     );
 
-    // Sanctuaries must stay populated even after dilation-like side effects.
+    // Every province has to be able to follow settled land to the sea — not
+    // merely to a lake. The carver bridges what it can, but a pocket it could
+    // not reach — and any corridor left dangling by such a pocket — is reverted
+    // here, on the finished grid, so the map never keeps an island of
+    // habitability with no path to the ocean.
+    let stranded_px = revert_stranded_habitation(heightmap, is_lake, &mut is_wasteland, sea_level);
+    if stranded_px > 0 {
+        println!(
+            "✓ Stranded habitation reverted: {} px (no path to the sea)",
+            stranded_px
+        );
+    }
+
+    // Wasteland carries no habitability, so the province seeder can never pick a
+    // centre on it.
+    //
+    // Sanctuary ground is deliberately *not* re-opened here. The carver and the
+    // pass above have the last word on what stays settled, and they revert a
+    // pocket that cannot reach water — sanctuary or not. Quietly reviving such a
+    // pocket here is exactly what used to leave an island of habitability
+    // marooned in the desert. Coastal and river ground that *can* reach water is
+    // already populated by construction, so nothing legitimate is lost.
     for y in 0..h {
         for x in 0..w {
-            if *is_sanctuary.get(x as isize, y as isize) && !*is_ice_cap.get(x as isize, y as isize) {
-                is_wasteland.set(x as isize, y as isize, false);
-            }
             if *is_wasteland.get(x as isize, y as isize) {
                 hab_grid.set(x as isize, y as isize, 0.0);
             }
@@ -375,15 +396,18 @@ pub fn generate_provinces(
         waste_blobs, max_non_ice
     );
 
-    let (landmasses, networks) = connectivity_stats(heightmap, is_lake, &is_wasteland, sea_level);
+    let (landmasses, networks, stranded, stranded_px) =
+        connectivity_stats(heightmap, is_lake, &is_wasteland, sea_level);
     println!(
-        "✓ Inhabited landmasses: {} | Populated province networks: {}{}",
+        "✓ Inhabited landmasses: {} | Populated province networks: {} | Provinces adrift: {} ({} px){}",
         landmasses,
         networks,
-        if landmasses == networks {
-            " (every inhabited landmass fully connected)"
+        stranded,
+        stranded_px,
+        if stranded == 0 {
+            " — every network reaches the sea"
         } else {
-            "  ⚠ WARNING: an inhabited landmass was severed by wilderness!"
+            "  ⚠ WARNING: a populated network is cut off from the sea!"
         }
     );
 
@@ -412,8 +436,7 @@ pub fn generate_provinces(
             .iter()
             .filter(|&&v| v > 0.0)
             .count() as f32;
-        let area_per_prov = land_px / config.num_provinces as f32;
-        (area_per_prov / std::f32::consts::PI).sqrt().max(18.0)
+        province_span(land_px, config.num_provinces)
     };
 
     let mut seeds: Vec<(isize, isize)> = Vec::with_capacity(config.num_provinces);
@@ -601,6 +624,19 @@ fn is_land(heightmap: &Grid<f32>, is_lake: &Grid<bool>, x: isize, y: isize, sea_
     *heightmap.get(x, y) > sea_level && !*is_lake.get(x, y)
 }
 
+/// True when `(x, y)` is open **sea** — the single connected world ocean —
+/// as opposed to dry land or an inland lake.
+///
+/// [`is_land`] counts every stretch of water as "not land", which is what the
+/// flood fills want, but the connectivity passes must tell salt water from a
+/// lake: provinces are joined across the sea, so "can this network reach the
+/// water?" has to mean "can it reach the *sea*?". A pocket that only laps a lake
+/// is as cut off as one that touches nothing at all — it can never reach the
+/// ocean, and therefore never the rest of the world.
+fn is_sea(heightmap: &Grid<f32>, is_lake: &Grid<bool>, x: isize, y: isize, sea_level: f32) -> bool {
+    *heightmap.get(x, y) <= sea_level && !*is_lake.get(x, y)
+}
+
 fn dilate_non_ice_wasteland(
     is_wasteland: &mut Grid<bool>,
     is_ice_cap: &Grid<bool>,
@@ -643,6 +679,27 @@ fn dilate_non_ice_wasteland(
 #[inline(always)]
 fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
     ((x - lo) / (hi - lo)).clamp(0.0, 1.0)
+}
+
+/// Narrowest spacing the province seeder ever leaves between two centres, in map
+/// pixels. Wilderness, coastlines and rugged ground stretch the real spacing well
+/// beyond it, but it is the floor every "is this gap one province wide?" question
+/// is measured against.
+const MIN_PROVINCE_SPAN: f32 = 18.0;
+
+/// Longest corridor the carver may cut, in province widths (see
+/// [`province_span`]). A pocket further from its landmass's populated network
+/// than this is left to the wilderness instead of being threaded to it by a
+/// province-long, three-pixel-wide sliver.
+const MAX_CORRIDOR_SPANS: f32 = 2.5;
+
+/// Typical width of one province, in map pixels: the centre-to-centre spacing the
+/// seeder aims for when `land_px` pixels of land have to carry `num_provinces`
+/// provinces. Used both to space the seeds and to keep carved corridors to the
+/// scale of the provinces they join.
+fn province_span(land_px: f32, num_provinces: usize) -> f32 {
+    let area_per_province = land_px / num_provinces.max(1) as f32;
+    (area_per_province / std::f32::consts::PI).sqrt().max(MIN_PROVINCE_SPAN)
 }
 
 /// Drops wasteland blobs smaller than `min_size` so the map shows real
@@ -716,13 +773,20 @@ impl PartialOrd for CarveState {
     }
 }
 
+/// Disjoint-set over populated components, used to tell which networks the
+/// carver has already joined. Every group remembers whether any of its members
+/// reaches the sea.
 struct CompDsu {
     parent: Vec<u32>,
+    coastal: Vec<bool>,
 }
 
 impl CompDsu {
-    fn new(n: usize) -> Self {
-        Self { parent: (0..n as u32).collect() }
+    fn new(comp_touches_sea: &[bool]) -> Self {
+        Self {
+            parent: (0..comp_touches_sea.len() as u32).collect(),
+            coastal: comp_touches_sea.to_vec(),
+        }
     }
     fn find(&mut self, mut i: u32) -> u32 {
         while self.parent[i as usize] != i {
@@ -736,20 +800,65 @@ impl CompDsu {
         let rb = self.find(b);
         if ra != rb {
             self.parent[rb as usize] = ra;
+            self.coastal[ra as usize] |= self.coastal[rb as usize];
         }
+    }
+    /// A network only needs a corridor while the sea cannot reach it. Once a
+    /// group holds a single coastal province, every pocket in it — and every
+    /// network it may later touch — is already reachable by water.
+    fn needs_corridor(&mut self, i: u32) -> bool {
+        let root = self.find(i) as usize;
+        !self.coastal[root]
     }
 }
 
-/// Guarantee each landmass has a single populated-province network by carving
-/// short corridors through non-ice wasteland (preferring coasts).
+/// Rejoin the populated networks that wilderness has cut off from the sea, and
+/// only those; whatever cannot be rejoined falls back to wilderness.
+///
+/// Habitability islands (oases, alpine valleys, rainforest clearings) can end up
+/// walled in by impassable ground. A pocket like that has no coast of its own: if
+/// nothing joins it to the rest of its landmass it is a province adrift, reachable
+/// by nothing. Those pockets are bridged by a corridor carved through the
+/// wasteland — preferring the coast, because a corridor is cheapest where the
+/// ground is lowest and nearest the water.
+///
+/// Two networks that each keep their own stretch of *sea* shore are *not*
+/// bridged. Wilderness is allowed to split a landmass into several networks as
+/// long as every one of them reaches the sea: the sea is a road, and the
+/// geopolitical graph already joins coastal provinces across straits
+/// ([`extract_province_graph`](crate::geopolitics::graph::extract_province_graph)),
+/// while forcing them together on land would only smear a paper-thin province
+/// along the waterline. That is what used to happen along the polar belt, where a
+/// single corridor would hug a frozen coast for a thousand pixels.
+///
+/// A lake is not a shore in this sense. A network that only laps an inland lake
+/// is as cut off as one touching nothing at all, so it still earns a corridor
+/// ([`is_sea`]).
+///
+/// Two more limits keep the carving honest:
+///
+/// * **Permanent ice is impassable.** The polar belt is mandatory wilderness for
+///   every other stage, and a corridor must not tunnel through it or punch holes
+///   in it — a strip of provinces on the rim of an ice sheet is exactly the
+///   thread-thin province this pass exists to avoid.
+/// * **A corridor may not exceed `max_corridor` pixels.** A pocket further from
+///   its landmass's network than that is left to the wilderness, where it at
+///   least reads as one more patch of impassable ground.
+///
+/// Either way the outcome is the same: when the carve is done, **every surviving
+/// populated network reaches the sea**. A network that could not be bridged within
+/// the budget is reverted to wilderness — sanctuary ground included — so the map
+/// never keeps an island of habitability stranded in the desert with no path to
+/// the sea.
 fn carve_habitable_corridors(
     heightmap: &Grid<f32>,
     is_lake: &Grid<bool>,
     is_wasteland: &mut Grid<bool>,
-    is_ice_cap: &mut Grid<bool>,
+    is_ice_cap: &Grid<bool>,
     is_sanctuary: &Grid<bool>,
     dist_to_water: &Grid<u8>,
     sea_level: f32,
+    max_corridor: usize,
 ) {
     let w = heightmap.width;
     let h = heightmap.height;
@@ -757,7 +866,7 @@ fn carve_habitable_corridors(
 
     let mut hab_comp = Grid::filled_with(w, h, 0u32);
     let mut comp_size = vec![0usize];
-    let mut comp_touches_water = vec![false];
+    let mut comp_touches_sea = vec![false];
     let mut comp_touches_sanctuary = vec![false];
     let mut next_comp = 1u32;
     let mut q = VecDeque::new();
@@ -774,7 +883,7 @@ fn carve_habitable_corridors(
             q.clear();
             q.push_back((xi, yi));
             let mut size = 0usize;
-            let mut touches_water = false;
+            let mut touches_sea = false;
             let mut touches_sanctuary = false;
             while let Some((cx, cy)) = q.pop_front() {
                 size += 1;
@@ -782,9 +891,14 @@ fn carve_habitable_corridors(
                 for &(dx, dy) in &dirs {
                     let nx = heightmap.wrap_x(cx + dx) as isize;
                     let ny = cy + dy;
-                    if ny < 0 || ny >= h as isize { touches_water = true; continue; }
+                    if ny < 0 || ny >= h as isize { continue; }
+                    if is_sea(heightmap, is_lake, nx, ny, sea_level) {
+                        touches_sea = true;
+                        continue;
+                    }
                     if !is_land(heightmap, is_lake, nx, ny, sea_level) {
-                        touches_water = true;
+                        // A lake: water, but no road to the sea. It grants the
+                        // network nothing, so keep flooding past it.
                         continue;
                     }
                     if *hab_comp.get(nx, ny) != 0 { continue; }
@@ -794,7 +908,7 @@ fn carve_habitable_corridors(
                 }
             }
             comp_size.push(size);
-            comp_touches_water.push(touches_water);
+            comp_touches_sea.push(touches_sea);
             comp_touches_sanctuary.push(touches_sanctuary);
             next_comp += 1;
         }
@@ -809,7 +923,7 @@ fn carve_habitable_corridors(
             let id = *hab_comp.get(x as isize, y as isize) as usize;
             if id > 0
                 && comp_size[id] < MIN_OASIS
-                && !comp_touches_water[id]
+                && !comp_touches_sea[id]
                 && !comp_touches_sanctuary[id]
             {
                 is_wasteland.set(x as isize, y as isize, true);
@@ -819,7 +933,9 @@ fn carve_habitable_corridors(
     }
 
     let n_comp = next_comp as usize;
-    if n_comp <= 2 {
+    // A landmass whose every network already reaches the sea has nothing to
+    // gain from a corridor, so the whole expensive flood is skipped.
+    if n_comp <= 2 || !(1..n_comp).any(|c| !comp_touches_sea[c]) {
         return;
     }
 
@@ -849,11 +965,12 @@ fn carve_habitable_corridors(
         }
     }
 
-    let mut mass_largest: Vec<u32> = vec![0; next_mass as usize];
-    let mut mass_largest_size: Vec<usize> = vec![0; next_mass as usize];
     let mut mass_comp_count: Vec<u32> = vec![0; next_mass as usize];
     let mut seen_comp_on_mass = vec![false; n_comp];
 
+    // How many populated networks each landmass carries. A landmass with a
+    // single network has nothing for a corridor to join, so its ground is left
+    // alone; a landmass with several may have pockets that need bridging.
     for y in 0..h {
         for x in 0..w {
             let cid = *hab_comp.get(x as isize, y as isize);
@@ -862,18 +979,8 @@ fn carve_habitable_corridors(
             if !seen_comp_on_mass[cid as usize] {
                 seen_comp_on_mass[cid as usize] = true;
                 mass_comp_count[mass] += 1;
-                let sz = comp_size[cid as usize];
-                if sz > mass_largest_size[mass] {
-                    mass_largest_size[mass] = sz;
-                    mass_largest[mass] = cid;
-                }
             }
         }
-    }
-
-    let needs_carve = mass_comp_count.iter().any(|&c| c > 1);
-    if !needs_carve {
-        return;
     }
 
     let mut owner = Grid::filled_with(w, h, 0u32);
@@ -894,10 +1001,7 @@ fn carve_habitable_corridors(
         }
     }
 
-    let mut dsu = CompDsu::new(n_comp);
-    // Crossing an ice sheet is enormously expensive, so a corridor only ever
-    // cuts through one when no other route can rejoin the landmass.
-    const ICE_STEP: u32 = 400_000;
+    let mut dsu = CompDsu::new(&comp_touches_sea);
 
     while let Some(state) = heap.pop() {
         let cur_owner = *owner.get(state.x, state.y);
@@ -908,13 +1012,12 @@ fn carve_habitable_corridors(
             let ny = state.y + dy;
             if ny < 0 || ny >= h as isize { continue; }
             if !is_land(heightmap, is_lake, nx, ny, sea_level) { continue; }
+            // Permanent ice is impassable: the polar belt is mandatory
+            // wilderness, so no corridor may tunnel through it.
+            if *is_ice_cap.get(nx, ny) { continue; }
 
             let step = if *is_wasteland.get(nx, ny) {
-                if *is_ice_cap.get(nx, ny) {
-                    ICE_STEP
-                } else {
-                    1 + (*dist_to_water.get(nx, ny) as u32 / 6)
-                }
+                1 + (*dist_to_water.get(nx, ny) as u32 / 6)
             } else {
                 0
             };
@@ -926,6 +1029,21 @@ fn carve_habitable_corridors(
                 parent.set(nx, ny, pack_xy(state.x, state.y, w));
                 heap.push(CarveState { cost: new_cost, x: nx, y: ny });
             } else if dsu.find(n_owner) != dsu.find(cur_owner) {
+                // Wilderness may split a landmass wherever the sea can still
+                // reach both halves; only a network without a coast of its own
+                // is worth a corridor.
+                if !dsu.needs_corridor(cur_owner) && !dsu.needs_corridor(n_owner) {
+                    continue;
+                }
+                // ... and never a corridor longer than a couple of provinces:
+                // beyond that the pocket stays wilderness instead of becoming a
+                // province-long sliver.
+                if path_len(&parent, state.x, state.y, w, h)
+                    + path_len(&parent, nx, ny, w, h)
+                    > max_corridor
+                {
+                    continue;
+                }
                 carve_path(is_wasteland, is_ice_cap, &parent, state.x, state.y, w, h);
                 carve_path(is_wasteland, is_ice_cap, &parent, nx, ny, w, h);
                 is_wasteland.set(state.x, state.y, false);
@@ -935,25 +1053,100 @@ fn carve_habitable_corridors(
         }
     }
 
-    // Networks that could not join their landmass (ice-locked interiors) fall
-    // back to wilderness. Sanctuary pixels are spared so the coastal belt — and
-    // with it every landmass's province connectivity — is never broken.
-    for y in 0..h {
-        for x in 0..w {
-            let cid = *hab_comp.get(x as isize, y as isize);
-            if cid == 0 { continue; }
-            let mass = *landmass.get(x as isize, y as isize) as usize;
-            let largest = mass_largest[mass];
-            if largest == 0 { continue; }
-            if dsu.find(cid) != dsu.find(largest) {
-                let xi = x as isize;
-                let yi = y as isize;
-                if !*is_sanctuary.get(xi, yi) {
-                    is_wasteland.set(xi, yi, true);
+    // Whatever could not be bridged within the budget is reverted to wilderness
+    // by `revert_stranded_habitation`, which runs on the finished grid — so the
+    // corridors carved here are judged together with the networks they joined,
+    // and a corridor left dangling by a reverted pocket goes with it.
+}
+
+/// Reverts every populated network that cannot reach the **sea**, and returns
+/// how many pixels of habitability that reclaimed.
+///
+/// The carver joins a landlocked pocket to its landmass's network, but a pocket
+/// it could not reach — or a corridor it cut for a pocket that then failed to
+/// connect — can still be left as a strip of settled ground walled in by
+/// wilderness. Such a strip is a province adrift: no road, land or sea, reaches
+/// it. This pass finds every populated network that touches no open sea and puts
+/// it back under wilderness, so the map never keeps an island of habitability
+/// with no path to the ocean.
+///
+/// "Reaches the sea" is not "touches any water": a network that only laps an
+/// inland lake is still cut off from every other province in the world, so the
+/// lake does not save it. Only a genuine stretch of salt water does
+/// ([`is_sea`]).
+///
+/// It runs *after* the carving, on the finished grid, so a corridor is judged
+/// together with the networks it joined: a corridor that leads to a coast keeps
+/// its network alive, while one left dangling by a reverted pocket goes with it
+/// instead of surviving as a thread-thin province of its own.
+///
+/// One pass is enough. A network's access to the sea is a property of its own
+/// pixels — its edge either touches the sea or it does not — so removing a
+/// stranded network can never strand another one.
+fn revert_stranded_habitation(
+    heightmap: &Grid<f32>,
+    is_lake: &Grid<bool>,
+    is_wasteland: &mut Grid<bool>,
+    sea_level: f32,
+) -> usize {
+    let w = heightmap.width;
+    let h = heightmap.height;
+    let dirs: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+    let mut seen = Grid::filled_with(w, h, false);
+    let mut q: VecDeque<(isize, isize)> = VecDeque::new();
+    let mut cells: Vec<(isize, isize)> = Vec::new();
+    let mut reverted = 0usize;
+
+    for y0 in 0..h {
+        for x0 in 0..w {
+            let sx = x0 as isize;
+            let sy = y0 as isize;
+            if *seen.get(sx, sy) { continue; }
+            if !is_land(heightmap, is_lake, sx, sy, sea_level) { continue; }
+            if *is_wasteland.get(sx, sy) { continue; }
+
+            // Flood the whole populated network, remembering its pixels and
+            // watching for any stretch of open sea along its edge.
+            cells.clear();
+            let mut touches_sea = false;
+            seen.set(sx, sy, true);
+            q.clear();
+            q.push_back((sx, sy));
+            while let Some((cx, cy)) = q.pop_front() {
+                cells.push((cx, cy));
+                for &(dx, dy) in &dirs {
+                    let nx = heightmap.wrap_x(cx + dx) as isize;
+                    let ny = cy + dy;
+                    if ny < 0 || ny >= h as isize {
+                        continue;
+                    }
+                    if is_sea(heightmap, is_lake, nx, ny, sea_level) {
+                        touches_sea = true;
+                        continue;
+                    }
+                    if !is_land(heightmap, is_lake, nx, ny, sea_level) {
+                        // A lake. The network can lap it and still be an
+                        // island in every sense that matters: nothing but salt
+                        // water puts a province in touch with the world.
+                        continue;
+                    }
+                    if *is_wasteland.get(nx, ny) { continue; }
+                    if *seen.get(nx, ny) { continue; }
+                    seen.set(nx, ny, true);
+                    q.push_back((nx, ny));
                 }
+            }
+
+            if !touches_sea {
+                for &(cx, cy) in &cells {
+                    is_wasteland.set(cx, cy, true);
+                }
+                reverted += cells.len();
             }
         }
     }
+
+    reverted
 }
 
 fn pack_xy(x: isize, y: isize, w: usize) -> u32 {
@@ -964,11 +1157,33 @@ fn unpack_xy(p: u32, w: usize) -> (isize, isize) {
     ((p as usize % w) as isize, (p as usize / w) as isize)
 }
 
-/// Cuts a short passable corridor along a parent-pointer chain. Ice pixels are
-/// cleared too — a severed landmass is always worse than a pierced ice sheet.
+/// Number of pixels a parent chain spans: `1` for a source, one more for every
+/// step back towards it. It measures a prospective corridor before any of its
+/// pixels are touched.
+fn path_len(parent: &Grid<u32>, mut x: isize, mut y: isize, w: usize, h: usize) -> usize {
+    let mut steps = 1usize;
+    while steps <= w + h {
+        let packed = *parent.get(x, y);
+        if packed == u32::MAX {
+            break;
+        }
+        let (px, py) = unpack_xy(packed, w);
+        if px == x && py == y {
+            break;
+        }
+        x = px;
+        y = py;
+        steps += 1;
+    }
+    steps
+}
+
+/// Cuts a short, passable corridor along a parent-pointer chain. The chain and
+/// its four-neighbours are opened up, but permanent ice is left alone: the polar
+/// belt is impassable ground, and a corridor may hug it without ever piercing it.
 fn carve_path(
     is_wasteland: &mut Grid<bool>,
-    is_ice_cap: &mut Grid<bool>,
+    is_ice_cap: &Grid<bool>,
     parent: &Grid<u32>,
     mut x: isize,
     mut y: isize,
@@ -978,13 +1193,12 @@ fn carve_path(
     let dirs: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
     for _ in 0..(w + h) {
         is_wasteland.set(x, y, false);
-        is_ice_cap.set(x, y, false);
         for &(dx, dy) in &dirs {
             let nx = is_wasteland.wrap_x(x + dx) as isize;
             let ny = y + dy;
             if ny < 0 || ny >= h as isize { continue; }
+            if *is_ice_cap.get(nx, ny) { continue; }
             is_wasteland.set(nx, ny, false);
-            is_ice_cap.set(nx, ny, false);
         }
         let packed = *parent.get(x, y);
         if packed == u32::MAX {
@@ -999,25 +1213,84 @@ fn carve_path(
     }
 }
 
-/// Counts inhabited landmasses and populated (non-wasteland) province networks.
+/// Counts inhabited landmasses, their populated province networks, and the
+/// networks that cannot reach the sea — the "provinces adrift".
 ///
-/// A correctly generated world has exactly one populated network per inhabited
-/// landmass: wilderness may never sever a continent into disconnected province
-/// clusters. Landmasses that are *entirely* wilderness — a lone ice-capped
-/// polar islet, for instance — are not counted at all, since they could never
-/// host a province network in the first place.
+/// Wilderness is allowed to split a landmass's province network in two as long
+/// as every piece keeps a stretch of its own coast: the sea is the road between
+/// them ([`carve_habitable_corridors`]), so the world is not severed, and
+/// forcing them together on land would only smear a thread-thin province along
+/// the waterline.
+///
+/// What must never survive, though, is a network with no water at all. Every
+/// province has to be able to follow settled land to a coast — its own, or one
+/// reached through a corridor the carver cut. A populated network that can do
+/// neither is a province adrift: no road, land or sea, reaches it. The carver is
+/// expected to have either bridged it or reverted it to wilderness, so this
+/// count is a hard zero on a healthy world, and the pixels reported are how much
+/// habitability was reclaimed when it is not.
+///
+/// A landmass that is *entirely* wilderness — a lone ice-capped polar islet, for
+/// instance — is not counted at all, since it could never host a province
+/// network in the first place.
 fn connectivity_stats(
     heightmap: &Grid<f32>,
     is_lake: &Grid<bool>,
     is_wasteland: &Grid<bool>,
     sea_level: f32,
-) -> (u32, u32) {
+) -> (u32, u32, u32, u32) {
     let w = heightmap.width;
     let h = heightmap.height;
     let dirs: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
-    let count = |populated_only: bool| -> u32 {
+
+    // ── Pass 1: label the landmasses, noting which of them carry anyone -------
+    let mut land_of = vec![u32::MAX; w * h];
+    let mut mass_count = 0u32;
+    let mut inhabited: Vec<bool> = vec![false];
+    {
+        let mut q: VecDeque<(isize, isize)> = VecDeque::new();
+        for y0 in 0..h {
+            for x0 in 0..w {
+                let sx = x0 as isize;
+                let sy = y0 as isize;
+                if land_of[sy as usize * w + sx as usize] != u32::MAX { continue; }
+                if !is_land(heightmap, is_lake, sx, sy, sea_level) { continue; }
+
+                let mass = mass_count;
+                mass_count += 1;
+                let mut has_populated = false;
+                land_of[sy as usize * w + sx as usize] = mass;
+                q.clear();
+                q.push_back((sx, sy));
+                while let Some((cx, cy)) = q.pop_front() {
+                    if !*is_wasteland.get(cx, cy) { has_populated = true; }
+                    for &(dx, dy) in &dirs {
+                        let nx = heightmap.wrap_x(cx + dx) as isize;
+                        let ny = cy + dy;
+                        if ny < 0 || ny >= h as isize { continue; }
+                        let idx = ny as usize * w + nx as usize;
+                        if land_of[idx] != u32::MAX { continue; }
+                        if !is_land(heightmap, is_lake, nx, ny, sea_level) { continue; }
+                        land_of[idx] = mass;
+                        q.push_back((nx, ny));
+                    }
+                }
+                inhabited.push(has_populated);
+            }
+        }
+    }
+
+    // ── Pass 2: label the populated networks and see which ones reach the sea -
+    // Every populated network must be able to reach the sea: a coast of its own,
+    // or a corridor of settled land joining it to one that has. A network with
+    // neither is a province adrift, and the carver is expected to have either
+    // bridged it or reverted it to wilderness. A lake does not count — a pocket
+    // that only laps a lake can never reach the ocean, or the rest of the world.
+    let mut network_count = 0u32;
+    let mut stranded = 0u32;
+    let mut stranded_px = 0u32;
+    {
         let mut seen = Grid::filled_with(w, h, false);
-        let mut comps = 0u32;
         let mut q: VecDeque<(isize, isize)> = VecDeque::new();
         for y0 in 0..h {
             for x0 in 0..w {
@@ -1025,32 +1298,45 @@ fn connectivity_stats(
                 let sy = y0 as isize;
                 if *seen.get(sx, sy) { continue; }
                 if !is_land(heightmap, is_lake, sx, sy, sea_level) { continue; }
-                if populated_only && *is_wasteland.get(sx, sy) { continue; }
+                if *is_wasteland.get(sx, sy) { continue; }
+
+                network_count += 1;
+                let mut touches_sea = false;
+                let mut size = 0u32;
                 seen.set(sx, sy, true);
                 q.clear();
                 q.push_back((sx, sy));
-                let mut has_populated = false;
                 while let Some((cx, cy)) = q.pop_front() {
-                    if !*is_wasteland.get(cx, cy) { has_populated = true; }
+                    size += 1;
                     for &(dx, dy) in &dirs {
                         let nx = seen.wrap_x(cx + dx) as isize;
                         let ny = cy + dy;
-                        if ny < 0 || ny >= h as isize { continue; }
+                        if ny < 0 || ny >= h as isize {
+                            continue;
+                        }
+                        if is_sea(heightmap, is_lake, nx, ny, sea_level) {
+                            touches_sea = true;
+                            continue;
+                        }
+                        if !is_land(heightmap, is_lake, nx, ny, sea_level) {
+                            continue;
+                        }
+                        if *is_wasteland.get(nx, ny) { continue; }
                         if *seen.get(nx, ny) { continue; }
-                        if !is_land(heightmap, is_lake, nx, ny, sea_level) { continue; }
-                        if populated_only && *is_wasteland.get(nx, ny) { continue; }
                         seen.set(nx, ny, true);
                         q.push_back((nx, ny));
                     }
                 }
-                if populated_only || has_populated {
-                    comps += 1;
+                if !touches_sea {
+                    stranded += 1;
+                    stranded_px += size;
                 }
             }
         }
-        comps
-    };
-    (count(false), count(true))
+    }
+
+    let landmasses = inhabited.iter().filter(|&&has| has).count() as u32;
+    (landmasses, network_count, stranded, stranded_px)
 }
 
 fn wasteland_stats(
@@ -1112,4 +1398,304 @@ fn wasteland_stats(
     }
 
     (land, waste, blobs, max_non_ice)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Vertical datum of the little test worlds below: land is `0.50`, water `0.20`.
+    const SEA_LEVEL: f32 = 0.40;
+    const W: usize = 64;
+    const H: usize = 48;
+    /// The single landmass of a test world: a rectangle from (8, 8) to (56, 40).
+    const LAND: (isize, isize, isize, isize) = (8, 8, 56, 40);
+    /// The cap `generate_provinces` actually hands the carver, in pixels.
+    const CAP: usize = (MAX_CORRIDOR_SPANS * MIN_PROVINCE_SPAN) as usize;
+
+    /// A world with one rectangular landmass in the middle of an ocean. Every
+    /// land pixel starts populated; a test turns the ground it wants impassable
+    /// into wilderness (or permanent ice) and then carves.
+    struct TestWorld {
+        heightmap: Grid<f32>,
+        is_lake: Grid<bool>,
+        is_wasteland: Grid<bool>,
+        is_ice_cap: Grid<bool>,
+        is_sanctuary: Grid<bool>,
+        dist_to_water: Grid<u8>,
+    }
+
+    impl TestWorld {
+        fn new() -> Self {
+            let mut heightmap = Grid::filled_with(W, H, 0.20f32);
+            for y in LAND.1..LAND.3 {
+                for x in LAND.0..LAND.2 {
+                    heightmap.set(x, y, 0.50);
+                }
+            }
+            let is_lake = Grid::filled_with(W, H, false);
+            let dist_to_water = distances_to_water(&heightmap, &is_lake);
+            Self {
+                heightmap,
+                is_lake,
+                is_wasteland: Grid::filled_with(W, H, false),
+                is_ice_cap: Grid::filled_with(W, H, false),
+                is_sanctuary: Grid::filled_with(W, H, false),
+                dist_to_water,
+            }
+        }
+
+        /// Makes a rectangle of ground impassable wilderness.
+        fn wilderness(&mut self, x0: isize, y0: isize, x1: isize, y1: isize) {
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    self.is_wasteland.set(x, y, true);
+                }
+            }
+        }
+
+        /// Makes a rectangle of ground populated again (undoing [`Self::wilderness`]).
+        fn settled(&mut self, x0: isize, y0: isize, x1: isize, y1: isize) {
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    self.is_wasteland.set(x, y, false);
+                }
+            }
+        }
+
+        /// Turns a rectangle of ground into permanent polar ice: impassable, and
+        /// never to be pierced.
+        fn ice(&mut self, x0: isize, y0: isize, x1: isize, y1: isize) {
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    self.is_wasteland.set(x, y, true);
+                    self.is_ice_cap.set(x, y, true);
+                }
+            }
+        }
+
+        /// Marks a rectangle as sanctuary ground (a river course, or the coastal belt).
+        fn sanctuary(&mut self, x0: isize, y0: isize, x1: isize, y1: isize) {
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    self.is_sanctuary.set(x, y, true);
+                }
+            }
+        }
+
+        /// Runs the two passes the generator runs, in the order it runs them:
+        /// carve the corridors, then revert whatever still cannot reach water.
+        fn carve(&mut self, max_corridor: usize) {
+            carve_habitable_corridors(
+                &self.heightmap,
+                &self.is_lake,
+                &mut self.is_wasteland,
+                &self.is_ice_cap,
+                &self.is_sanctuary,
+                &self.dist_to_water,
+                SEA_LEVEL,
+                max_corridor,
+            );
+            revert_stranded_habitation(
+                &self.heightmap,
+                &self.is_lake,
+                &mut self.is_wasteland,
+                SEA_LEVEL,
+            );
+        }
+
+        fn populated(&self, x: isize, y: isize) -> bool {
+            is_land(&self.heightmap, &self.is_lake, x, y, SEA_LEVEL)
+                && !*self.is_wasteland.get(x, y)
+        }
+
+        /// Is there a four-connected path of populated ground between two pixels?
+        fn joined(&self, from: (isize, isize), to: (isize, isize)) -> bool {
+            let mut seen = Grid::filled_with(W, H, false);
+            let mut q: VecDeque<(isize, isize)> = VecDeque::new();
+            seen.set(from.0, from.1, true);
+            q.push_back(from);
+            while let Some((cx, cy)) = q.pop_front() {
+                if (cx, cy) == to {
+                    return true;
+                }
+                for &(dx, dy) in &[(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                    let nx = self.is_wasteland.wrap_x(cx + dx) as isize;
+                    let ny = cy + dy;
+                    if ny < 0 || ny >= H as isize { continue; }
+                    if *seen.get(nx, ny) || !self.populated(nx, ny) { continue; }
+                    seen.set(nx, ny, true);
+                    q.push_back((nx, ny));
+                }
+            }
+            false
+        }
+    }
+
+    /// Four-connected distance from every pixel to the nearest water, mirroring
+    /// the chamfer transform the generator feeds the carver.
+    fn distances_to_water(heightmap: &Grid<f32>, is_lake: &Grid<bool>) -> Grid<u8> {
+        let mut dist = Grid::filled_with(W, H, 255u8);
+        let mut q: VecDeque<(isize, isize)> = VecDeque::new();
+        for y in 0..H {
+            for x in 0..W {
+                let (xi, yi) = (x as isize, y as isize);
+                if !is_land(heightmap, is_lake, xi, yi, SEA_LEVEL) {
+                    dist.set(xi, yi, 0);
+                    q.push_back((xi, yi));
+                }
+            }
+        }
+        while let Some((cx, cy)) = q.pop_front() {
+            let d = *dist.get(cx, cy);
+            for &(dx, dy) in &[(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                let nx = dist.wrap_x(cx + dx) as isize;
+                let ny = cy + dy;
+                if ny < 0 || ny >= H as isize { continue; }
+                if *dist.get(nx, ny) != 255 { continue; }
+                dist.set(nx, ny, d.saturating_add(1));
+                q.push_back((nx, ny));
+            }
+        }
+        dist
+    }
+
+    #[test]
+    fn wilderness_may_split_a_landmass_where_each_half_keeps_its_coast() {
+        // A belt of wilderness across the landmass, with open sea on either side
+        // of it: each half keeps a coast of its own, so the sea is already the
+        // road between them and no corridor may be threaded through.
+        let mut world = TestWorld::new();
+        world.wilderness(30, LAND.1, 36, LAND.3);
+
+        world.carve(CAP);
+
+        assert!(
+            world.is_wasteland.get(33, 24),
+            "no corridor may be cut between two halves that each hold a coast"
+        );
+        assert!(
+            !world.joined((12, 24), (50, 24)),
+            "two coastal halves must stay separate networks"
+        );
+    }
+
+    #[test]
+    fn a_landlocked_pocket_is_bridged_to_its_landmass() {
+        // A coastal band on the west shore and an oasis two provinces inland:
+        // the oasis has no coast at all, so it must be joined to the band.
+        let mut world = TestWorld::new();
+        world.wilderness(LAND.0, LAND.1, LAND.2, LAND.3);
+        world.settled(8, 8, 20, 40);
+        world.settled(36, 20, 48, 28);
+
+        world.carve(CAP);
+
+        assert!(
+            world.joined((12, 24), (40, 24)),
+            "a pocket with no coast of its own must be bridged to its landmass"
+        );
+    }
+
+    #[test]
+    fn a_pocket_further_than_a_corridor_may_reach_stays_wilderness() {
+        // The same oasis, but with a corridor budget too small to reach it: it
+        // falls back to wilderness instead of growing a province-long sliver.
+        let mut world = TestWorld::new();
+        world.wilderness(LAND.0, LAND.1, LAND.2, LAND.3);
+        world.settled(8, 8, 20, 40);
+        world.settled(36, 20, 48, 28);
+
+        world.carve(8);
+
+        assert!(!world.joined((12, 24), (40, 24)), "no corridor may exceed the budget");
+        assert!(world.is_wasteland.get(40, 24), "an unreachable pocket becomes wilderness");
+    }
+
+    #[test]
+    fn permanent_ice_is_never_pierced() {
+        // The only route from the coast to the inland pocket crosses an ice
+        // sheet. The belt is mandatory wilderness, so the pocket stays cut off —
+        // and not a single pixel of the ice may be opened up.
+        let mut world = TestWorld::new();
+        world.wilderness(LAND.0, LAND.1, LAND.2, LAND.3);
+        world.settled(8, 8, 20, 40);
+        world.settled(40, 20, 52, 28);
+        world.ice(28, 0, 32, H as isize);
+
+        world.carve(200); // generous: only the ice itself can stop the corridor
+
+        assert!(!world.joined((12, 24), (44, 24)), "an ice sheet must never be pierced");
+        assert!(world.is_wasteland.get(44, 24), "a pocket buried in ice stays wilderness");
+        for y in 0..H as isize {
+            for x in 28..32isize {
+                assert!(
+                    *world.is_wasteland.get(x, y),
+                    "the ice at ({x}, {y}) must be left impassable"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_stranded_sanctuary_pocket_falls_back_to_wilderness() {
+        // Sanctuary keeps the coastal belt and river courses settled — but only
+        // while they can still reach water. A pocket of it beyond the corridor
+        // budget, with no coast of its own, is an island of habitability in the
+        // wilderness: it is reverted rather than left marooned, so no province
+        // ends up adrift.
+        let mut world = TestWorld::new();
+        world.wilderness(LAND.0, LAND.1, LAND.2, LAND.3);
+        world.settled(8, 8, 20, 40);
+        world.settled(36, 20, 48, 28);
+        world.sanctuary(36, 20, 48, 28);
+
+        world.carve(8);
+
+        assert!(
+            !world.populated(40, 24),
+            "an unreachable sanctuary pocket must not survive as isolated land"
+        );
+        assert!(
+            world.populated(12, 24),
+            "the coastal band keeps its own coast and stays settled"
+        );
+    }
+
+    #[test]
+    fn the_largest_network_is_not_spared_when_it_has_no_coast() {
+        // The biggest populated network on a landmass used to be kept whatever
+        // happened to it — which left a large inland block marooned whenever
+        // the coast was a smaller, separate network. Size is no excuse: without
+        // a path to water it falls back to wilderness like any other pocket.
+        let mut world = TestWorld::new();
+        world.wilderness(LAND.0, LAND.1, LAND.2, LAND.3);
+        // A narrow coastal band on the west shore ...
+        world.settled(8, 8, 14, 40);
+        // ... and a much larger inland block, further from the water than the
+        // corridor budget can reach.
+        world.settled(30, 12, 54, 38);
+
+        world.carve(8);
+
+        assert!(
+            world.populated(12, 24),
+            "the coastal band keeps its own coast"
+        );
+        assert!(
+            !world.populated(42, 24),
+            "the largest network must not survive without a path to water"
+        );
+        assert!(
+            !world.joined((12, 24), (42, 24)),
+            "no corridor may exceed the budget"
+        );
+    }
+
+    #[test]
+    fn province_span_never_falls_below_one_province() {
+        assert_eq!(province_span(0.0, 30_000), MIN_PROVINCE_SPAN);
+        assert_eq!(province_span(1.0, 1_000_000), MIN_PROVINCE_SPAN);
+        assert!(province_span(30_000.0 * 1_000_000.0, 30_000) > MIN_PROVINCE_SPAN);
+    }
 }

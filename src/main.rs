@@ -15,7 +15,7 @@ use civilization::{
 use geopolitics::{
     build_geopolitical_hierarchy, build_ocean_hierarchy, extract_ocean_graph, extract_province_graph,
 };
-use core::{relief, Grid, WorldCache};
+use core::{polar, relief, Grid, WorldCache};
 use geography::{generate_ocean_provinces, generate_provinces, GeographyConfig, OceanConfig};
 use hydrology::{
     calculate_flow, extract_rivers_and_basins, fill_depressions_and_find_lakes, HydrologyConfig,
@@ -73,7 +73,7 @@ fn main() {
     let total_start = Instant::now();
 
     // --- CACHE ARCHITECTURE: STAGES 1 TO 3 ---
-    let cache = if load_cache && Path::new(&cache_path).exists() {
+    let mut cache = if load_cache && Path::new(&cache_path).exists() {
         let load_start = Instant::now();
         println!("Loading world from cache '{}'...", cache_path);
         let loaded = WorldCache::load(&cache_path);
@@ -116,6 +116,17 @@ fn main() {
         new_cache
     };
 
+    // --- POLAR ICE: the belt is permanent arctic waste ----------------------
+    // The polar belt — and every landmass cut off from a pole — is permanent ice:
+    // no province may settle there and no tundra may grow at its shore. Pinning
+    // its surface temperature into the ice band is what lets every downstream
+    // pass — the province generator, the atlas painter and the hover telemetry —
+    // read it as the same arctic waste. It runs after the cache is built so
+    // worlds saved under the old rules still come out right.
+    let polar_ice =
+        polar::permanent_polar_ice(&cache.heightmap, &cache.is_lake, relief::SEA_LEVEL, seed);
+    polar::freeze_polar_ice(&mut cache.temp_grid, &polar_ice);
+
     // --- RELIEF REPORT: the finished world's hypsometric profile, in metres ---
     report_relief(&cache.heightmap);
 
@@ -127,6 +138,7 @@ fn main() {
         &cache.precip_grid,
         &cache.flow_grid,
         &cache.is_lake,
+        &polar_ice,
         relief::SEA_LEVEL, // The planet's own vertical datum (the old 0.11 threshold is only the *noise* water line)
         hydro_config.min_river_flow,
         &geo_config,

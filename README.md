@@ -124,8 +124,13 @@ depth) there, and the usual land rules — biomes, wasteland, provinces — appl
 4. **Geopolitical Hierarchy (land)** — habitability-weighted province seeding snapping to
    mountain crests, rivers and coasts, clustered into areas → regions → superregions →
    continents. Geography-driven wastelands (desert hearts, high massifs, rainforest interiors,
-   polar ice) are impassable, but coastal and river corridors stay settled so no landmass is
-   ever severed.
+   polar ice) are impassable, but coastal and river corridors stay settled. Wilderness may
+   split a landmass's province network wherever each half keeps a coast of its own — the sea
+   joins them — while a populated pocket with no coast is bridged to its landmass's network by
+   a short corridor, or reverted to wilderness so it never becomes an island of habitability
+   with no path to the sea. Corridors never pierce the polar ice and never run longer than a
+   couple of provinces, so no province is ever a thread-thin sliver — and every surviving
+   province can follow settled land to water.
 5. **Hydro-Political Hierarchy (ocean)** — marine provinces by Poisson-disc seeding plus a
    relaxed Dijkstra flood fill, with bathymetry as a soft barrier, clustered into oceanic
    areas → regions → superregions → continental basins.
