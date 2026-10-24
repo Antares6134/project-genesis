@@ -5,7 +5,7 @@ A procedural world generator and interactive desktop atlas viewer written in Rus
 The engine grows an 8K ($8192 \times 4096$) planet from 3D spherical noise, simulated
 atmospheric circulation and hydrology, and then partitions **both the landmasses and the
 world ocean** into a matching five-tier political hierarchy. Everything below was rendered
-from a single cached world (seed `723687268573658276`), and a given seed always reproduces
+from a single cached world (seed `3286592765982`), and a given seed always reproduces
 the same planet — every stage is order-stable.
 
 ---
@@ -51,15 +51,12 @@ scaled up because it is one connected, far larger domain.
 
 | Metric | Value |
 | :--- | :--- |
-| Surface | **39.1 % land / 60.9 % ocean** |
-| Highest peak | **+7 045 m** |
-| Median land elevation | +450 m (90 % of land below +1 950 m) |
-| Median ocean depth | **−3 650 m** |
-| Deepest trench | **−9 385 m** |
-| Continental shelf (≤ −200 m) | 10.8 % of the ocean |
-| Inhabited landmasses | 958 (every one fully connected by provinces) |
-| Land hierarchy | 12 009 provinces → 1 444 areas → 265 regions → 39 superregions → 7 continents |
-| Ocean hierarchy | 2 001 provinces → 125 areas → 25 regions → 6 superregions → 4 basins |
+| Surface | **39.4 % land / 60.6 % ocean** |
+| Highest peak | **+7 019 m** |
+| Median land elevation | **+750 m (90 % of land below +2 050 m)** |
+| Median ocean depth | **−3 950 m** |
+| Deepest trench | **−10 725 m** |
+| Continental shelf (≤ −200 m) | **9.3 % of the ocean** |
 
 ---
 
@@ -112,20 +109,19 @@ depth) there, and the usual land rules — biomes, wasteland, provinces — appl
 
 ```bash
 # Generate a new world from a seed and save its cache
-cargo run --release -- 1980 --save
+cargo run --release -- 3286592765982 --save
 
 # Launch the interactive atlas viewer from cached data
-cargo run --release -- 1980 --load --viewer
+cargo run --release -- 3286592765982 --load --viewer
 
 # Generate headless with a random seed
 cargo run --release
 
 # Re-render every README plate (all scopes × tiers) from a cached world
-cargo run --release -- 723687268573658276 --load --plates
+cargo run --release -- 3286592765982 --load --plates
 ```
 
 Every headless run prints the world's hypsometric profile in metres and exports
 `world_physical_map.png`, `world_topographic_map.png` (banded elevation survey) and
 `world_political_map.png` (land hierarchy). Passing `--plates` additionally writes the
 `atlas_*.png` scope and tier plates used above, straight from the viewer's own painter.
-

@@ -1,4 +1,6 @@
 /target
 *.bin
 world_*.bin
-project-genesis-v0.1.0-linux-x86_64.tar.gz
+
+# Release archives: built locally, uploaded to GitHub Releases, never committed
+project-genesis-v*-linux-x86_64.tar.gz
