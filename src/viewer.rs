@@ -426,16 +426,12 @@ fn civilization_dossier(ui: &mut egui::Ui, civ: &Civilization, world: &Civilizat
             "{} · founded {} · {}",
             civ.rise.kind.label(),
             ce_label(civ.founding_year),
-            civ.era.label()
+            civ.culture.government.label()
         ))
         .small()
         .weak(),
     );
-    ui.label(
-        egui::RichText::new(format!("{} · {}", civ.year_label(), civ.isolation.label()))
-            .small()
-            .weak(),
-    );
+    ui.label(egui::RichText::new(civ.year_label()).small().weak());
 
     ui.separator();
     ui.label(egui::RichText::new(civ.cradle_kind.describe()).small());
@@ -448,17 +444,16 @@ fn civilization_dossier(ui: &mut egui::Ui, civ: &Civilization, world: &Civilizat
         egui::RichText::new(format!(
             "{} · {}",
             civ.culture.subsistence.label(),
-            civ.culture.kinship.label()
+            civ.culture.outlook.label()
         ))
         .strong(),
     );
     ui.label(
-        egui::RichText::new(format!(
-            "{} · {} · {}",
-            civ.culture.outlook.label(),
-            civ.culture.craft.label(),
-            civ.culture.literacy.label()
-        ))
+        egui::RichText::new(if civ.culture.government.is_state() {
+            "A state"
+        } else {
+            "A pre-state society"
+        })
         .small(),
     );
 
@@ -1233,9 +1228,10 @@ impl eframe::App for MapViewer {
                     let world = &self.civilizations;
                     ui.horizontal(|ui| {
                         ui.label(format!(
-                            "🏺 CIVILIZATIONS — {} | Atlas date: {} | {} realms | {} civilized provinces | population {} | {:.1} people/km²",
+                            "🏺 CIVILIZATIONS — {} | Atlas date: {} · {} | {} realms | {} civilized provinces | population {} | {:.1} people/km²",
                             world.epoch_label(),
                             world.map_year_label(),
+                            world.age_label(),
                             world.civilizations.len(),
                             world.civilized_provinces,
                             thousands_u64(world.total_population),
@@ -1467,10 +1463,19 @@ impl eframe::App for MapViewer {
                             .weak(),
                     );
                     ui.label(
-                        egui::RichText::new(format!("Atlas date: {}", world.map_year_label()))
-                            .small()
-                            .weak(),
-                    );
+                        egui::RichText::new(format!(
+                            "Atlas date: {} · {}",
+                            world.map_year_label(),
+                            world.age_label()
+                        ))
+                        .small()
+                        .weak(),
+                    )
+                    .on_hover_text(format!(
+                        "{} — {}",
+                        world.age().stratum(),
+                        world.age().describe()
+                    ));
                     if ui
                         .button("🏛 Fly to the Common Era site")
                         .on_hover_text("The province the world's calendar is reckoned from")
@@ -1531,10 +1536,15 @@ impl eframe::App for MapViewer {
                             });
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "{} · founded {} · {}",
+                                    "{} · founded {} · {} — {}",
                                     civ.cradle_kind.label(),
                                     ce_label(civ.founding_year),
-                                    civ.era.label(),
+                                    civ.culture.government.label(),
+                                    if civ.culture.government.is_state() {
+                                        "a state"
+                                    } else {
+                                        "pre-state"
+                                    },
                                 ))
                                 .small(),
                             );

@@ -16,13 +16,27 @@ pub struct CivilizationConfig {
     /// Most civilizations the world may carry.
     pub max_civilizations: usize,
 
-    /// Minimum spacing between two cradles, as a fraction of map width.
+    /// Minimum spacing between two cradles *inside one region*, as a fraction of
+    /// map width.
     ///
-    /// Two civilizations cannot both rise on the same patch of floodplain: this
-    /// keeps the world "not filled with civilizations" and leaves wilderness
-    /// between the settled hearts. It is relaxed only if the count above cannot
-    /// otherwise be reached.
+    /// Real contemporaries stood shoulder to shoulder — Greeks, Thracians,
+    /// Phrygians and Hittites within fifteen hundred kilometres — so two realms
+    /// may share a region. A few provinces' worth of ground between them is
+    /// enough: what is forbidden is the same patch of floodplain, not the same
+    /// country.
     pub cradle_separation_frac: f32,
+
+    /// The absolute floor between any two cradles, as a fraction of map width.
+    /// Small enough that neighbours can crowd, large enough that two realms never
+    /// share their ground.
+    pub cradle_floor_frac: f32,
+
+    /// Most cradles one region may hold — a shared valley can carry rivals.
+    pub cradle_max_per_region: usize,
+
+    /// Most cradles one superregion may hold. This is the quota that puts
+    /// neighbours and cultural cousins on the same map.
+    pub cradle_max_per_superregion: usize,
 
     /// Two cradles closer than this (px) are rivals who share a region: whoever
     /// is older takes the ground, the younger one grows up against it.
@@ -88,7 +102,7 @@ pub struct CivilizationConfig {
     /// development multiplier.
     pub max_density_per_km2: f32,
 
-    /// Province count a small realm aims for — Olmec / Sumer scale.
+    /// Province count a small realm aims for — a Greek polis against its neighbours.
     pub small_provinces: (usize, usize),
     /// Province count a middling realm aims for — Egyptian scale.
     pub medium_provinces: (usize, usize),
@@ -104,10 +118,13 @@ pub struct CivilizationConfig {
 impl Default for CivilizationConfig {
     fn default() -> Self {
         Self {
-            min_civilizations: 8,
-            max_civilizations: 16,
+            min_civilizations: 18,
+            max_civilizations: 32,
 
-            cradle_separation_frac: 0.045,
+            cradle_separation_frac: 0.010,
+            cradle_floor_frac: 0.003,
+            cradle_max_per_region: 3,
+            cradle_max_per_superregion: 5,
 
             contact_distance_px: 430.0,
             isolated_distance_px: 620.0,
@@ -125,9 +142,9 @@ impl Default for CivilizationConfig {
 
             max_density_per_km2: 22.0,
 
-            small_provinces: (16, 32),
-            medium_provinces: (42, 64),
-            large_provinces: (75, 150),
+            small_provinces: (8, 16),
+            medium_provinces: (20, 32),
+            large_provinces: (40, 72),
 
             max_step_cost: 900.0,
         }

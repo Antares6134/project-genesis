@@ -5,11 +5,11 @@ A procedural world generator and interactive desktop atlas viewer written in Rus
 The engine grows an 8K ($8192 \times 4096$) planet from 3D spherical noise, simulated
 atmospheric circulation and hydrology, partitions **both the landmasses and the
 world ocean** into a matching five-tier political hierarchy, and then **gives that
-world a history**: a handful of civilizations rise where the planet is genuinely
-best, spread until wilderness, mountains or an older neighbour stops them, and
-carry a cradle, a culture, a faith and a population of their own. Everything below
-was rendered from a single cached world (seed `3286592765982`), and a given seed
-always reproduces the same planet.
+world a history**: civilizations rise where the planet is genuinely best, spread
+until wilderness, mountains or an older neighbour stops them, and carry a cradle,
+a government, a faith and a population of their own while the world as a whole
+stands in a single age. Everything below was rendered from a single cached world
+(seed `3286592765982`), and a given seed always reproduces the same planet.
 
 ---
 
@@ -85,8 +85,8 @@ scaled up because it is one connected, far larger domain.
 | Median ocean depth | **−3 950 m** |
 | Deepest trench | **−10 725 m** |
 | Continental shelf (≤ −200 m) | **9.3 % of the ocean** |
-| Inhabited provinces | **11 522** (wastelands and polar ice excepted) |
-| Civilizations at 1 969 CE | **12 realms · 752 provinces · 47 921 039 people** |
+| Inhabited provinces | **10 864** (wastelands and polar ice excepted) |
+| Civilizations at 4 190 CE | **24 realms · 790 provinces · 46 201 249 people** |
 
 ---
 
@@ -138,11 +138,14 @@ depth) there, and the usual land rules — biomes, wasteland, provinces — appl
    the contoured *Topographic* survey sheet, shared verbatim by the headless exporter and the
    interactive viewer so the two can never disagree.
 7. **Dawn of History** — the civilizations stage ([`src/civilization/`](src/civilization/)):
-   a province census in real km², cradle scoring, a continent-aware handful of rising
-   civilizations, fertile-cost expansion over the province graph, population by carrying
-   capacity, contact, ancestral stocks and pre-founding inheritance, and a full dossier per
-   realm — economy, social order, craft, script, faith, era and population, all dated in the
-   world's own Common Era ([`src/civilization/epoch.rs`](src/civilization/epoch.rs)).
+   a province census in real km², cradle scoring, a region-aware roster of rising
+   civilizations, fertile-cost expansion over the province graph, a deep-time development
+   pass, population by carrying capacity, contact, ancestral stocks and pre-founding
+   inheritance, and a full dossier per realm — **economy, government, faith and population**,
+   all dated in the world's own Common Era ([`src/civilization/epoch.rs`](src/civilization/epoch.rs)).
+   The **age** is a property of the world and its date, never of a realm: the whole planet
+   stands in one age, derived from how far its leading region has developed
+   ([`src/civilization/age.rs`](src/civilization/age.rs)).
 
 ---
 
@@ -155,23 +158,53 @@ being a story?**
    latitude), mean habitability, peak river discharge, mean climate, relief, how much of it
    touches sea or lake, and its carrying capacity in people.
 2. **Cradles.** Provinces are scored as potential homes — habitability, a river to irrigate and
-   to travel, a shore for fish and salt, gentle ploughable ground — and a continent-aware quota
-   picks a well-spread handful of them. Only 5–10 civilizations ever rise, so the world stays a
-   wilderness with a few bright corners.
+   to travel, a shore for fish and salt, gentle ploughable ground — and the roster is drawn from
+   the richest **superregions**, one to three cradles each, with a fifth of the places held back
+   for realms that rise alone on a far continent. A clustered world therefore carries roughly
+   **18–32 realms**, several of them within reach of each other — contemporaries in the same
+   region, as Greeks, Thracians and Hittites were — while a few still invent everything by
+   themselves. The world between them stays wilderness.
 3. **Expansion.** Each cradle floods outward through the province graph cheapest-first: a step
    costs what the terrain between two provinces costs, discounted by how fertile the target is
    and multiplied hard by the length of any jump. That one rule bends frontiers along river
    valleys, stalls them on mountain walls, hops straits to the next island, and stops them dead
    at an older realm's border. The oldest realm always claims first, and a latecomer whose valley
    has already been taken settles the nearest free country instead — and its dossier says so.
-4. **Populations.** Every civilized province carries its own population — its carrying capacity
-   times its realm's development — so every realm has a total, a density and an area in km².
+4. **Development and populations.** Between the first city and the atlas date every realm climbs
+   a single internal axis of development: it grows from its own surplus (a logistic climb shaped
+   by its cradle's soil, river, shore and how much country it holds), learns from the neighbours
+   it shares a frontier with in proportion to their lead and its own openness, and starts
+   part-way up if an older ancestral stock already worked the country. The leading realm's level
+   at the atlas date **is the world's age**; the same number, with the government form and ethos,
+   decides how many people each province feeds. Every civilized province therefore carries a
+   population, and every realm a total, a density and an area in km².
 5. **Contact, ancestry and inheritance.** Realms whose provinces touch share a *land frontier*;
    those across a strait share a *sea route*; those merely within a traveller's reach know each
    other as a *distant rumour*; the rest rose completely alone. Realms that grew out of the same
    stretch of country share an **ancestral stock** — one tongue family, and often one temple form
    and one creed — and a younger realm in contact with an older one may have taken up its crops,
-   rites or script *centuries before* founding a city of its own.
+   rites or way of governing *centuries before* founding a city of its own.
+
+### Government
+
+A civilization is characterised by **one government**, on a single axis from kinship society to
+state: a band, a tribe or a chiefdom where development is low, and — once the realm is developed
+enough — a state regime chosen from its economy and ethos: a river people under a divine monarch
+or a temple republic, a boat people under its merchants or its landed elite, a herd people under a
+tyrant or a clique. Scope is *not* government: a small, dense polis and a broad realm are told
+apart by their area and population, never by a rank. Nothing in the dossier displays an internal
+"development" or "complexity" figure — a reader sees only its effects: the government form and the
+population.
+
+### The world's age
+
+The age belongs to the **world and its date**, not to any realm: two contemporaries — a river
+monarchy and a forest chiefdom — live in the same age, however differently they are governed. The
+ladder runs *Cultivation → Irrigation → Copper & Alloys → Refinement → Architecture → Automated
+Mills → Oceanic Currents → Industrial → Information → Molecular → Planetary*, and the age shown is
+the one the leading region has reached at the atlas date
+([`src/civilization/age.rs`](src/civilization/age.rs)). This build simulates to **Copper & Alloys**
+and no further, so the later ages exist to complete the ladder, not to be reached.
 
 ### The calendar
 

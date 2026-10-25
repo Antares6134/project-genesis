@@ -38,6 +38,12 @@ pub fn report_civilizations(world: &CivilizationWorld) {
         thousands_u64(world.total_population),
     );
     println!(
+        "   World age: {} ({}) — {}.",
+        world.age_label(),
+        world.age().stratum(),
+        world.age().describe()
+    );
+    println!(
         "   Mean civilized density: {:.1} people/km²",
         world.mean_density_per_km2()
     );
@@ -54,14 +60,12 @@ fn report_one(world: &CivilizationWorld, civ: &Civilization) {
         "   🏺 {} — {} · {}",
         civ.name,
         civ.cradle_kind.label(),
-        civ.scale.label()
+        civ.culture.government.label()
     );
     println!(
-        "      Founded {} (age {} · {} · {})",
+        "      Founded {} (age {})",
         ce_label(civ.founding_year),
         thousands(civ.age_years as f32),
-        civ.era.label(),
-        civ.isolation.label(),
     );
     println!(
         "      Seat: province #{} · {:.1}° {} {:.1}° {} | {} provinces · {} km² · {} people ({:.1}/km²)",
@@ -82,12 +86,9 @@ fn report_one(world: &CivilizationWorld, civ: &Civilization) {
     }
     println!("      {}", civ.rise.seat);
     println!(
-        "      Culture: {} · {} · {} · {} · {}",
+        "      Economy: {} · public temper: {}",
         civ.culture.subsistence.label(),
-        civ.culture.kinship.label(),
         civ.culture.outlook.label(),
-        civ.culture.craft.label(),
-        civ.culture.literacy.label(),
     );
     println!(
         "      Hallmark: {} · Arts: {}",
@@ -105,8 +106,15 @@ fn report_one(world: &CivilizationWorld, civ: &Civilization) {
         "      Observances: {}",
         civ.faith.practices.join(" · ")
     );
-    println!("      Era detail: {}", civ.era.describe());
-    println!("      Posture: {}", civ.isolation.describe());
+    println!(
+        "      Polity: {} — {}",
+        if civ.culture.government.is_state() {
+            "a state"
+        } else {
+            "a pre-state society"
+        },
+        civ.culture.government.describe()
+    );
 
     if civ.kin.is_empty() {
         println!("      Ancestry: none shared with another realm — a wholly separate stock.");

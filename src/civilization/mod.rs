@@ -30,8 +30,8 @@
 //! larger quantity drawn per world and biased by how kind the planet turned out to
 //! be — there is no fixed span between the first people and the first hearth. The
 //! atlas then portrays the world at a single date (see [`CivilizationWorld::map_year`]),
-//! at which every realm has an age, an era, a culture, a faith and a population. See
-//! [`epoch`] for the whole model.
+//! at which the world stands in an age and every realm has a government, a culture,
+//! a faith and a population. See [`epoch`] for the whole model.
 //!
 //! ## Determinism
 //!
@@ -41,24 +41,26 @@
 //! same civilizations, on the same provinces, with the same dates and
 //! populations.
 
+pub mod age;
 pub mod config;
 pub mod epoch;
 pub mod generator;
 pub mod report;
 
+pub use age::Age;
 pub use config::CivilizationConfig;
 #[allow(unused_imports)]
 pub use epoch::{Epoch, Timeline};
 pub use generator::generate_civilizations;
 pub use report::report_civilizations;
 
-/// Palette of the dawn civilizations.
+/// The hand-picked anchors of the civilization palette.
 ///
-/// Unlike the geopolitical tiers — which are generated from a golden-ratio hue
-/// walk because there are thirty thousand of them — there are at most ten
-/// civilizations, and they are the *subject* of their map mode. They therefore
-/// get ten hand-picked, mutually distinguishable earth tones (ochre, lapis, jade,
-/// terracotta…) so that no two realms can ever be confused on a small plate.
+/// These ten mutually distinguishable earth tones (ochre, lapis, jade,
+/// terracotta…) are tried first, because they are the *subject* of their map
+/// mode and should read as a family. A clustered world can carry more than ten
+/// realms, so [`civilization_color`] continues the palette with a golden-ratio
+/// hue walk in the same muted register.
 pub const CIVILIZATION_COLORS: [[u8; 3]; 10] = [
     [188, 74, 58],   // terracotta — fired brick and flood silt
     [66, 108, 168],  // lapis — river-borne trade and deep water
@@ -71,6 +73,42 @@ pub const CIVILIZATION_COLORS: [[u8; 3]; 10] = [
     [196, 100, 140], // rose — savanna blossom
     [120, 122, 176], // slate violet — cold northern shore
 ];
+
+/// The colour of the civilization at `index` in the palette.
+///
+/// The first ten entries are the hand-picked anchors; beyond them the palette
+/// continues with a golden-ratio hue walk, so a world of thirty clustered realms
+/// still gets thirty distinct, evenly-spread tones.
+pub fn civilization_color(index: usize) -> [u8; 3] {
+    if let Some(anchor) = CIVILIZATION_COLORS.get(index) {
+        return *anchor;
+    }
+    const GOLDEN_RATIO: f32 = 0.618_034;
+    let hue = (index as f32 * GOLDEN_RATIO).fract();
+    let (r, g, b) = hsv_to_rgb(hue, 0.42, 0.72);
+    [
+        (r * 255.0).round() as u8,
+        (g * 255.0).round() as u8,
+        (b * 255.0).round() as u8,
+    ]
+}
+
+/// `hue`/`saturation`/`value` in `0..=1` to `r`/`g`/`b` in `0..=1`.
+fn hsv_to_rgb(hue: f32, saturation: f32, value: f32) -> (f32, f32, f32) {
+    let sector = (hue * 6.0).floor();
+    let fraction = hue * 6.0 - sector;
+    let p = value * (1.0 - saturation);
+    let q = value * (1.0 - fraction * saturation);
+    let t = value * (1.0 - (1.0 - fraction) * saturation);
+    match sector as i32 % 6 {
+        0 => (value, t, p),
+        1 => (q, value, p),
+        2 => (p, value, t),
+        3 => (p, q, value),
+        4 => (t, p, value),
+        _ => (value, p, q),
+    }
+}
 
 // ─── WHY A CIVILIZATION ROSE WHERE IT DID ────────────────────────────────────
 
@@ -210,39 +248,126 @@ impl Subsistence {
     }
 }
 
-/// How a civilization organises power between people.
+/// How a civilization organises power — from kinship society up through states.
+///
+/// A single axis, ordered by complexity. The first three are **pre-state**
+/// societies without a centralised apparatus; the rest are **states**,
+/// distinguished by how power is held and legitimated. Scope — a city-state
+/// against a broad realm — is deliberately *not* here: that is a matter of size,
+/// carried by the realm's own area and population, not a form of government.
+///
+/// Which one a realm gets follows from its own development: a kinship band or a
+/// tribe where complexity is low, a chiefdom as it rises, and one of the state
+/// regimes once it is high — the *kind* of state then following from how it eats
+/// ([`Subsistence`]) and what it values ([`Outlook`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Kinship {
-    Egalitarian,
-    ClanChiefdoms,
-    TempleBureaucracy,
-    MerchantOligarchy,
-    WarriorAristocracy,
+pub enum Government {
+    /// A kinship band: no ranks and no offices, decisions by consent.
+    Band,
+    /// A tribal society: councils of elders and lineages, no state above them.
+    Tribe,
+    /// A chiefdom: a ranked society under a hereditary chief, bound by kinship.
+    Chiefdom,
+    /// A god-king: the ruler is the state's cult as well as its head.
     DivineMonarchy,
+    /// Rule by priests: the temple is the administration.
+    TheocraticRepublic,
+    /// Rule by a hereditary or landed elite.
+    AristocraticRepublic,
+    /// Rule by wealth: merchants and landowners hold the offices.
+    PlutocraticRepublic,
+    /// Rule by a narrow clique that keeps itself closed.
+    Oligarchy,
+    /// One man ruling against the law, held on to by force.
+    Tyranny,
 }
 
-impl Kinship {
+impl Government {
     pub fn label(self) -> &'static str {
         match self {
-            Kinship::Egalitarian => "Egalitarian villages",
-            Kinship::ClanChiefdoms => "Clan chiefdoms",
-            Kinship::TempleBureaucracy => "Temple bureaucracy",
-            Kinship::MerchantOligarchy => "Merchant oligarchy",
-            Kinship::WarriorAristocracy => "Warrior aristocracy",
-            Kinship::DivineMonarchy => "Divine monarchy",
+            Government::Band => "Bands",
+            Government::Tribe => "Tribal councils",
+            Government::Chiefdom => "Chiefdom",
+            Government::DivineMonarchy => "Divine monarchy",
+            Government::TheocraticRepublic => "Theocratic republic",
+            Government::AristocraticRepublic => "Aristocratic republic",
+            Government::PlutocraticRepublic => "Plutocratic republic",
+            Government::Oligarchy => "Oligarchy",
+            Government::Tyranny => "Tyranny",
         }
     }
 
-    /// The density bias a social order lends to population: a canal state can
-    /// feed far more mouths per hectare than a village council can.
+    /// True for a government with a centralised state apparatus behind it, false
+    /// for the kinship societies that came before the state.
+    pub fn is_state(self) -> bool {
+        !matches!(
+            self,
+            Government::Band | Government::Tribe | Government::Chiefdom
+        )
+    }
+
+    /// One sentence on how this society is governed.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Government::Band => {
+                "A kinship band: no ranks and no offices, every decision taken by consent around a fire."
+            }
+            Government::Tribe => {
+                "A tribal society: councils of elders and lineages settle its matters, and no state stands above them."
+            }
+            Government::Chiefdom => {
+                "A chiefdom: a ranked society under a hereditary chief, still bound together by kinship."
+            }
+            Government::DivineMonarchy => {
+                "A divine monarchy: the king is the state's cult as well as its head, and law descends from his person."
+            }
+            Government::TheocraticRepublic => {
+                "A theocratic republic: priests hold the offices and the temple is the administration."
+            }
+            Government::AristocraticRepublic => {
+                "An aristocratic republic: a landed elite governs through councils and magistrates it fills itself."
+            }
+            Government::PlutocraticRepublic => {
+                "A plutocratic republic: wealth, not birth, buys the offices, and the merchants hold the state."
+            }
+            Government::Oligarchy => {
+                "An oligarchy: a narrow clique holds power and keeps the door shut behind it."
+            }
+            Government::Tyranny => {
+                "A tyranny: one man rules against the law, and holds on to the state by force."
+            }
+        }
+    }
+
+    /// The density bias a government lends to population: a canal state that
+    /// taxes, stores and redistributes grain feeds far more mouths per hectare
+    /// than a kinship band can.
     pub fn density_bias(self) -> f32 {
         match self {
-            Kinship::Egalitarian => 0.00,
-            Kinship::ClanChiefdoms => 0.04,
-            Kinship::TempleBureaucracy => 0.26,
-            Kinship::MerchantOligarchy => 0.18,
-            Kinship::WarriorAristocracy => 0.10,
-            Kinship::DivineMonarchy => 0.22,
+            Government::Band => 0.00,
+            Government::Tribe => 0.04,
+            Government::Chiefdom => 0.08,
+            Government::DivineMonarchy => 0.24,
+            Government::TheocraticRepublic => 0.26,
+            Government::AristocraticRepublic => 0.16,
+            Government::PlutocraticRepublic => 0.18,
+            Government::Oligarchy => 0.14,
+            Government::Tyranny => 0.10,
+        }
+    }
+
+    /// Short noun used when one civilization borrows another's way of governing.
+    pub fn hallmark(self) -> &'static str {
+        match self {
+            Government::Band => "the kinship band",
+            Government::Tribe => "the council of elders",
+            Government::Chiefdom => "the chief's court",
+            Government::DivineMonarchy => "the divine kingship",
+            Government::TheocraticRepublic => "the temple rule",
+            Government::AristocraticRepublic => "the aristocratic council",
+            Government::PlutocraticRepublic => "the merchants' assembly",
+            Government::Oligarchy => "the ruling clique",
+            Government::Tyranny => "the tyrant's court",
         }
     }
 }
@@ -313,65 +438,7 @@ impl Outlook {
     }
 }
 
-// ─── WHAT A CIVILIZATION MAKES, WRITES AND BELIEVES ──────────────────────────
-
-/// Material culture — what a civilization makes its tools and weapons from.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub enum CraftTier {
-    StoneAndBone,
-    NativeCopper,
-    CopperAlloys,
-    SmeltedIron,
-}
-
-impl CraftTier {
-    pub fn label(self) -> &'static str {
-        match self {
-            CraftTier::StoneAndBone => "Chipped stone and bone",
-            CraftTier::NativeCopper => "Native copper and gold",
-            CraftTier::CopperAlloys => "Copper alloys",
-            CraftTier::SmeltedIron => "Smelted iron",
-        }
-    }
-
-    pub fn hallmark(self) -> &'static str {
-        match self {
-            CraftTier::StoneAndBone => "knapped stone blades",
-            CraftTier::NativeCopper => "cold-hammered copper",
-            CraftTier::CopperAlloys => "cast copper-alloy work",
-            CraftTier::SmeltedIron => "the bloomery furnace",
-        }
-    }
-}
-
-/// How a civilization keeps records.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Literacy {
-    OralTradition,
-    GlyphTallies,
-    LogographicScript,
-    AlphabeticScript,
-}
-
-impl Literacy {
-    pub fn label(self) -> &'static str {
-        match self {
-            Literacy::OralTradition => "Oral tradition",
-            Literacy::GlyphTallies => "Glyphs and tally marks",
-            Literacy::LogographicScript => "Logographic script",
-            Literacy::AlphabeticScript => "Alphabetic script",
-        }
-    }
-
-    pub fn hallmark(self) -> &'static str {
-        match self {
-            Literacy::OralTradition => "the memorised lineage chant",
-            Literacy::GlyphTallies => "the tally mark",
-            Literacy::LogographicScript => "the glyph script",
-            Literacy::AlphabeticScript => "the alphabet",
-        }
-    }
-}
+// ─── WHAT A CIVILIZATION BELIEVES ────────────────────────────────────────────
 
 /// What a civilization believes, and who speaks for its gods.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -438,109 +505,17 @@ impl FaithKind {
     }
 }
 
-/// How old a civilization is at the date the atlas portrays.
-///
-/// Ages are counted from a realm's own founding year, so two realms alive on the
-/// same map can be centuries apart in development — exactly as Sumer and the
-/// Olmec were.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Era {
-    FirstSettlements,
-    FirstCities,
-    CityStates,
-    Empires,
-}
-
-impl Era {
-    /// The era reached by a realm `age_years` old.
-    pub fn from_age(age_years: u32) -> Self {
-        match age_years {
-            0..=199 => Era::FirstSettlements,
-            200..=799 => Era::FirstCities,
-            800..=1_699 => Era::CityStates,
-            _ => Era::Empires,
-        }
-    }
-
-    /// The era reached by a realm `age_years` old on a world developing at `pace`.
-    ///
-    /// The thresholds above are the ordinary case; a world that developed quickly
-    /// (`pace > 1`) reaches its later ages sooner, and a slow one later. Without
-    /// this a very slow world would still be building its first granaries at the
-    /// map date, and a very fast one would leap straight to empire.
-    pub fn from_age_scaled(age_years: u32, pace: f32) -> Self {
-        Self::from_age((age_years as f32 / pace.max(0.05)) as u32)
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Era::FirstSettlements => "Age of First Settlements",
-            Era::FirstCities => "Age of First Cities",
-            Era::CityStates => "Age of City-States",
-            Era::Empires => "Age of Empires",
-        }
-    }
-
-    pub fn describe(self) -> &'static str {
-        match self {
-            Era::FirstSettlements => "permanent villages, the first granaries, no writing yet",
-            Era::FirstCities => "walled towns, temple workshops, the first scribes",
-            Era::CityStates => "competing city-states, standing temples, long-distance trade",
-            Era::Empires => "one capital ruling many cities, professional armies, archives",
-        }
-    }
-
-    /// Development multiplier a realm of this era lends to its population.
-    pub fn density_bias(self) -> f32 {
-        match self {
-            Era::FirstSettlements => 0.00,
-            Era::FirstCities => 0.10,
-            Era::CityStates => 0.20,
-            Era::Empires => 0.32,
-        }
-    }
-}
-
-/// Whether a civilization rose on its own, beside a rival, or inside a crowd.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Isolation {
-    /// No realm within reach: the whole culture is its own invention.
-    IsolatedCradle,
-    /// Known to others, but separated by sea, desert or simple distance.
-    NeighbouringCradle,
-    /// Shares a land frontier with at least one other realm.
-    IntegratedHeartland,
-}
-
-impl Isolation {
-    pub fn label(self) -> &'static str {
-        match self {
-            Isolation::IsolatedCradle => "Isolated rise",
-            Isolation::NeighbouringCradle => "Distant neighbours",
-            Isolation::IntegratedHeartland => "Contested heartland",
-        }
-    }
-
-    pub fn describe(self) -> &'static str {
-        match self {
-            Isolation::IsolatedCradle => {
-                "Rose entirely alone: from the seed grain to the temple plan, everything had to be invented on the spot."
-            }
-            Isolation::NeighbouringCradle => {
-                "Rose in sight of another world but across water or dry land, so ideas arrived second-hand and late."
-            }
-            Isolation::IntegratedHeartland => {
-                "Rose in a crowded region: it shared a border, a river and a border war with an older realm from the very beginning."
-            }
-        }
-    }
-}
+// ─── HOW BIG A REALM IS ──────────────────────────────────────────────────────
 
 /// The scale of a civilization, measured against our own history.
 ///
 /// The class is *derived from the finished territory* rather than assigned in
 /// advance: a realm that aimed at empire size and then ran into a mountain wall
 /// or an older neighbour reports the size it actually reached.
+///
+/// Kept internal on purpose: scope is a number the atlas shows as area and
+/// population, never as a rank — a small polis and a broad empire are told apart
+/// by their figures, not by a tier.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ScaleClass {
     Small,
@@ -560,13 +535,6 @@ impl ScaleClass {
         }
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            ScaleClass::Small => "Small realm",
-            ScaleClass::Medium => "Middling realm",
-            ScaleClass::Large => "Large realm",
-        }
-    }
 }
 
 /// How two realms know about each other.
@@ -618,10 +586,8 @@ pub struct RiseProfile {
 #[derive(Clone, Debug)]
 pub struct Culture {
     pub subsistence: Subsistence,
-    pub kinship: Kinship,
+    pub government: Government,
     pub outlook: Outlook,
-    pub craft: CraftTier,
-    pub literacy: Literacy,
     /// The form its monumental building takes.
     pub architecture: &'static str,
     /// Two or three arts the realm is known for.
@@ -689,6 +655,9 @@ pub struct Civilization {
     pub color: [u8; 3],
 
     pub cradle_kind: CradleKind,
+    /// The realm's size class, kept internal: scope is shown as area and
+    /// population, never as a tier.
+    #[allow(dead_code)]
     pub scale: ScaleClass,
     pub rise: RiseProfile,
     pub culture: Culture,
@@ -716,10 +685,7 @@ pub struct Civilization {
     pub founding_year: i32,
     /// Years elapsed between founding and the map date.
     pub age_years: u32,
-    /// The era that age puts the realm in.
-    pub era: Era,
 
-    pub isolation: Isolation,
     /// Every realm it can reach, ascending by id.
     pub contacts: Vec<Contact>,
     /// Inheritances from older realms, ascending by id.
@@ -848,6 +814,16 @@ impl CivilizationWorld {
     /// `300 CE` — the date the atlas portrays, in the world's own era.
     pub fn map_year_label(&self) -> String {
         epoch::ce_label(self.map_year)
+    }
+
+    /// The age the world stands in at the atlas date.
+    pub fn age(&self) -> Age {
+        self.timeline.age
+    }
+
+    /// `The Age of Copper & Alloys` — the world's age, named.
+    pub fn age_label(&self) -> &'static str {
+        self.timeline.age.label()
     }
 
     /// Mean population density across every civilized province, per km².

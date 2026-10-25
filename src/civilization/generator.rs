@@ -1,33 +1,38 @@
 //! Where civilizations rise, how far they spread, and what they turn into.
 //!
-//! The stage runs in six passes, each of which is a single loop over a different
+//! The stage runs in seven passes, each of which is a single loop over a different
 //! domain — which is what keeps it order-stable and reproducible for a seed:
 //!
 //! 1. **Census** — every province is measured once: its real area in km² (latitude
 //!    aware), mean habitability, peak river discharge, mean climate, relief, how
 //!    much of it touches sea or lake, and its carrying capacity in people.
-//! 2. **Cradle selection** — the richest handful of provinces in the world become
-//!    candidate cradles, and a continent-aware quota picks a well-separated few of
-//!    them, so the world never fills up with civilizations.
+//! 2. **Cradle selection** — every province is scored as a potential cradle, and a
+//!    quota drawn on the richest superregions picks one to three of them each,
+//!    with a few places reserved for realms that rise alone. Contemporaries
+//!    therefore share regions instead of being spread evenly over the planet.
 //! 3. **Expansion** — each cradle floods outward along fertile, cheap ground until
 //!    it has taken its share, is walled in by wilderness, or runs into an older
 //!    realm. Older realms pick first, exactly as history did.
-//! 4. **Dossier** — the cradle's own geography decides its economy, social order,
-//!    crafts, script and faith.
-//! 5. **Contact** — territories that touch, or that lie within a sea-crossing of
+//! 4. **Development** — from year zero to the atlas date, every realm grows along
+//!    a single internal axis of development: its own surplus, its neighbours'
+//!    progress and whatever its ancestral stock already knew. The leading region's
+//!    level at the atlas date *is* the world's [`Age`].
+//! 5. **Dossier** — the cradle's own geography decides its economy, government and
+//!    faith.
+//! 6. **Contact** — territories that touch, or that lie within a sea-crossing of
 //!    each other, are linked; the rest rose alone.
-//! 6. **Inheritance** — realms close enough to share an ancestral stock get one
+//! 7. **Inheritance** — realms close enough to share an ancestral stock get one
 //!    tongue family, and a younger realm in contact with an older one may have
-//!    taken up its crops, rites or script *before* founding a city of its own.
+//!    taken up its crops, rites or government *before* founding a city of its own.
 
 use crate::civilization::config::CivilizationConfig;
 use crate::civilization::epoch::{
     DevelopmentPace, Epoch, EpochCandidate, Timeline, place_name, select_epoch_site,
 };
 use crate::civilization::{
-    CIVILIZATION_COLORS, Civilization, CivilizationWorld, Contact, ContactKind, CraftTier,
-    CradleKind, Culture, Era, Faith, FaithKind, Influence, Isolation, Kinship, Literacy, Outlook,
-    RiseProfile, ScaleClass, Subsistence,
+    Age, Civilization, CivilizationWorld, Contact, ContactKind, CradleKind, Culture, Faith,
+    FaithKind, Government, Influence, Outlook, RiseProfile, ScaleClass, Subsistence,
+    civilization_color,
 };
 use crate::climate::PlanetaryMode;
 use crate::core::fmt::{thousands, thousands_u64};
@@ -41,6 +46,37 @@ use std::collections::{BTreeMap, BinaryHeap};
 /// Salt mixed into the world seed for the history stage, so the dawn draws from
 /// an independent random stream instead of replaying the province generator's.
 const DAWN_SALT: u64 = 0x0DA7_0F1F_0000_0007;
+
+// ─── THE DEVELOPMENT AXIS ────────────────────────────────────────────────────
+//
+// A realm's development is one number in `0..=1`, integrated over the years
+// between the first city and the atlas date. It is never displayed: the reader
+// sees its consequences — a government form and a population figure.
+
+/// How many years a single development step covers. Fixed, so the integration is
+/// reproducible to the last decimal.
+const DEVELOPMENT_STEP_YEARS: i32 = 25;
+
+/// A realm's growth on the development axis, per year, at a world pace of ×1,
+/// before the cradle's own soil, river, shore and size scale it.
+///
+/// Calibrated against the atlas date (see [`generate_civilizations`]): an ordinary
+/// world's leading region nears the copper horizon over the few thousand years the
+/// map spans, while a small, slow or young world is still in the Irrigation age —
+/// which is what makes the world's age vary with the seed.
+const DEVELOPMENT_BASE_RATE: f64 = 0.0006;
+
+/// How readily development crosses a shared frontier, per year, for a realm of
+/// ordinary openness. A connected region converges; a loner lags.
+const DEVELOPMENT_DIFFUSION: f64 = 0.0006;
+
+/// The level a realm starts from when no older stock stands behind it: a first
+/// village, not a state.
+const DEVELOPMENT_SEED: f64 = 0.02;
+
+/// The share of an older kin's development a daughter realm begins with, because
+/// it learned the country's crops and rites before it founded a city of its own.
+const DEVELOPMENT_INHERITANCE: f64 = 0.50;
 
 /// Everything the history stage ever needs to know about one province.
 ///
@@ -92,6 +128,10 @@ struct Cradle {
     prov: u32,
     score: f32,
     continent: u32,
+    /// The region and superregion it belongs to — the two scales the cradle
+    /// quota is drawn on, so contemporaries can stand shoulder to shoulder.
+    region: u32,
+    superregion: u32,
     cx: f32,
     cy: f32,
 }
@@ -203,9 +243,10 @@ pub fn generate_civilizations(
     // ─── 2. CRADLE SELECTION ─────────────────────────────────────────────────
     // A cradle is a province so much better than its neighbours that people stop
     // moving: a river that rebuilds the soil, a shore with fish and salt, a mild
-    // climate, gentle ground. Score every candidate, then take a well-spread
-    // handful — and only a handful, so the world stays a wilderness with a few
-    // bright corners rather than a patchwork of states.
+    // climate, gentle ground. Score every candidate, then draw the roster from the
+    // richest superregions — several cradles in a region that can carry them, a
+    // few loners on far continents — so the map carries both rivals and isolated
+    // rises rather than one evenly-spaced realm per landmass.
     let mut cradles: Vec<Cradle> = Vec::new();
     for i in 1..n {
         let s = &stats[i];
@@ -235,6 +276,8 @@ pub fn generate_civilizations(
             prov: i as u32,
             score: hab.powf(1.6) * river_mult * coast_mult * lake_mult * size_mult * jitter,
             continent: s.continent_id,
+            region: node.region_id,
+            superregion: node.superregion_id,
             cx: node.center_x,
             cy: node.center_y,
         });
@@ -252,92 +295,150 @@ pub fn generate_civilizations(
         return CivilizationWorld::empty(seed);
     }
 
-    // Which continents can host a cradle, and how much land each one holds. The
-    // quota below deliberately gives every continent with good ground one cradle
-    // before any continent gets a second: that is what leaves a few civilizations
-    // out of reach of each other on any world with more than one landmass.
-    let mut continent_land: BTreeMap<u32, f64> = BTreeMap::new();
-    for s in stats.iter().filter(|s| s.present) {
-        *continent_land.entry(s.continent_id).or_insert(0.0) += s.px as f64;
+    // Which superregions and regions can host a cradle, how good their best ground
+    // is, and how much land they hold. The quota is drawn per superregion rather
+    // than per continent: on a real map the contemporaries of one region stand
+    // shoulder to shoulder — Greeks, Thracians, Phrygians and Hittites — while
+    // other regions rise far away and alone.
+    let mut superregion_land: BTreeMap<u32, f64> = BTreeMap::new();
+    for (i, s) in stats.iter().enumerate().filter(|(_, s)| s.present) {
+        let superregion = hierarchy.provinces[i].superregion_id;
+        *superregion_land.entry(superregion).or_insert(0.0) += s.px as f64;
     }
-    let mut continent_best: BTreeMap<u32, f32> = BTreeMap::new();
+    let mut superregion_best: BTreeMap<u32, f32> = BTreeMap::new();
     for c in &cradles {
-        let entry = continent_best.entry(c.continent).or_insert(f32::MIN);
+        let entry = superregion_best.entry(c.superregion).or_insert(f32::MIN);
         if c.score > *entry {
             *entry = c.score;
         }
     }
-
-    let wanted = rng.random_range(config.min_civilizations..=config.max_civilizations);
-
-    let mut ranked_continents: Vec<u32> = continent_best.keys().copied().collect();
-    ranked_continents.sort_by(|a, b| {
-        continent_best[b]
-            .partial_cmp(&continent_best[a])
+    // Ranked by their best cradle, then by the ground they hold, tie-broken by id,
+    // so the quota never depends on map iteration order.
+    let mut ranked_superregions: Vec<u32> = superregion_best.keys().copied().collect();
+    ranked_superregions.sort_by(|a, b| {
+        superregion_best[b]
+            .partial_cmp(&superregion_best[a])
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then(
+                superregion_land[b]
+                    .partial_cmp(&superregion_land[a])
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
             .then(a.cmp(b))
     });
 
-    let mut quotas: BTreeMap<u32, usize> = BTreeMap::new();
-    // How many landmasses actually get a civilization of their own. Deliberately
-    // only about three fifths of the realms: on a world of many continents that
-    // leaves the rest to rise as *second* cradles on the richest continents, which
-    // is what puts neighbours, rivals and cultural cousins on the map instead of
-    // one lonely realm per landmass.
-    let continent_slots = ((wanted as f32 * 0.6).ceil() as usize)
-        .clamp(1, ranked_continents.len());
+    let wanted = rng.random_range(config.min_civilizations..=config.max_civilizations);
+    let distance = |a: &Cradle, b: &Cradle| sphere::wrap_distance_px(a.cx, a.cy, b.cx, b.cy, w);
 
-    if wanted <= continent_slots {
-        for c in ranked_continents.iter().take(wanted) {
-            quotas.insert(*c, 1);
+    // How close two cradles may stand. Inside one region a few provinces' worth of
+    // ground is enough — that is a shared valley with two thrones in it — while
+    // across regions only the universal floor applies. The old hard minimum is
+    // gone: it was what kept every realm evenly far from every other, and no real
+    // map looks like that.
+    let same_region = config.cradle_separation_frac * w as f32;
+    let floor = config.cradle_floor_frac * w as f32;
+
+    let mut picked: Vec<Cradle> = Vec::new();
+    let mut per_region: BTreeMap<u32, usize> = BTreeMap::new();
+    let mut per_superregion: BTreeMap<u32, usize> = BTreeMap::new();
+
+    // A fifth of the roster is held back for realms that rose alone; the rest goes
+    // to the richest superregions, one to three cradles each.
+    let lonely_slots = ((wanted as f32 * 0.2).round() as usize).clamp(1, 4);
+    let core_target = wanted.saturating_sub(lonely_slots).max(1);
+    let quota_for = |rank: usize| if rank < 3 { 3 } else if rank < 8 { 2 } else { 1 };
+
+    for (rank, superregion) in ranked_superregions.iter().enumerate() {
+        if picked.len() >= core_target {
+            break;
         }
-    } else {
-        for c in ranked_continents.iter().take(continent_slots) {
-            quotas.insert(*c, 1);
-        }
-        let mut by_land = ranked_continents.clone();
-        by_land.sort_by(|a, b| {
-            continent_land[b]
-                .partial_cmp(&continent_land[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(a.cmp(b))
-        });
-        let mut left = wanted - continent_slots;
-        let mut turn = 0usize;
-        while left > 0 {
-            *quotas.get_mut(&by_land[turn % by_land.len()]).unwrap() += 1;
-            left -= 1;
-            turn += 1;
+        for _ in 0..quota_for(rank) {
+            if picked.len() >= core_target {
+                break;
+            }
+            let fits = |candidate: &Cradle| {
+                candidate.superregion == *superregion
+                    && !picked.iter().any(|p| p.prov == candidate.prov)
+                    && per_region.get(&candidate.region).copied().unwrap_or(0)
+                        < config.cradle_max_per_region
+                    && per_superregion.get(superregion).copied().unwrap_or(0)
+                        < config.cradle_max_per_superregion
+                    && picked.iter().all(|p| {
+                        if distance(p, candidate) < floor {
+                            return false;
+                        }
+                        p.region != candidate.region || distance(p, candidate) >= same_region
+                    })
+            };
+            // A second or third cradle in this superregion is taken from within
+            // reach of one already picked, so the two are genuine rivals who can
+            // meet — a shared valley, a strait between them — rather than two
+            // thrones at opposite ends of a continent.
+            let next = cradles
+                .iter()
+                .find(|candidate| {
+                    fits(candidate)
+                        && picked.iter().any(|p| {
+                            p.superregion == candidate.superregion
+                                && distance(p, candidate) <= config.contact_distance_px
+                        })
+                })
+                .or_else(|| cradles.iter().find(|candidate| fits(candidate)));
+            match next {
+                Some(candidate) => {
+                    picked.push(*candidate);
+                    *per_region.entry(candidate.region).or_insert(0) += 1;
+                    *per_superregion.entry(*superregion).or_insert(0) += 1;
+                }
+                None => break, // this superregion's good ground is used up
+            }
         }
     }
 
-    let distance = |a: &Cradle, b: &Cradle| sphere::wrap_distance_px(a.cx, a.cy, b.cx, b.cy, w);
-
-    let mut picked: Vec<Cradle> = Vec::new();
-    let mut separation = config.cradle_separation_frac * w as f32;
-    for _round in 0..3 {
-        for (&continent, &quota) in &quotas {
-            loop {
-                if picked.iter().filter(|p| p.continent == continent).count() >= quota {
-                    break;
-                }
-                let next = cradles.iter().find(|cand| {
-                    cand.continent == continent
-                        && !picked.iter().any(|p| p.prov == cand.prov)
-                        && picked.iter().all(|p| distance(p, cand) >= separation)
-                });
-                match next {
-                    Some(cand) => picked.push(*cand),
-                    None => break, // this continent has no room left at this spacing
-                }
-            }
+    // The lonely rises: the best cradle on a continent nobody has reached yet, so
+    // the world still shows a civilization that invented everything by itself.
+    let mut lonely = 0usize;
+    for candidate in &cradles {
+        if lonely >= lonely_slots || picked.len() >= wanted {
+            break;
         }
+        if picked.iter().any(|p| p.continent == candidate.continent) {
+            continue; // that landmass already has its own realm
+        }
+        if picked
+            .iter()
+            .any(|p| distance(p, candidate) < config.isolated_distance_px)
+        {
+            continue; // close enough to the others to be a neighbour, not a loner
+        }
+        picked.push(*candidate);
+        *per_region.entry(candidate.region).or_insert(0) += 1;
+        *per_superregion.entry(candidate.superregion).or_insert(0) += 1;
+        lonely += 1;
+    }
+
+    // Fill the roster from the best remaining ground, still respecting the region
+    // and superregion caps so the world does not collapse into one crowded corner.
+    for candidate in &cradles {
         if picked.len() >= wanted {
             break;
         }
-        // The world could not fit them this far apart: let the cradles crowd, and
-        // say so, rather than place fewer than the world was asked for.
-        separation *= 0.6;
+        if picked.iter().any(|p| p.prov == candidate.prov) {
+            continue;
+        }
+        if per_region.get(&candidate.region).copied().unwrap_or(0)
+            >= config.cradle_max_per_region
+            || per_superregion.get(&candidate.superregion).copied().unwrap_or(0)
+                >= config.cradle_max_per_superregion
+        {
+            continue;
+        }
+        if picked.iter().any(|p| distance(p, candidate) < floor) {
+            continue;
+        }
+        picked.push(*candidate);
+        *per_region.entry(candidate.region).or_insert(0) += 1;
+        *per_superregion.entry(candidate.superregion).or_insert(0) += 1;
     }
 
     picked.sort_by(|a, b| {
@@ -347,55 +448,9 @@ pub fn generate_civilizations(
             .then(a.prov.cmp(&b.prov))
     });
 
-    // Every world should show both halves of the story: realms that grew up in
-    // another realm's shadow, and realms that had to invent everything alone. If
-    // the planet only offered one of the two, the weakest cradle is swapped for a
-    // candidate that restores the other — if such a candidate exists at all.
-    if picked.len() >= 3 {
-        let mut all_crowded = true;
-        let mut all_lonely = true;
-        for i in 0..picked.len() {
-            for j in (i + 1)..picked.len() {
-                let d = distance(&picked[i], &picked[j]);
-                if d >= config.contact_distance_px {
-                    all_crowded = false;
-                }
-                if d <= config.isolated_distance_px {
-                    all_lonely = false;
-                }
-            }
-        }
-
-        if all_crowded || all_lonely {
-            let weak = picked.pop().unwrap();
-            let want_lonely = all_crowded;
-            let replacement = cradles.iter().find(|cand| {
-                if picked.iter().any(|p| p.prov == cand.prov) {
-                    return false;
-                }
-                if want_lonely {
-                    picked
-                        .iter()
-                        .all(|p| distance(p, cand) >= config.isolated_distance_px)
-                } else {
-                    picked
-                        .iter()
-                        .any(|p| distance(p, cand) <= config.contact_distance_px)
-                }
-            });
-            picked.push(replacement.copied().unwrap_or(weak));
-            picked.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then(a.prov.cmp(&b.prov))
-            });
-        }
-    }
-
     if picked.len() < config.min_civilizations {
         println!(
-            "⚠ Only {} cradles could be placed on this world (wanted {}).",
+            "Only {} cradles could be placed on this world (wanted {}).",
             picked.len(),
             wanted
         );
@@ -530,10 +585,19 @@ pub fn generate_civilizations(
         ));
     }
 
+    let mut continents_used: Vec<u32> = picked.iter().map(|c| c.continent).collect();
+    continents_used.sort_unstable();
+    continents_used.dedup();
+    // Which realms share a border, now that the expansion has filled `owner`. It
+    // is needed twice below — by the development pass, which lets a realm learn
+    // from the neighbours it touches, and by the palette, which must not give two
+    // neighbours the same colour — so it is built once, here.
+    let adjacency = frontier_adjacency(&owner, hierarchy);
+
     println!(
         "✓ Dawn cradles: {} civilizations on {} continents | {} provinces claimed",
         picked.len(),
-        ranked_continents.len(),
+        continents_used.len(),
         territories.iter().map(|t| t.len()).sum::<usize>(),
     );
 
@@ -545,6 +609,11 @@ pub fn generate_civilizations(
     // that every civilization on the map has a history rather than only a founding
     // — otherwise the last cradle to rise would always stand at Year 0 of its own
     // calendar, with no cities and no scribes to its name.
+    //
+    // This date is also the far end of the development pass, so the tail is what
+    // decides how mature the world is: it is calibrated together with
+    // `DEVELOPMENT_BASE_RATE` so an ordinary world lands at the copper horizon
+    // while a young, slow or clustered one is still in the Irrigation age.
     let last_founding = *founding_years.last().unwrap_or(&0);
     let map_year = last_founding + ((last_founding as f32 / 6.0) as i32).clamp(150, 500);
     let family_radius = config.family_radius_frac * w as f32;
@@ -563,6 +632,8 @@ pub fn generate_civilizations(
                 // has settled somewhere else, what matters is where it actually is.
                 score: picked[rank].score,
                 continent: seat_stats.continent_id,
+                region: seat_node.region_id,
+                superregion: seat_node.superregion_id,
                 cx: seat_node.center_x,
                 cy: seat_node.center_y,
             },
@@ -575,7 +646,9 @@ pub fn generate_civilizations(
             ),
             area_km2: provinces.iter().map(|&p| stats[p as usize].area_km2).sum(),
             scale: ScaleClass::from_provinces(provinces.len()),
-            era: Era::from_age_scaled(age_years, pace.multiplier()),
+            // Filled in by the deep-time development pass below, once the
+            // ancestral stocks are known.
+            complexity: 0.0,
             age_years,
             founding_year_internal: founding_years[rank],
             provinces,
@@ -635,7 +708,47 @@ pub fn generate_civilizations(
         }
     }
 
-    // ─── 5. DOSSIERS ─────────────────────────────────────────────────────────
+    // ─── 5. DEEP-TIME DEVELOPMENT ────────────────────────────────────────────
+    // How developed every realm is at the atlas date is not a function of how old
+    // it is: it grows from its own surplus, learns from the neighbours it touches,
+    // and starts part-way up if an older stock already held the country. The
+    // economy and temper of each realm are drawn first, because how open a people
+    // is decides how readily they take a neighbour's lead — and they are drawn in
+    // rank order, exactly as the dossier below would have drawn them.
+    let mut schemes: Vec<Scheme> = Vec::with_capacity(skeletons.len());
+    for rank in 0..skeletons.len() {
+        let subsistence = choose_subsistence(&mut rng, &skeletons[rank]);
+        let outlook = choose_outlook(&mut rng, subsistence);
+        schemes.push(Scheme {
+            subsistence,
+            outlook,
+        });
+    }
+
+    let frontier = simulate_development(
+        &mut skeletons,
+        &schemes,
+        &family_ancestor,
+        &adjacency,
+        &stats,
+        min_river_flow,
+        config.great_river_flow,
+        map_year,
+        pace.multiplier(),
+    );
+    let mean_complexity = if skeletons.is_empty() {
+        0.0
+    } else {
+        skeletons.iter().map(|sk| sk.complexity).sum::<f32>() / skeletons.len() as f32
+    };
+    println!(
+        "✓ Deep-time development: frontier {:.2} — the world stands in {} | mean realm development {:.2}",
+        frontier,
+        Age::from_development(frontier as f32).label(),
+        mean_complexity,
+    );
+
+    // ─── 6. DOSSIERS ─────────────────────────────────────────────────────────
     // Culture and faith are read off the cradle's own country where geography
     // decides them (a canal state is not born in a rainforest), with a seeded draw
     // for the rest. Kin inherit from the head of their family, which is what makes
@@ -657,6 +770,7 @@ pub fn generate_civilizations(
         let culture = build_culture(
             &mut rng,
             &skeletons[rank],
+            schemes[rank],
             inherited_culture.as_ref(),
             family_name[rank].as_str(),
         );
@@ -665,7 +779,7 @@ pub fn generate_civilizations(
         faiths.push(faith);
     }
 
-    // ─── 6. POPULATION ───────────────────────────────────────────────────────
+    // ─── 7. POPULATION ───────────────────────────────────────────────────────
     // A province's population is its own carrying capacity from the census, times
     // the realm's development: an empire with archives, canals and standing armies
     // feeds more people per hectare than a scatter of first villages. Every
@@ -675,9 +789,9 @@ pub fn generate_civilizations(
     let mut populations: Vec<u64> = Vec::with_capacity(skeletons.len());
     for rank in 0..skeletons.len() {
         let development = development_multiplier(
-            skeletons[rank].era,
-            cultures[rank].kinship,
+            cultures[rank].government,
             cultures[rank].outlook,
+            skeletons[rank].complexity,
         );
         let mut total = 0u64;
         for &p in &skeletons[rank].provinces {
@@ -688,7 +802,7 @@ pub fn generate_civilizations(
         populations.push(total);
     }
 
-    // ─── 7. CONTACT ──────────────────────────────────────────────────────────
+    // ─── 8. CONTACT ──────────────────────────────────────────────────────────
     // Two realms are linked when their provinces touch across dry land (a
     // frontier), when only a strait or a short sea crossing lies between them (a
     // sea route), or when they are close enough for travellers to carry word of
@@ -784,7 +898,7 @@ pub fn generate_civilizations(
         }
     }
 
-    // ─── 8. INHERITANCE ──────────────────────────────────────────────────────
+    // ─── 9. INHERITANCE ──────────────────────────────────────────────────────
     // A younger realm in contact with an older one may have taken up crops, rites
     // or a script centuries before it founded a city of its own — the way the
     // ancestors of Egypt took up farming and pottery from Mesopotamia long before
@@ -848,7 +962,7 @@ pub fn generate_civilizations(
         }
     }
 
-    // ─── 9. THE REASONS ──────────────────────────────────────────────────────
+    // ─── 10. THE REASONS ──────────────────────────────────────────────────────
     // The dossier's "why here" bullets are written last, once the distances to the
     // other realms are finally known.
     let mut rises: Vec<RiseProfile> = Vec::with_capacity(skeletons.len());
@@ -882,7 +996,7 @@ pub fn generate_civilizations(
         ));
     }
 
-    // ─── 9b. THE EPOCH AND THE DEPTH OF PREHISTORY ───────────────────────────
+    // ─── 10b. THE EPOCH AND THE DEPTH OF PREHISTORY ───────────────────────────
     // The world's calendar is reckoned from one place and one year, and both come
     // out of the seed. The place is a province chosen for the shape a founding
     // story takes — a crossroads between realms, a lone peak, a lake, an island —
@@ -928,34 +1042,25 @@ pub fn generate_civilizations(
     let timeline = Timeline {
         prehistory_years,
         atlas_year: map_year,
+        age: Age::from_development(frontier as f32),
         epoch,
     };
     // Every date the atlas shows is this one shift away from the internal frame.
     let epoch_offset = timeline.epoch.absolute_year;
 
-    // ─── 10. ASSEMBLE ────────────────────────────────────────────────────────
+    // ─── 11. ASSEMBLE ────────────────────────────────────────────────────────
     // Every date the atlas ever shows is written in the world's own era, so the
     // internal frame is converted exactly once, here: a realm's founding and the
     // map date both become years of the Common Era, negative for BCE. Nothing
     // above this point ever saw a CE year, and nothing below it sees anything else.
+    let colors = assign_colors(skeletons.len(), &adjacency);
     let mut civilizations: Vec<Civilization> = Vec::with_capacity(skeletons.len());
     for rank in 0..skeletons.len() {
         let sk = &skeletons[rank];
-        let isolation = if contacts[rank].is_empty() {
-            Isolation::IsolatedCradle
-        } else if contacts[rank]
-            .iter()
-            .any(|c| c.kind == ContactKind::LandFrontier)
-        {
-            Isolation::IntegratedHeartland
-        } else {
-            Isolation::NeighbouringCradle
-        };
-
         let population = populations[rank];
         civilizations.push(Civilization {
             name: civilization_name(rank as u32 + 1),
-            color: CIVILIZATION_COLORS[rank % CIVILIZATION_COLORS.len()],
+            color: colors[rank],
             cradle_kind: sk.cradle_kind,
             scale: sk.scale,
             rise: rises[rank].clone(),
@@ -971,8 +1076,6 @@ pub fn generate_civilizations(
             population,
             founding_year: sk.founding_year_internal - epoch_offset,
             age_years: sk.age_years,
-            era: sk.era,
-            isolation,
             contacts: std::mem::take(&mut contacts[rank]),
             influences: std::mem::take(&mut influences[rank]),
             kin: kin[rank].clone(),
@@ -1012,6 +1115,17 @@ pub fn generate_civilizations(
 }
 // ─── INTERNAL RECORDS ────────────────────────────────────────────────────────
 
+/// How a realm's country feeds it and what it values.
+///
+/// Drawn before the development pass because an open people takes a neighbour's
+/// lead more readily than a closed one, and the same values then shape the
+/// government the dossier writes.
+#[derive(Clone, Copy)]
+struct Scheme {
+    subsistence: Subsistence,
+    outlook: Outlook,
+}
+
 /// A cradle that has taken root: everything about a realm that is known before
 /// its dossier is written.
 struct Skeleton {
@@ -1021,7 +1135,10 @@ struct Skeleton {
     provinces: Vec<u32>,
     area_km2: f32,
     scale: ScaleClass,
-    era: Era,
+    /// How developed the realm is at the atlas date, in `0..=1`, measured by the
+    /// deep-time development pass. Drives its government and its population
+    /// density; it is never shown as a tier of its own.
+    complexity: f32,
     age_years: u32,
     /// Founding year in the world's internal frame, whose year zero is the first
     /// city. The atlas never shows this; [`Civilization::founding_year`] carries the
@@ -1330,6 +1447,199 @@ fn nearest_free_province(
         })
 }
 
+// ─── THE DEEP-TIME DEVELOPMENT PASS ─────────────────────────────────────────
+
+/// Which realms share a frontier, for the development pass.
+///
+/// The rich [`Contact`] pass runs after the dossiers and is far too expensive to
+/// repeat here; this is only the cheap half of it — two realms are adjacent when
+/// one holds a province whose neighbour the other holds. Sorted, so the walk over
+/// it is order-stable.
+fn frontier_adjacency(owner: &[u16], hierarchy: &GeopoliticalHierarchy) -> BTreeMap<u16, Vec<u16>> {
+    let mut adjacency: BTreeMap<u16, Vec<u16>> = BTreeMap::new();
+    for (i, node) in hierarchy.provinces.iter().enumerate() {
+        let a = owner.get(i).copied().unwrap_or(0);
+        if a == 0 {
+            continue;
+        }
+        for &(neighbour, _) in &node.neighbors {
+            let b = owner.get(neighbour as usize).copied().unwrap_or(0);
+            if b == 0 || b == a {
+                continue;
+            }
+            adjacency.entry(a).or_default().push(b);
+        }
+    }
+    for neighbours in adjacency.values_mut() {
+        neighbours.sort_unstable();
+        neighbours.dedup();
+    }
+    adjacency
+}
+
+/// Give every realm a colour no neighbour already wears.
+///
+/// With a clustered roster of twenty or thirty realms the ten hand-picked tones no
+/// longer suffice, so the palette is extended by [`civilization_color`]. Each
+/// realm, in rank order, takes the first tone — walking on from its own rank —
+/// that none of its already-coloured neighbours wears. Order-stable, so the same
+/// seed always paints the same map.
+fn assign_colors(count: usize, adjacency: &BTreeMap<u16, Vec<u16>>) -> Vec<[u8; 3]> {
+    let mut colors = vec![[0u8; 3]; count];
+    let palette = count.max(1);
+    for rank in 0..count {
+        let id = rank as u16 + 1;
+        let neighbours: &[u16] = adjacency.get(&id).map_or(&[], Vec::as_slice);
+        let mut choice = None;
+        for step in 0..palette {
+            let candidate = civilization_color((rank + step) % palette);
+            let clashes = neighbours.iter().any(|&neighbour| {
+                let other = neighbour as usize;
+                other >= 1 && other <= count && colors[other - 1] == candidate
+            });
+            if !clashes {
+                choice = Some(candidate);
+                break;
+            }
+        }
+        colors[rank] = choice.unwrap_or_else(|| civilization_color(rank % palette));
+    }
+    colors
+}
+
+/// Integrate every realm's development from the first city to the atlas date.
+///
+/// Year zero is the first city and `map_year` is the atlas date, stepped in fixed
+/// [`DEVELOPMENT_STEP_YEARS`] increments. At each step a realm grows from its own
+/// surplus — a logistic climb, slow at first, fast once the country is worked, and
+/// flattening as it approaches the horizon — and takes a share of any neighbour's
+/// lead, in proportion to the gap and to how open its ethos is. A realm that was
+/// not yet founded does not exist and neither grows nor lends. When it is founded
+/// it enters with the part of its elder kin's development it inherited, or from
+/// nothing but a first village if it has no elder.
+///
+/// Every step reads one snapshot of the previous step's levels, so the rank order
+/// of the loops can never bias the result. Returns the frontier: the highest level
+/// any realm reached at the atlas date.
+#[allow(clippy::too_many_arguments)]
+fn simulate_development(
+    skeletons: &mut [Skeleton],
+    schemes: &[Scheme],
+    family_ancestor: &[usize],
+    adjacency: &BTreeMap<u16, Vec<u16>>,
+    stats: &[ProvinceStats],
+    min_river_flow: f32,
+    great_river_flow: f32,
+    map_year: i32,
+    pace: f32,
+) -> f64 {
+    let n = skeletons.len();
+    if n == 0 {
+        return 0.0;
+    }
+
+    // How much country each realm holds, in people at full development. It is the
+    // modest "population" term of the growth rate: a broad, well-peopled realm
+    // learns faster than a single valley, but not much faster.
+    let capacity: Vec<f64> = skeletons
+        .iter()
+        .map(|sk| {
+            sk.provinces
+                .iter()
+                .map(|&p| stats[p as usize].pop_seed)
+                .sum()
+        })
+        .collect();
+    let max_capacity = capacity.iter().copied().fold(0.0f64, f64::max).max(1.0);
+
+    // Each realm's own growth rate: how kind its cradle is — soil, river, shore —
+    // times how much country it holds, times the world's pace.
+    let growth: Vec<f64> = (0..n)
+        .map(|rank| {
+            let s = &skeletons[rank].seat_stats;
+            let soil = (s.hab_mean().max(0.05) as f64).sqrt().clamp(0.30, 1.20);
+            let river = if s.flow_max >= great_river_flow {
+                1.45
+            } else if s.flow_max >= min_river_flow {
+                1.18
+            } else {
+                1.0
+            };
+            let shore = if s.is_coastal() || s.lake_px > 0 {
+                1.06
+            } else {
+                1.0
+            };
+            let size = 0.75 + 0.5 * (capacity[rank] / max_capacity).sqrt();
+            DEVELOPMENT_BASE_RATE * pace.max(0.05) as f64 * soil * river * shore * size
+        })
+        .collect();
+
+    let mut level = vec![0.0f64; n];
+    let mut active = vec![false; n];
+
+    let mut year = 0i32;
+    while year < map_year {
+        let dt = (map_year - year).min(DEVELOPMENT_STEP_YEARS) as f64;
+
+        // Founding: a realm enters the axis at the first step at or after its
+        // founding year, carrying whatever its elder kin had already built.
+        for rank in 0..n {
+            if active[rank] || skeletons[rank].founding_year_internal > year {
+                continue;
+            }
+            active[rank] = true;
+            let ancestor = family_ancestor[rank];
+            let inherited = if ancestor != rank && active[ancestor] {
+                level[ancestor] * DEVELOPMENT_INHERITANCE
+            } else {
+                0.0
+            };
+            level[rank] = inherited.max(DEVELOPMENT_SEED);
+        }
+
+        // One snapshot for the whole step: growth and diffusion never see a value
+        // another realm wrote in the same pass.
+        let snapshot = level.clone();
+        let mut delta = vec![0.0f64; n];
+        for rank in 0..n {
+            if !active[rank] {
+                continue;
+            }
+            let current = snapshot[rank];
+            let logistic = growth[rank] * current * (1.0 - current);
+            let openness = schemes[rank].outlook.openness() as f64;
+            let lead = adjacency.get(&(rank as u16 + 1)).map_or(0.0, |neighbours| {
+                let mut gap = 0.0;
+                let mut count = 0.0;
+                for &neighbour in neighbours {
+                    let other = snapshot[neighbour as usize - 1];
+                    if other > current {
+                        gap += other - current;
+                        count += 1.0;
+                    }
+                }
+                if count > 0.0 { gap / count } else { 0.0 }
+            });
+            delta[rank] = (logistic + DEVELOPMENT_DIFFUSION * openness * lead) * dt;
+        }
+        for rank in 0..n {
+            if active[rank] {
+                level[rank] = (level[rank] + delta[rank]).clamp(0.0, 1.0);
+            }
+        }
+
+        year += DEVELOPMENT_STEP_YEARS;
+    }
+
+    let mut frontier = 0.0f64;
+    for (rank, skeleton) in skeletons.iter_mut().enumerate() {
+        skeleton.complexity = level[rank] as f32;
+        frontier = frontier.max(level[rank]);
+    }
+    frontier
+}
+
 // ─── READING THE COUNTRY ─────────────────────────────────────────────────────
 
 /// Read a cradle out of the country it sits in.
@@ -1383,12 +1693,12 @@ fn classify_cradle(
 
 /// How much a realm's development multiplies its provinces' carrying capacity.
 ///
-/// Age, social order and ethos all push the same number: an empire with archives
-/// and canals feeds more people per hectare than a scatter of first villages, and
-/// a martial or isolationist realm feeds marginally fewer than an agrarian one.
-fn development_multiplier(era: Era, kinship: Kinship, outlook: Outlook) -> f32 {
-    (0.60 + era.density_bias() + kinship.density_bias() + outlook.density_bias())
-        .clamp(0.45, 1.45)
+/// Three things push the same number: the realm's own development (a canal state
+/// that taxes, stores and redistributes grain feeds far more mouths per hectare
+/// than a scatter of first villages), how it is governed, and what it values.
+fn development_multiplier(government: Government, outlook: Outlook, complexity: f32) -> f32 {
+    let development = 0.40 + 0.60 * complexity.clamp(0.0, 1.0);
+    (development + government.density_bias() + outlook.density_bias()).clamp(0.40, 1.45)
 }
 
 // ─── RELATIONS ───────────────────────────────────────────────────────────────
@@ -1481,8 +1791,7 @@ fn contact_note(kind: ContactKind, relation: &str, distance_km: f32, other: u32)
 fn hallmarks(culture: &Culture, faith: &Faith) -> Vec<&'static str> {
     vec![
         culture.subsistence.hallmark(),
-        culture.craft.hallmark(),
-        culture.literacy.hallmark(),
+        culture.government.hallmark(),
         faith.kind.hallmark(),
         culture.architecture,
     ]
@@ -1574,19 +1883,98 @@ const FAITH_PRACTICES: [&str; 12] = [
 
 /// Read a realm's whole material and social life off the country it was born in.
 ///
-/// Geography decides the economy, and the economy decides the social order — the
-/// oldest argument in history writing. The draw (`rng`) only fills in what
-/// geography leaves open, such as which arts a people are known for. A realm that
-/// descends from the head of its family echoes its ancestor's craft, temple form
-/// and rites, which is what makes siblings on a world resemble each other while
+/// Geography decides the economy, the economy narrows the range of governments, and
+/// the realm's own development decides whether it has a state at all — the oldest
+/// argument in history writing. The draw (`rng`) only fills in what geography and
+/// development leave open, such as which arts a people are known for. A realm that
+/// descends from the head of its family echoes its ancestor's temple form and
+/// rites, which is what makes siblings on a world resemble each other while
 /// strangers do not.
 fn build_culture(
     rng: &mut ChaCha8Rng,
     sk: &Skeleton,
+    scheme: Scheme,
     inherited: Option<&Culture>,
     family: &str,
 ) -> Culture {
-    let subsistence = match sk.cradle_kind {
+    let Scheme {
+        subsistence,
+        outlook,
+    } = scheme;
+
+    // Government: how this society organises power. Complexity decides where it
+    // sits on the axis — a kinship band or a tribe low down, a chiefdom as it
+    // rises, a state once it is high — and how it eats and what it values decide
+    // what kind of state it is.
+    let government = build_government(rng, subsistence, outlook, sk.scale, sk.complexity);
+
+    let architecture = match inherited {
+        Some(ancestor) if rng.random::<f32>() < 0.7 => ancestor.architecture,
+        _ => {
+            if subsistence == Subsistence::IrrigatedAgriculture
+                && matches!(
+                    government,
+                    Government::DivineMonarchy | Government::TheocraticRepublic
+                )
+            {
+                ARCHITECTURE_POOL[0]
+            } else {
+                *ARCHITECTURE_POOL.choose(rng).unwrap()
+            }
+        }
+    };
+
+    let art_count = rng.random_range(2..=3usize);
+    let mut arts: Vec<&'static str> = Vec::with_capacity(art_count);
+    while arts.len() < art_count {
+        let art = *ARTS_POOL.choose(rng).unwrap();
+        if !arts.contains(&art) {
+            arts.push(art);
+        }
+    }
+
+    let mut note = format!(
+        "{} Its cradle: {} — {}.",
+        subsistence.describe(),
+        sk.cradle_kind.label().to_lowercase(),
+        sk.cradle_kind.describe()
+    );
+    let standing = if government.is_state() {
+        "a state with an apparatus behind it"
+    } else {
+        "a society with no state above its lineages"
+    };
+    note.push_str(&format!(
+        " It is organised as {} — {}, and its public temper is {} — it {}.",
+        government.label().to_lowercase(),
+        standing,
+        outlook.label().to_lowercase(),
+        outlook.disposition()
+    ));
+    if inherited.is_some() {
+        note.push_str(&format!(
+            " It shares its ancestral stock with the rest of the {family}, whose tongue, rites and arts it still echoes."
+        ));
+    }
+
+    Culture {
+        subsistence,
+        government,
+        outlook,
+        architecture,
+        arts,
+        note,
+    }
+}
+
+/// What a realm's country lets it eat.
+///
+/// Geography decides the economy: a canal state is not born in a rainforest, and
+/// a herd people does not grow up on a drowned delta. The seeded draw only settles
+/// the borderline countries — a lake that could go either way, a steppe that could
+/// plough or herd.
+fn choose_subsistence(rng: &mut ChaCha8Rng, sk: &Skeleton) -> Subsistence {
+    match sk.cradle_kind {
         CradleKind::RiverFloodplain
         | CradleKind::RiverDelta
         | CradleKind::DesertOasis => Subsistence::IrrigatedAgriculture,
@@ -1621,216 +2009,181 @@ fn build_culture(
             }
         }
         CradleKind::RainforestClearing => Subsistence::ShiftingCultivation,
-    };
+    }
+}
 
-    let kinship = match subsistence {
-        Subsistence::IrrigatedAgriculture => {
-            if rng.random::<f32>() < 0.55 {
-                Kinship::TempleBureaucracy
-            } else {
-                Kinship::DivineMonarchy
-            }
-        }
-        Subsistence::TerraceFarming => {
-            if rng.random::<f32>() < 0.5 {
-                Kinship::ClanChiefdoms
-            } else {
-                Kinship::TempleBureaucracy
-            }
-        }
-        Subsistence::FishingAndSeafaring => {
-            if rng.random::<f32>() < 0.6 {
-                Kinship::MerchantOligarchy
-            } else {
-                Kinship::ClanChiefdoms
-            }
-        }
-        Subsistence::Pastoralism => {
-            if rng.random::<f32>() < 0.55 {
-                Kinship::ClanChiefdoms
-            } else {
-                Kinship::WarriorAristocracy
-            }
-        }
-        Subsistence::DrylandFarming => {
-            if rng.random::<f32>() < 0.5 {
-                Kinship::ClanChiefdoms
-            } else {
-                Kinship::Egalitarian
-            }
-        }
-        Subsistence::ShiftingCultivation => {
-            if rng.random::<f32>() < 0.6 {
-                Kinship::Egalitarian
-            } else {
-                Kinship::ClanChiefdoms
-            }
-        }
+/// What a realm values — its public temper, and the lens through which it treats
+/// its neighbours.
+///
+/// Weighted by how the realm eats, because a boat people and a herd people do not
+/// value the same things.
+fn choose_outlook(rng: &mut ChaCha8Rng, subsistence: Subsistence) -> Outlook {
+    let pool: &[Outlook] = match subsistence {
+        Subsistence::IrrigatedAgriculture => &[
+            Outlook::Agrarian,
+            Outlook::Ceremonial,
+            Outlook::Ceremonial,
+            Outlook::Scholarly,
+            Outlook::Agrarian,
+            Outlook::Artistic,
+        ],
+        Subsistence::DrylandFarming => &[
+            Outlook::Agrarian,
+            Outlook::Agrarian,
+            Outlook::Isolationist,
+            Outlook::Ceremonial,
+            Outlook::Artistic,
+            Outlook::Scholarly,
+        ],
+        Subsistence::Pastoralism => &[
+            Outlook::Martial,
+            Outlook::Martial,
+            Outlook::Mercantile,
+            Outlook::Isolationist,
+            Outlook::Ceremonial,
+        ],
+        Subsistence::FishingAndSeafaring => &[
+            Outlook::Mercantile,
+            Outlook::Mercantile,
+            Outlook::Artistic,
+            Outlook::Scholarly,
+            Outlook::Martial,
+        ],
+        Subsistence::ShiftingCultivation => &[
+            Outlook::Isolationist,
+            Outlook::Artistic,
+            Outlook::Ceremonial,
+            Outlook::Agrarian,
+        ],
+        Subsistence::TerraceFarming => &[
+            Outlook::Isolationist,
+            Outlook::Agrarian,
+            Outlook::Martial,
+            Outlook::Ceremonial,
+            Outlook::Scholarly,
+        ],
     };
+    *pool.choose(rng).unwrap()
+}
 
-    // Ethos: weighted by how the realm eats, because a boat people and a herd
-    // people do not value the same things.
-    let outlook = {
-        let pool: &[Outlook] = match subsistence {
-            Subsistence::IrrigatedAgriculture => &[
-                Outlook::Agrarian,
-                Outlook::Ceremonial,
-                Outlook::Ceremonial,
-                Outlook::Scholarly,
-                Outlook::Agrarian,
-                Outlook::Artistic,
-            ],
-            Subsistence::DrylandFarming => &[
-                Outlook::Agrarian,
-                Outlook::Agrarian,
-                Outlook::Isolationist,
-                Outlook::Ceremonial,
-                Outlook::Artistic,
-                Outlook::Scholarly,
-            ],
-            Subsistence::Pastoralism => &[
-                Outlook::Martial,
-                Outlook::Martial,
-                Outlook::Mercantile,
-                Outlook::Isolationist,
-                Outlook::Ceremonial,
-            ],
-            Subsistence::FishingAndSeafaring => &[
-                Outlook::Mercantile,
-                Outlook::Mercantile,
-                Outlook::Artistic,
-                Outlook::Scholarly,
-                Outlook::Martial,
-            ],
-            Subsistence::ShiftingCultivation => &[
-                Outlook::Isolationist,
-                Outlook::Artistic,
-                Outlook::Ceremonial,
-                Outlook::Agrarian,
-            ],
-            Subsistence::TerraceFarming => &[
-                Outlook::Isolationist,
-                Outlook::Agrarian,
-                Outlook::Martial,
-                Outlook::Ceremonial,
-                Outlook::Scholarly,
-            ],
+/// Choose how a realm is governed.
+///
+/// Complexity decides where the realm sits on the single government axis — a
+/// kinship band or a tribe has no state above it, a chiefdom ranks its lineages,
+/// and a state holds power through an apparatus. Above the state threshold the
+/// *kind* of state follows from how the realm eats and what it values: a river
+/// people under priests or a god-king, a boat people under its merchants, a herd
+/// people under a strongman, a temperate plough country under its landed elite.
+fn build_government(
+    rng: &mut ChaCha8Rng,
+    subsistence: Subsistence,
+    outlook: Outlook,
+    scale: ScaleClass,
+    complexity: f32,
+) -> Government {
+    if complexity < 0.06 {
+        return Government::Band;
+    }
+    if complexity < 0.16 {
+        return Government::Tribe;
+    }
+    if complexity < 0.30 {
+        return Government::Chiefdom;
+    }
+
+    // Above the state threshold the *kind* of state is a weighted choice: the
+    // economy fixes the candidates, and ethos and scope tilt the balance between
+    // them. Scope is a bias only — never a label.
+    let mut weights: Vec<(Government, f32)> = state_options(subsistence)
+        .iter()
+        .map(|&government| (government, 1.0f32))
+        .collect();
+    for (government, weight) in weights.iter_mut() {
+        // A broad, many-province realm leans on a single throne or a narrow
+        // clique; a compact one leans on councils and assemblies.
+        *weight *= match scale {
+            ScaleClass::Large => match government {
+                Government::DivineMonarchy | Government::Tyranny | Government::Oligarchy => 1.9,
+                _ => 0.7,
+            },
+            ScaleClass::Medium => 1.0,
+            ScaleClass::Small => match government {
+                Government::TheocraticRepublic
+                | Government::AristocraticRepublic
+                | Government::PlutocraticRepublic => 1.7,
+                _ => 0.7,
+            },
         };
-        *pool.choose(rng).unwrap()
-    };
+        // Public temper pulls the same way the economy does, but less hard.
+        *weight *= match outlook {
+            Outlook::Ceremonial => match government {
+                Government::DivineMonarchy | Government::TheocraticRepublic => 1.8,
+                _ => 0.8,
+            },
+            Outlook::Scholarly => match government {
+                Government::TheocraticRepublic | Government::AristocraticRepublic => 1.5,
+                _ => 0.9,
+            },
+            Outlook::Mercantile => match government {
+                Government::PlutocraticRepublic => 2.0,
+                _ => 0.85,
+            },
+            Outlook::Martial => match government {
+                Government::Tyranny | Government::Oligarchy => 1.8,
+                _ => 0.8,
+            },
+            Outlook::Agrarian => match government {
+                Government::AristocraticRepublic | Government::DivineMonarchy => 1.4,
+                _ => 0.95,
+            },
+            Outlook::Artistic => match government {
+                Government::AristocraticRepublic | Government::PlutocraticRepublic => 1.3,
+                _ => 0.95,
+            },
+            Outlook::Isolationist => match government {
+                Government::Oligarchy | Government::TheocraticRepublic => 1.5,
+                _ => 0.85,
+            },
+        };
+    }
+    weighted_government(rng, &weights)
+}
 
-    // Metal is a matter of what the ground offers: a realm whose province climbs
-    // into rock has ore within a week's walk and turns it up earlier.
-    let ore_in_reach = sk.seat_stats.elev_max_m >= 1_200.0;
-    let craft = match inherited {
-        Some(ancestor) if rng.random::<f32>() < 0.6 => ancestor.craft,
-        _ => match sk.era {
-            Era::FirstSettlements => {
-                if ore_in_reach && rng.random::<f32>() < 0.25 {
-                    CraftTier::NativeCopper
-                } else {
-                    CraftTier::StoneAndBone
-                }
-            }
-            Era::FirstCities => {
-                if ore_in_reach && rng.random::<f32>() < 0.5 {
-                    CraftTier::NativeCopper
-                } else {
-                    CraftTier::StoneAndBone
-                }
-            }
-            Era::CityStates => {
-                if ore_in_reach || rng.random::<f32>() < 0.5 {
-                    CraftTier::CopperAlloys
-                } else {
-                    CraftTier::NativeCopper
-                }
-            }
-            Era::Empires => {
-                if ore_in_reach && rng.random::<f32>() < 0.6 {
-                    CraftTier::SmeltedIron
-                } else {
-                    CraftTier::CopperAlloys
-                }
-            }
-        },
-    };
-
-    let literacy = match sk.era {
-        Era::FirstSettlements => Literacy::OralTradition,
-        Era::FirstCities => {
-            if rng.random::<f32>() < 0.55 {
-                Literacy::GlyphTallies
-            } else {
-                Literacy::OralTradition
-            }
+/// The state regimes a given economy can plausibly grow into.
+fn state_options(subsistence: Subsistence) -> &'static [Government] {
+    match subsistence {
+        Subsistence::IrrigatedAgriculture => {
+            &[Government::DivineMonarchy, Government::TheocraticRepublic]
         }
-        Era::CityStates => {
-            if rng.random::<f32>() < 0.7 {
-                Literacy::LogographicScript
-            } else {
-                Literacy::GlyphTallies
-            }
-        }
-        Era::Empires => {
-            if rng.random::<f32>() < 0.35 {
-                Literacy::AlphabeticScript
-            } else {
-                Literacy::LogographicScript
-            }
-        }
-    };
-
-    let architecture = match inherited {
-        Some(ancestor) if rng.random::<f32>() < 0.7 => ancestor.architecture,
-        _ => {
-            if subsistence == Subsistence::IrrigatedAgriculture
-                && kinship == Kinship::TempleBureaucracy
-            {
-                ARCHITECTURE_POOL[0]
-            } else {
-                *ARCHITECTURE_POOL.choose(rng).unwrap()
-            }
-        }
-    };
-
-    let art_count = rng.random_range(2..=3usize);
-    let mut arts: Vec<&'static str> = Vec::with_capacity(art_count);
-    while arts.len() < art_count {
-        let art = *ARTS_POOL.choose(rng).unwrap();
-        if !arts.contains(&art) {
-            arts.push(art);
+        Subsistence::FishingAndSeafaring => &[
+            Government::PlutocraticRepublic,
+            Government::AristocraticRepublic,
+        ],
+        Subsistence::Pastoralism => &[Government::Tyranny, Government::Oligarchy],
+        Subsistence::DrylandFarming | Subsistence::TerraceFarming => &[
+            Government::AristocraticRepublic,
+            Government::Oligarchy,
+            Government::DivineMonarchy,
+        ],
+        Subsistence::ShiftingCultivation => {
+            &[Government::TheocraticRepublic, Government::Oligarchy]
         }
     }
+}
 
-    let mut note = format!(
-        "{} Its cradle: {} — {}.",
-        subsistence.describe(),
-        sk.cradle_kind.label().to_lowercase(),
-        sk.cradle_kind.describe()
-    );
-    note.push_str(&format!(
-        " It is organised as {}, and its public temper is {} — it {}.",
-        kinship.label().to_lowercase(),
-        outlook.label().to_lowercase(),
-        outlook.disposition()
-    ));
-    if inherited.is_some() {
-        note.push_str(&format!(
-            " It shares its ancestral stock with the rest of the {family}, whose tongue, rites and craft it still echoes."
-        ));
+/// Pick one government from a weighted list, deterministically.
+fn weighted_government(rng: &mut ChaCha8Rng, options: &[(Government, f32)]) -> Government {
+    let total: f32 = options.iter().map(|(_, weight)| *weight).sum();
+    let mut roll = rng.random::<f32>() * total;
+    for &(government, weight) in options {
+        if roll < weight {
+            return government;
+        }
+        roll -= weight;
     }
-
-    Culture {
-        subsistence,
-        kinship,
-        outlook,
-        craft,
-        literacy,
-        architecture,
-        arts,
-        note,
-    }
+    options
+        .last()
+        .map_or(Government::Oligarchy, |(government, _)| *government)
 }
 
 /// Read a realm's faith off the same country its economy came from.
@@ -2142,3 +2495,131 @@ fn build_rise(
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::civilization::CIVILIZATION_COLORS;
+
+    const ECONOMIES: [Subsistence; 6] = [
+        Subsistence::IrrigatedAgriculture,
+        Subsistence::DrylandFarming,
+        Subsistence::Pastoralism,
+        Subsistence::FishingAndSeafaring,
+        Subsistence::ShiftingCultivation,
+        Subsistence::TerraceFarming,
+    ];
+
+    /// A realm above the state threshold is governed by a state, whatever its
+    /// economy, temper or shape.
+    #[test]
+    fn a_developed_realm_is_always_a_state() {
+        for subsistence in ECONOMIES {
+            for outlook in [
+                Outlook::Agrarian,
+                Outlook::Mercantile,
+                Outlook::Martial,
+                Outlook::Scholarly,
+                Outlook::Ceremonial,
+                Outlook::Artistic,
+                Outlook::Isolationist,
+            ] {
+                for scale in [ScaleClass::Small, ScaleClass::Medium, ScaleClass::Large] {
+                    let mut rng = ChaCha8Rng::seed_from_u64(7);
+                    for _ in 0..8 {
+                        let government =
+                            build_government(&mut rng, subsistence, outlook, scale, 0.55);
+                        assert!(
+                            government.is_state(),
+                            "{subsistence:?} / {outlook:?} / {scale:?} produced {government:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A realm below the thresholds has no state above its lineages.
+    #[test]
+    fn an_undeveloped_realm_has_no_state() {
+        let mut rng = ChaCha8Rng::seed_from_u64(7);
+        assert_eq!(
+            build_government(
+                &mut rng,
+                Subsistence::IrrigatedAgriculture,
+                Outlook::Agrarian,
+                ScaleClass::Large,
+                0.02,
+            ),
+            Government::Band
+        );
+        assert_eq!(
+            build_government(
+                &mut rng,
+                Subsistence::IrrigatedAgriculture,
+                Outlook::Agrarian,
+                ScaleClass::Large,
+                0.20,
+            ),
+            Government::Chiefdom
+        );
+    }
+
+    /// Neighbouring realms never wear the same colour, and the assignment is
+    /// order-stable.
+    #[test]
+    fn neighbours_never_share_a_colour() {
+        let mut adjacency: BTreeMap<u16, Vec<u16>> = BTreeMap::new();
+        // A ring of six realms, each touching its two neighbours.
+        for id in 1..=6u16 {
+            let left = if id == 1 { 6 } else { id - 1 };
+            let right = if id == 6 { 1 } else { id + 1 };
+            adjacency.insert(id, vec![left.min(right), left.max(right)]);
+        }
+        let colors = assign_colors(6, &adjacency);
+        for (id, neighbours) in &adjacency {
+            for &neighbour in neighbours {
+                assert_ne!(
+                    colors[*id as usize - 1], colors[neighbour as usize - 1],
+                    "realms {id} and {neighbour} share a colour"
+                );
+            }
+        }
+        assert_eq!(assign_colors(6, &adjacency), colors);
+    }
+
+    /// A clustered world needs more tones than the ten hand-picked anchors, and
+    /// the palette keeps producing distinguishable ones.
+    #[test]
+    fn the_palette_extends_past_the_anchors() {
+        let anchors = CIVILIZATION_COLORS.len();
+        let colors: Vec<[u8; 3]> = (0..32).map(crate::civilization::civilization_color).collect();
+        assert!(colors[..anchors]
+            .iter()
+            .eq(CIVILIZATION_COLORS.iter()));
+        let mut distinct = colors.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert!(
+            distinct.len() >= 30,
+            "only {} distinct colours in a 32-realm palette",
+            distinct.len()
+        );
+    }
+
+    /// The same seed draws the same government — the stage stays a pure function.
+    #[test]
+    fn government_is_deterministic() {
+        let draw = |seed: u64| {
+            let mut rng = ChaCha8Rng::seed_from_u64(seed);
+            build_government(
+                &mut rng,
+                Subsistence::FishingAndSeafaring,
+                Outlook::Mercantile,
+                ScaleClass::Small,
+                0.8,
+            )
+        };
+        assert_eq!(draw(99), draw(99));
+    }
+}

@@ -30,6 +30,7 @@
 //! wide seeded draw biased by how kind the planet turned out to be, and the epoch
 //! is only ever a convention placed partway along a timeline without ends.
 
+use crate::civilization::age::Age;
 use crate::core::fmt::thousands;
 use crate::core::polar;
 use rand::{Rng, RngExt};
@@ -80,6 +81,11 @@ pub struct Timeline {
     /// The year the atlas portrays, in the internal frame.
     pub atlas_year: i32,
     pub epoch: Epoch,
+    /// The age the world stands in at [`Timeline::atlas_year`]. A property of the
+    /// world and its date, never of a single realm — two contemporaries, a river
+    /// monarchy and a forest chiefdom, share it. See
+    /// [`crate::civilization::age`].
+    pub age: Age,
 }
 
 impl Timeline {
@@ -89,6 +95,7 @@ impl Timeline {
         Self {
             prehistory_years: 0,
             atlas_year: 0,
+            age: Age::Cultivation,
             epoch: Epoch {
                 absolute_year: 0,
                 site_province: 0,
@@ -366,6 +373,7 @@ mod tests {
         let timeline = Timeline {
             prehistory_years: 40_000,
             atlas_year: 4_000,
+            age: Age::CopperAndAlloys,
             epoch: Epoch {
                 absolute_year: 2_400,
                 site_province: 7,

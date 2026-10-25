@@ -4,3 +4,5 @@ world_*.bin
 
 # Release archives: built locally, uploaded to GitHub Releases, never committed
 project-genesis-v*-linux-x86_64.tar.gz
+civilization_rework.md
+log.txt
