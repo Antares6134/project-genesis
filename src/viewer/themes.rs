@@ -30,15 +30,33 @@ fn lerp_rgb(a: [u8; 3], b: [u8; 3], t: f32) -> [u8; 3] {
     ]
 }
 
+/// A legend swatch: the colour square that heads a legend row.
+///
+/// Its size is derived from the body-text height rather than fixed in pixels, so
+/// the swatch keeps its proportion to the row it labels whatever the type scale
+/// is set to — the atlas's `configure_style` therefore never has to be kept in
+/// step with a hand-tuned swatch size.
+pub fn swatch(ui: &mut egui::Ui, color: [u8; 3]) {
+    let height = ui.text_style_height(&egui::TextStyle::Body);
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(height * 1.5, height * 0.85),
+        egui::Sense::hover(),
+    );
+    ui.painter()
+        .rect_filled(rect, 2.0, Color32::from_rgb(color[0], color[1], color[2]));
+}
+
 /// One legend line: a colour swatch, a name and a short qualifier.
 ///
-/// Every thematic legend is drawn with this helper, which is what keeps the
-/// Climate, Temperature and Terrain legends looking like the Topographic one.
+/// Every legend in the atlas is drawn with this helper — the hypsometric scale
+/// included — which is what keeps the Topographic, Climate, Temperature and
+/// Terrain legends looking like four sheets of the same book.
+///
+/// The type is the atlas's caption size: a legend row is read at a glance, and
+/// it must never be the thing the reader has to lean in for.
 pub fn legend_row(ui: &mut egui::Ui, color: [u8; 3], label: &str, note: &str) {
     ui.horizontal(|ui| {
-        let (swatch, _) = ui.allocate_exact_size(egui::vec2(16.0, 11.0), egui::Sense::hover());
-        ui.painter()
-            .rect_filled(swatch, 2.0, Color32::from_rgb(color[0], color[1], color[2]));
+        swatch(ui, color);
         ui.label(egui::RichText::new(label).small());
         if !note.is_empty() {
             ui.label(egui::RichText::new(note).small().weak());

@@ -1,6 +1,8 @@
 mod themes;
 
-use eframe::egui::{self, Color32, ColorImage, Stroke, TextureHandle, TextureOptions};
+use eframe::egui::{
+    self, Color32, ColorImage, FontFamily, FontId, Stroke, TextStyle, TextureHandle, TextureOptions,
+};
 use noise::{NoiseFn, OpenSimplex};
 use rayon::prelude::*;
 use crate::civilization::epoch::ce_label;
@@ -25,6 +27,110 @@ const MAX_ZOOM: f32 = 8.0;
 const CIV_FOCUS_ZOOM: f32 = 0.55;
 /// Zoom used when flying to one of the world's relief extremes.
 const RELIEF_FOCUS_ZOOM: f32 = 0.55;
+
+// ─── TYPOGRAPHY ──────────────────────────────────────────────────────────────
+//
+// egui ships a type scale tuned for a 13 pt interface, with `TextStyle::Small`
+// at 9 pt. The atlas marked every legend note, every caption and every secondary
+// line of a hover card `.small()`, so the most informative text on screen was
+// also the least readable — 9 pt is a size to lose in, not to read.
+//
+// The atlas therefore installs a scale of its own: one step up throughout, with
+// a hard floor under the smallest size, plus the padding, hit-targets and tooltip
+// metrics that larger type needs. Every piece of text in this file names one of
+// the four sizes below, so the hierarchy can be re-tuned in a single place and
+// can never quietly fall back to egui's defaults.
+
+/// Captions: provenance, a qualifier, the note beside a legend swatch. The
+/// atlas's smallest size — and a size meant to be read, not squinted at.
+const TEXT_SMALL: f32 = 13.0;
+/// The atlas's reading size: readouts, legend rows, every line of a hover card.
+const TEXT_BODY: f32 = 15.0;
+/// The title of a hover card. Smaller than a panel heading, so a card reads as a
+/// card and never as a second panel lying over the map.
+const TEXT_CARD_TITLE: f32 = 17.0;
+/// The title of a panel, and of the atlas window itself.
+const TEXT_HEADING: f32 = 20.0;
+/// The width a hover card may claim: wide enough for a full sentence at
+/// [`TEXT_BODY`], narrow enough to keep the map underneath in view.
+const CARD_WIDTH: f32 = 430.0;
+
+/// Install the atlas's type scale, spacing and metrics on one [`egui::Style`].
+///
+/// This is pushed to *both* themes (see `MapViewer::install_style`), because
+/// egui builds tooltips and popups from the context's style rather than from the
+/// ui that opened them: a hover card has to come out at exactly these sizes
+/// whether it belongs to a panel or to the canvas.
+pub fn configure_style(style: &mut egui::Style) {
+    style.text_styles = [
+        (
+            TextStyle::Small,
+            FontId::new(TEXT_SMALL, FontFamily::Proportional),
+        ),
+        (
+            TextStyle::Body,
+            FontId::new(TEXT_BODY, FontFamily::Proportional),
+        ),
+        (
+            TextStyle::Button,
+            FontId::new(TEXT_BODY, FontFamily::Proportional),
+        ),
+        (
+            TextStyle::Monospace,
+            FontId::new(TEXT_SMALL + 1.0, FontFamily::Monospace),
+        ),
+        (
+            TextStyle::Heading,
+            FontId::new(TEXT_HEADING, FontFamily::Proportional),
+        ),
+    ]
+    .into();
+
+    let spacing = &mut style.spacing;
+    spacing.item_spacing = egui::vec2(9.0, 6.0);
+    spacing.button_padding = egui::vec2(10.0, 5.0);
+    spacing.interact_size = egui::vec2(52.0, 24.0);
+    spacing.indent = 22.0;
+    spacing.slider_width = 120.0;
+    // A tooltip is read, not skimmed, and it carries whole sentences: give the
+    // text room inside its frame, and a width a sentence can breathe in.
+    spacing.window_margin = egui::Margin::same(10);
+    spacing.menu_margin = egui::Margin::same(10);
+    spacing.tooltip_width = CARD_WIDTH + 40.0;
+}
+
+/// The atlas's panel frame: egui's stock panel frame with the inner margin the
+/// larger type needs (the stock one is sized for a 13 pt interface).
+fn atlas_panel_frame(style: &egui::Style) -> egui::Frame {
+    egui::Frame::side_top_panel(style).inner_margin(egui::Margin::symmetric(12, 5))
+}
+
+/// A panel title: the name of a legend panel, or of the atlas window itself.
+fn panel_title(ui: &mut egui::Ui, text: impl Into<String>) {
+    ui.label(egui::RichText::new(text.into()).size(TEXT_HEADING).strong());
+}
+
+/// A card title: the name of whatever a hover card, or a legend entry, describes.
+fn card_title(ui: &mut egui::Ui, text: impl Into<String>) {
+    ui.label(
+        egui::RichText::new(text.into())
+            .size(TEXT_CARD_TITLE)
+            .strong(),
+    );
+}
+
+/// A caption: provenance, a qualifier, a sentence of context.
+fn caption(ui: &mut egui::Ui, text: impl Into<String>) {
+    ui.label(egui::RichText::new(text.into()).small().weak());
+}
+
+/// One line of the status footer.
+///
+/// Wraps rather than running off the edge: a status bar that hides the last
+/// figure of a census is worse than one that takes two lines to show it.
+fn status_line(ui: &mut egui::Ui, text: impl Into<String>) {
+    ui.add(egui::Label::new(egui::RichText::new(text.into()).small()).wrap());
+}
 
 /// What political domain the atlas is currently portraying.
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -105,6 +211,9 @@ pub struct MapViewer {
     marker: Option<(f32, f32)>,
     /// The realm whose entry in the legend was last clicked.
     selected_civ: Option<u32>,
+    /// Whether the atlas's type scale has been installed on this frame's style.
+    /// A style change makes egui rebuild its font atlas, so it is done once.
+    style_installed: bool,
 }
 
 /// The world's relief extremes, in metres, together with where they are.
@@ -409,32 +518,26 @@ fn civ_border_shade(
 /// people it holds. Deliberately a card, not a monograph — the full measurements
 /// stay in the console report (`--civs`), where they belong.
 fn civilization_dossier(ui: &mut egui::Ui, civ: &Civilization, world: &CivilizationWorld) {
-    // A hover card has to stay a card: at 360 px wide it never swallows the map.
-    ui.set_max_width(360.0);
+    // A hover card has to stay a card: at 430 px it never swallows the map.
+    ui.set_max_width(CARD_WIDTH);
 
     ui.horizontal(|ui| {
-        let (swatch, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-        ui.painter().rect_filled(
-            swatch,
-            2.0,
-            Color32::from_rgb(civ.color[0], civ.color[1], civ.color[2]),
-        );
-        ui.heading(civ.name.as_str());
+        themes::swatch(ui, civ.color);
+        card_title(ui, civ.name.as_str());
     });
-    ui.label(
-        egui::RichText::new(format!(
+    caption(
+        ui,
+        format!(
             "{} · founded {} · {}",
             civ.rise.kind.label(),
             ce_label(civ.founding_year),
             civ.culture.government.label()
-        ))
-        .small()
-        .weak(),
+        ),
     );
-    ui.label(egui::RichText::new(civ.year_label()).small().weak());
+    caption(ui, civ.year_label());
 
     ui.separator();
-    ui.label(egui::RichText::new(civ.cradle_kind.describe()).small());
+    caption(ui, civ.cradle_kind.describe());
     for highlight in civ.rise.highlights.iter().take(3) {
         ui.label(format!("• {highlight}"));
     }
@@ -448,18 +551,18 @@ fn civilization_dossier(ui: &mut egui::Ui, civ: &Civilization, world: &Civilizat
         ))
         .strong(),
     );
-    ui.label(
-        egui::RichText::new(if civ.culture.government.is_state() {
+    caption(
+        ui,
+        if civ.culture.government.is_state() {
             "A state"
         } else {
             "A pre-state society"
-        })
-        .small(),
+        },
     );
 
     ui.add_space(4.0);
     ui.label(egui::RichText::new(civ.faith.kind.label()).strong());
-    ui.label(egui::RichText::new(civ.faith.kind.creed()).small());
+    caption(ui, civ.faith.kind.creed());
 
     ui.separator();
     ui.label(format!(
@@ -469,22 +572,14 @@ fn civilization_dossier(ui: &mut egui::Ui, civ: &Civilization, world: &Civilizat
         thousands(civ.area_km2)
     ));
     if civ.contacts.is_empty() {
-        ui.label(
-            egui::RichText::new("No neighbour within reach.")
-                .small()
-                .weak(),
-        );
+        caption(ui, "No neighbour within reach.");
     } else {
         let neighbours: Vec<&str> = civ
             .contacts
             .iter()
             .map(|contact| world.name_of(contact.other))
             .collect();
-        ui.label(
-            egui::RichText::new(format!("Neighbours: {}", neighbours.join(", ")))
-                .small()
-                .weak(),
-        );
+        caption(ui, format!("Neighbours: {}", neighbours.join(", ")));
     }
 }
 
@@ -523,7 +618,25 @@ impl MapViewer {
             pending_focus: None,
             marker: None,
             selected_civ: None,
+            style_installed: false,
         }
+    }
+
+    /// Install the atlas's type scale, once, on the context's styles — and on
+    /// this frame's root ui, which egui built from the old style before we were
+    /// called.
+    ///
+    /// Both are needed: egui builds tooltips, menus and every other popup from
+    /// the *context's* style rather than from the ui that opened them, while the
+    /// panels of this frame inherit the style of the root ui. Without the second
+    /// half, the atlas's first frame — and every hover card, forever — would come
+    /// out at egui's defaults while the panels came out at ours.
+    fn install_style(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        ctx.all_styles_mut(configure_style);
+        let style = ctx.global_style();
+        *ui.style_mut() = style.as_ref().clone();
+        self.style_installed = true;
     }
 
     /// Fit the whole world into `rect`, centred, with a small margin.
@@ -1091,6 +1204,13 @@ impl MapViewer {
 
 impl eframe::App for MapViewer {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if !self.style_installed {
+            self.install_style(ui);
+        }
+        // Every panel wears the atlas's own frame: the stock one is padded for a
+        // 13 pt interface, and this atlas reads at 15 pt.
+        let panel_frame = atlas_panel_frame(ui.style());
+
         let mut visual_changed = false;
         // Panel clicks cannot move the map directly: the canvas rectangle for
         // this frame is only known once the panels have been laid out. Requests
@@ -1102,9 +1222,11 @@ impl eframe::App for MapViewer {
         // ── TOP CONTROLS BAR ──────────────────────────────────────────────────
         // Two rows, because the atlas now has nine map modes: what it shows, then
         // how it shows it. Both rows wrap, so a narrow window never clips a button.
-        egui::Panel::top("top_controls").show(ui, |ui| {
+        egui::Panel::top("top_controls")
+            .frame(panel_frame.clone())
+            .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.heading("🌍 Atlas Viewer");
+                panel_title(ui, "🌍 Atlas Viewer");
                 ui.separator();
 
                 // ── Map scope: what the atlas portrays ────────────────────────
@@ -1201,34 +1323,41 @@ impl eframe::App for MapViewer {
         });
 
         // ── BOTTOM STATUS BAR ─────────────────────────────────────────────────
-        egui::Panel::bottom("bottom_status").show(ui, |ui| {
-            ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label(format!(
-                        "🏛 LAND  — Continents: {} | Superregions: {} | Regions: {} | Areas: {} | Provinces: {}",
+        egui::Panel::bottom("bottom_status")
+            .frame(panel_frame.clone())
+            .show(ui, |ui| {
+                // Three lines of plain figures, each one allowed to wrap: the
+                // footer is a status bar, not a place where a narrow window
+                // quietly loses the right-hand half of the world's census.
+                status_line(
+                    ui,
+                    format!(
+                        "🏛 LAND — Continents: {} · Superregions: {} · Regions: {} · Areas: {} · Provinces: {}",
                         self.hierarchy.total_continents,
                         self.hierarchy.total_superregions,
                         self.hierarchy.total_regions,
                         self.hierarchy.total_areas,
                         self.hierarchy.total_provinces
-                    ));
-                });
-                ui.horizontal(|ui| {
-                    ui.label(format!(
-                        "🌊 OCEAN — Basins: {} | Superregions: {} | Regions: {} | Areas: {} | Provinces: {}",
+                    ),
+                );
+                status_line(
+                    ui,
+                    format!(
+                        "🌊 OCEAN — Basins: {} · Superregions: {} · Regions: {} · Areas: {} · Provinces: {}",
                         self.ocean_hierarchy.total_continents,
                         self.ocean_hierarchy.total_superregions,
                         self.ocean_hierarchy.total_regions,
                         self.ocean_hierarchy.total_areas,
                         self.ocean_hierarchy.total_provinces
-                    ));
-                });
+                    ),
+                );
                 // ── The dawn of history ───────────────────────────────────────
                 if !self.civilizations.is_empty() {
                     let world = &self.civilizations;
-                    ui.horizontal(|ui| {
-                        ui.label(format!(
-                            "🏺 CIVILIZATIONS — {} | Atlas date: {} · {} | {} realms | {} civilized provinces | population {} | {:.1} people/km²",
+                    status_line(
+                        ui,
+                        format!(
+                            "🏺 CIVILIZATIONS — {} · Atlas date: {} · {} · {} realms · {} civilized provinces · population {} · {:.1} people/km²",
                             world.epoch_label(),
                             world.map_year_label(),
                             world.age_label(),
@@ -1236,11 +1365,10 @@ impl eframe::App for MapViewer {
                             world.civilized_provinces,
                             thousands_u64(world.total_population),
                             world.mean_density_per_km2(),
-                        ));
-                    });
+                        ),
+                    );
                 }
             });
-        });
 
         // ── HYPSOMETRIC LEGEND (Topographic scope only) ───────────────────────
         // The survey sheet is only readable with its scale at hand, so the
@@ -1255,15 +1383,12 @@ impl eframe::App for MapViewer {
             let trench_where = lat_lon_label(trench_lat, trench_lon);
 
             egui::Panel::right("hypsometric_legend")
+                .frame(panel_frame.clone())
                 .resizable(false)
-                .exact_size(286.0)
+                .exact_size(330.0)
                 .show(ui, |ui| {
-                    ui.heading("⛰ Topographic Scale");
-                    ui.label(
-                        egui::RichText::new("Tint = elevation above / depth below the sea surface.")
-                            .small()
-                            .weak(),
-                    );
+                    panel_title(ui, "⛰ Topographic Scale");
+                    caption(ui, "Tint = elevation above / depth below the sea surface.");
                     ui.separator();
 
                     let peak_label = format!("🗻 Highest peak   +{:.0} m", relief.peak_metres);
@@ -1277,7 +1402,7 @@ impl eframe::App for MapViewer {
                         let zoom = RELIEF_FOCUS_ZOOM.max(self.zoom);
                         focus_request = Some((relief.peak_x, relief.peak_y, zoom));
                     }
-                    ui.label(egui::RichText::new(peak_where).small().weak());
+                    caption(ui, peak_where);
 
                     let trench_label =
                         format!("🌊 Deepest trench  {:.0} m", relief.trench_metres);
@@ -1291,41 +1416,26 @@ impl eframe::App for MapViewer {
                         let zoom = RELIEF_FOCUS_ZOOM.max(self.zoom);
                         focus_request = Some((relief.trench_x, relief.trench_y, zoom));
                     }
-                    ui.label(egui::RichText::new(trench_where).small().weak());
+                    caption(ui, trench_where);
 
                     ui.label(format!(
                         "🌍 Surface: {:.0}% ocean",
                         relief.ocean_share * 100.0
                     ));
-                    ui.label(
-                        egui::RichText::new("Click a figure above to centre the map on it.")
-                            .small()
-                            .weak(),
-                    );
+                    caption(ui, "Click a figure above to centre the map on it.");
                     ui.separator();
 
                     // The band list is the only part that can overflow a short
-                    // window, so it is the part that scrolls.
+                    // window, so it is the part that scrolls. It wears the same
+                    // row as every other legend: swatch, band name, metre range.
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         for band in (0..HYPSOMETRIC_COLORS.len()).rev() {
-                            let rgb = HYPSOMETRIC_COLORS[band];
-                            ui.horizontal(|ui| {
-                                let (swatch, _) = ui.allocate_exact_size(
-                                    egui::vec2(16.0, 11.0),
-                                    egui::Sense::hover(),
-                                );
-                                ui.painter().rect_filled(
-                                    swatch,
-                                    2.0,
-                                    Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
-                                );
-                                ui.label(
-                                    egui::RichText::new(hypsometric_range_label(band)).small(),
-                                );
-                                ui.label(
-                                    egui::RichText::new(HYPSOMETRIC_NAMES[band]).small().weak(),
-                                );
-                            });
+                            themes::legend_row(
+                                ui,
+                                HYPSOMETRIC_COLORS[band],
+                                HYPSOMETRIC_NAMES[band],
+                                &hypsometric_range_label(band),
+                            );
                         }
                     });
                 });
@@ -1334,16 +1444,14 @@ impl eframe::App for MapViewer {
         // ── CLIMATE LEGEND (Climate scope only) ───────────────────────────────
         if self.scope == MapScope::Climate {
             egui::Panel::right("climate_legend")
+                .frame(panel_frame.clone())
                 .resizable(false)
-                .exact_size(300.0)
+                .exact_size(330.0)
                 .show(ui, |ui| {
-                    ui.heading("🌦 Climate Zones");
-                    ui.label(
-                        egui::RichText::new(
-                            "Land is classified by mean temperature, annual rainfall and altitude; the sea by its surface temperature.",
-                        )
-                        .small()
-                        .weak(),
+                    panel_title(ui, "🌦 Climate Zones");
+                    caption(
+                        ui,
+                        "Land is classified by mean temperature, annual rainfall and altitude; the sea by its surface temperature.",
                     );
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1373,16 +1481,14 @@ impl eframe::App for MapViewer {
         // ── TEMPERATURE LEGEND (Temperature scope only) ───────────────────────
         if self.scope == MapScope::Temperature {
             egui::Panel::right("temperature_legend")
+                .frame(panel_frame.clone())
                 .resizable(false)
-                .exact_size(300.0)
+                .exact_size(330.0)
                 .show(ui, |ui| {
-                    ui.heading("🌡 Temperature");
-                    ui.label(
-                        egui::RichText::new(
-                            "Mean annual surface temperature: land station means, sea-surface means over the ocean.",
-                        )
-                        .small()
-                        .weak(),
+                    panel_title(ui, "🌡 Temperature");
+                    caption(
+                        ui,
+                        "Mean annual surface temperature: land station means, sea-surface means over the ocean.",
                     );
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1396,27 +1502,21 @@ impl eframe::App for MapViewer {
                         }
                     });
                     ui.separator();
-                    ui.label(
-                        egui::RichText::new("A thin dark line marks every 5 °C isotherm.")
-                            .small()
-                            .weak(),
-                    );
+                    caption(ui, "A thin dark line marks every 5 °C isotherm.");
                 });
         }
 
         // ── TERRAIN LEGEND (Terrain scope only) ───────────────────────────────
         if self.scope == MapScope::Terrain {
             egui::Panel::right("terrain_legend")
+                .frame(panel_frame.clone())
                 .resizable(false)
-                .exact_size(300.0)
+                .exact_size(330.0)
                 .show(ui, |ui| {
-                    ui.heading("🪨 Terrain Types");
-                    ui.label(
-                        egui::RichText::new(
-                            "Landform bands from the vertical datum; the ocean floor is classified by depth.",
-                        )
-                        .small()
-                        .weak(),
+                    panel_title(ui, "🪨 Terrain Types");
+                    caption(
+                        ui,
+                        "Landform bands from the vertical datum; the ocean floor is classified by depth.",
                     );
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1439,29 +1539,23 @@ impl eframe::App for MapViewer {
         // entry is a button: clicking it flies the map to its cradle.
         if self.scope.is_civilizations() {
             egui::Panel::right("civilizations_legend")
+                .frame(panel_frame.clone())
                 .resizable(false)
-                .exact_size(300.0)
+                .exact_size(350.0)
                 .show(ui, |ui| {
-                    ui.heading("🏺 The Dawn of Civilization");
+                    panel_title(ui, "🏺 The Dawn of Civilization");
                     let world = &self.civilizations;
                     if world.is_empty() {
                         ui.label("No civilization rose on this world.");
-                        ui.label(
-                            egui::RichText::new(
-                                "The history stage only runs when it is asked for: pass --civs (it is on automatically with --viewer and --plates).",
-                            )
-                            .small()
-                            .weak(),
+                        caption(
+                            ui,
+                            "The history stage only runs when it is asked for: pass --civs (it is on automatically with --viewer and --plates).",
                         );
                         return;
                     }
 
                     ui.label(egui::RichText::new(world.epoch_label()).small());
-                    ui.label(
-                        egui::RichText::new(world.timeline.prehistory_label())
-                            .small()
-                            .weak(),
-                    );
+                    caption(ui, world.timeline.prehistory_label());
                     ui.label(
                         egui::RichText::new(format!(
                             "Atlas date: {} · {}",
@@ -1502,26 +1596,14 @@ impl eframe::App for MapViewer {
                         "Mean density {:.1} people/km²",
                         world.mean_density_per_km2()
                     ));
-                    ui.label(
-                        egui::RichText::new("Click a realm to fly to its cradle.")
-                            .small()
-                            .weak(),
-                    );
+                    caption(ui, "Click a realm to fly to its cradle.");
                     ui.separator();
 
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         for (index, civ) in world.civilizations.iter().enumerate() {
                             let id = index as u32 + 1;
                             ui.horizontal(|ui| {
-                                let (swatch, _) = ui.allocate_exact_size(
-                                    egui::vec2(16.0, 12.0),
-                                    egui::Sense::hover(),
-                                );
-                                ui.painter().rect_filled(
-                                    swatch,
-                                    2.0,
-                                    Color32::from_rgb(civ.color[0], civ.color[1], civ.color[2]),
-                                );
+                                themes::swatch(ui, civ.color);
                                 let selected = self.selected_civ == Some(id);
                                 if ui
                                     .selectable_label(
@@ -1548,14 +1630,13 @@ impl eframe::App for MapViewer {
                                 ))
                                 .small(),
                             );
-                            ui.label(
-                                egui::RichText::new(format!(
+                            caption(
+                                ui,
+                                format!(
                                     "{} provinces · {} people",
                                     civ.provinces.len(),
                                     thousands_u64(civ.population),
-                                ))
-                                .small()
-                                .weak(),
+                                ),
                             );
                             ui.separator();
                         }
@@ -1703,32 +1784,29 @@ impl eframe::App for MapViewer {
                                 .expect("owner id always indexes a civilization");
                             civilization_dossier(ui, civ, &self.civilizations);
                         } else if lake {
-                            ui.heading("💧 Inland Freshwater Lake");
+                            card_title(ui, "💧 Inland Freshwater Lake");
                             ui.label("No realm claims the water itself.");
                             ui.separator();
                             ui.label(format!("Lake Surface: {:.0} m", relief::altitude_metres(elev)));
                             ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
                         } else if is_ocean {
-                            ui.heading("🌊 Uncivilized Sea");
+                            card_title(ui, "🌊 Uncivilized Sea");
                             ui.label(format!("Depth: {:.0} m", relief::depth_metres(elev)));
                             ui.separator();
                             ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
                         } else if is_waste {
-                            ui.heading("🏔️ Wasteland Beyond History");
+                            card_title(ui, "🏔️ Wasteland Beyond History");
                             ui.strong("Impassable or unclaimed wilderness");
                             ui.separator();
                             ui.label(format!("Environment: {}", get_biome_name(display_temp, precip, altitude)));
                             ui.label(format!("Elevation: {:.0} m", relief::altitude_metres(elev)));
                             ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
                         } else {
-                            ui.heading("🌾 Unclaimed Land");
+                            card_title(ui, "🌾 Unclaimed Land");
                             ui.strong("No civilization has risen here");
-                            ui.label(
-                                egui::RichText::new(
-                                    "Fertile enough to live on, but never the best ground in reach: nothing here outperformed the cradles.",
-                                )
-                                .small()
-                                .weak(),
+                            caption(
+                                ui,
+                                "Fertile enough to live on, but never the best ground in reach: nothing here outperformed the cradles.",
                             );
                             ui.separator();
                             ui.label(format!("Environment: {}", get_biome_name(display_temp, precip, altitude)));
@@ -1751,7 +1829,7 @@ impl eframe::App for MapViewer {
                             get_biome_name(display_temp, precip, altitude)
                         };
 
-                        ui.heading(format!("⛰ {}", surface));
+                        card_title(ui, format!("⛰ {}", surface));
                         ui.separator();
                         if elev > sea_level {
                             ui.label(format!("Elevation: {:.0} m above sea level", relief::altitude_metres(elev)));
@@ -1780,10 +1858,10 @@ impl eframe::App for MapViewer {
                         // ── Climate readout ────────────────────────────
                         let lake = *self.cache.is_lake.get(map_x, map_y);
                         if lake {
-                            ui.heading("🌦 Inland Lake");
+                            card_title(ui, "🌦 Inland Lake");
                             ui.label("Fresh water, read with the climate of its shores.");
                         } else if is_ocean {
-                            ui.heading(format!("🌦 {}", themes::ocean_climate_label(temp)));
+                            card_title(ui, format!("🌦 {}", themes::ocean_climate_label(temp)));
                             ui.separator();
                             ui.label(format!("Sea-surface temperature: {:.1} °C", temp));
                             if frozen_sea {
@@ -1791,8 +1869,8 @@ impl eframe::App for MapViewer {
                             }
                         } else {
                             let zone = ClimateZone::classify(display_temp, precip, altitude);
-                            ui.heading(format!("🌦 {}", zone.label()));
-                            ui.label(egui::RichText::new(zone.describe()).small().weak());
+                            card_title(ui, format!("🌦 {}", zone.label()));
+                            caption(ui, zone.describe());
                             ui.separator();
                             ui.label(format!("Mean temperature: {:.1} °C", temp));
                             ui.label(format!(
@@ -1823,8 +1901,8 @@ impl eframe::App for MapViewer {
                         } else {
                             "Land surface"
                         };
-                        ui.heading(format!("🌡 {:.1} °C", temp));
-                        ui.label(egui::RichText::new(surface).small().weak());
+                        card_title(ui, format!("🌡 {:.1} °C", temp));
+                        caption(ui, surface);
                         ui.separator();
                         ui.label(format!(
                             "Isotherm band: {}",
@@ -1846,7 +1924,7 @@ impl eframe::App for MapViewer {
                         let (gx, gy) =
                             self.cache.heightmap.gradient(map_x as f32, map_y as f32);
                         let slope = (gx * gx + gy * gy).sqrt();
-                        ui.heading(format!("🪨 {}", class.label()));
+                        card_title(ui, format!("🪨 {}", class.label()));
                         ui.separator();
                         if elev > sea_level {
                             ui.label(format!(
@@ -1880,7 +1958,7 @@ impl eframe::App for MapViewer {
                             get_biome_name(display_temp, precip, altitude)
                         };
 
-                        ui.heading(format!("🌍 {}", biome_title));
+                        card_title(ui, format!("🌍 {}", biome_title));
                         ui.separator();
                         if elev > sea_level {
                             ui.label(format!("Elevation: {:.0} m", relief::altitude_metres(elev)));
@@ -1901,10 +1979,10 @@ impl eframe::App for MapViewer {
                         // ── Hydro-political marine realm ───────────────
                         let node = &self.ocean_hierarchy.provinces[ocean_id as usize];
                         if frozen_sea {
-                            ui.heading(format!("🧊 Ocean Province #{}", ocean_id));
+                            card_title(ui, format!("🧊 Ocean Province #{}", ocean_id));
                             ui.strong(format!("{} · Impassable Polar Wasteland", frozen_sea_name(display_temp)));
                         } else {
-                            ui.heading(format!("🌊 Ocean Province #{}", ocean_id));
+                            card_title(ui, format!("🌊 Ocean Province #{}", ocean_id));
                         }
                         ui.separator();
                         ui.horizontal(|ui| { ui.label("Area:");        ui.strong(format!("#{}", node.area_id)); });
@@ -1919,10 +1997,10 @@ impl eframe::App for MapViewer {
                         ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
                     } else if is_waste {
                         if display_temp < PACK_ICE_TEMP {
-                            ui.heading("🧊 Polar Ice Wasteland");
+                            card_title(ui, "🧊 Polar Ice Wasteland");
                             ui.strong("Permanent Ice Sheet / Impassable Wilderness");
                         } else {
-                            ui.heading("🏔️ Wasteland");
+                            card_title(ui, "🏔️ Wasteland");
                             ui.strong("Impassable / Uninhabited Wilderness");
                         }
                         ui.separator();
@@ -1933,7 +2011,7 @@ impl eframe::App for MapViewer {
                         ui.separator();
                         ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
                     } else if *self.cache.is_lake.get(map_x, map_y) {
-                        ui.heading("💧 Inland Freshwater Lake");
+                        card_title(ui, "💧 Inland Freshwater Lake");
                         ui.separator();
                         ui.label(format!("Lake Surface: {:.0} m", relief::altitude_metres(elev)));
                         ui.label(format!("Temperature: {:.1} °C", temp));
@@ -1943,7 +2021,7 @@ impl eframe::App for MapViewer {
                     } else if id != 0 && (id as usize) < self.hierarchy.provinces.len() {
                         let node = &self.hierarchy.provinces[id as usize];
 
-                        ui.heading(format!("📍 Province #{}", id));
+                        card_title(ui, format!("📍 Province #{}", id));
                         ui.separator();
                         ui.horizontal(|ui| {
                             ui.label("Area:");
@@ -2007,12 +2085,178 @@ impl eframe::App for MapViewer {
                         ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
                         ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
                     } else {
-                        ui.heading("🌊 Ocean");
+                        card_title(ui, "🌊 Ocean");
                         ui.label(format!("Depth: {:.0} m", relief::depth_metres(elev)));
                         ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
                     }
                 });
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The size the atlas draws a given style in.
+    fn size_of(style: &egui::Style, text_style: TextStyle) -> f32 {
+        style
+            .text_styles
+            .get(&text_style)
+            .unwrap_or_else(|| panic!("{text_style:?} must be defined in the atlas type scale"))
+            .size
+    }
+
+    #[test]
+    fn the_type_scale_is_legible_and_ordered() {
+        let mut style = egui::Style::default();
+        configure_style(&mut style);
+
+        let small = size_of(&style, TextStyle::Small);
+        let body = size_of(&style, TextStyle::Body);
+        let button = size_of(&style, TextStyle::Button);
+        let heading = size_of(&style, TextStyle::Heading);
+
+        // egui's stock `Small` is 9 pt, which is what made legend notes and the
+        // secondary lines of every hover card unreadable. Anything at or below
+        // 12 pt is a regression, whatever else changes.
+        assert!(
+            small >= 12.0,
+            "Small is the atlas's caption size and must stay readable, got {small}"
+        );
+        // Body is the size everything is actually read in.
+        assert!(body >= 15.0, "Body must be a reading size, got {body}");
+        // A button's label is read as often as body text, never smaller.
+        assert!(
+            button >= body,
+            "Button labels must not shrink below body text"
+        );
+        // The hierarchy has to stay a hierarchy.
+        assert!(small < body, "captions must be smaller than body text");
+        assert!(body < heading, "panel titles must stand out from body text");
+    }
+
+    #[test]
+    fn the_hover_card_metrics_leave_room_for_the_text() {
+        let mut style = egui::Style::default();
+        configure_style(&mut style);
+
+        // A card must be able to hold a sentence of body text, and the tooltip
+        // that carries it must be wider than the card it draws.
+        assert!(CARD_WIDTH >= 400.0, "a hover card must hold a sentence");
+        assert!(
+            style.spacing.tooltip_width > CARD_WIDTH,
+            "the tooltip frame must be wider than the card inside it"
+        );
+        // Every control the atlas offers has to be a real target for a pointer.
+        assert!(style.spacing.interact_size.y >= 22.0);
+        assert!(style.spacing.button_padding.x >= 8.0);
+    }
+
+    /// Every run of text egui was asked to paint, with the size it was drawn at.
+    fn drawn_text(output: &egui::FullOutput) -> Vec<(String, f32)> {
+        fn walk(shape: &egui::epaint::Shape, out: &mut Vec<(String, f32)>) {
+            match shape {
+                egui::epaint::Shape::Text(text) => {
+                    let job = &text.galley.job;
+                    for section in &job.sections {
+                        let range = section.byte_range.clone();
+                        out.push((
+                            job.text[range.start.0..range.end.0].to_owned(),
+                            section.format.font_id.size,
+                        ));
+                    }
+                }
+                egui::epaint::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut drawn = Vec::new();
+        for clipped in &output.shapes {
+            walk(&clipped.shape, &mut drawn);
+        }
+        drawn
+    }
+
+    /// The sizes have to survive the whole journey to the screen: context style →
+    /// panel (or tooltip) → label → laid-out galley. This is the mechanism the
+    /// viewer's unreadable legends and hover cards were lost in.
+    #[test]
+    fn every_panel_and_hover_card_is_painted_in_the_atlas_type_scale() {
+        let ctx = egui::Context::default();
+        // Exactly what `MapViewer::install_style` does on the viewer's first frame.
+        ctx.all_styles_mut(configure_style);
+
+        // The canvas the atlas would paint on, and a probe the pointer can hover
+        // the way it hovers the map.
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+        let probe = egui::Rect::from_min_size(egui::pos2(40.0, 400.0), egui::vec2(300.0, 120.0));
+
+        // Several passes: a brand-new area measures itself before it paints, and
+        // a tooltip waits out its delay before it opens. The last pass is the one
+        // that shows the atlas at rest, with everything on it.
+        let mut drawn = Vec::new();
+        for frame in 0..4 {
+            let mut input = egui::RawInput::default();
+            input.screen_rect = Some(screen);
+            input.time = Some(1.0 + f64::from(frame) * 0.75);
+            // The pointer arrives over the map on the second pass and then rests
+            // there: egui opens a tooltip only once the pointer has been still
+            // for `tooltip_delay`, which is exactly what a reader experiences.
+            if frame == 1 {
+                input.events = vec![egui::Event::PointerMoved(probe.center())];
+            }
+
+            let mut output = ctx.run_ui(input, |ui| {
+                egui::Panel::right("legend")
+                    .frame(atlas_panel_frame(ui.style()))
+                    .exact_size(330.0)
+                    .show(ui, |ui| {
+                        panel_title(ui, "A legend");
+                        ui.label("A readout");
+                        caption(ui, "A caption");
+                    });
+                // A hover card, opened exactly as the canvas opens one.
+                ui.interact(probe, egui::Id::unique("probe"), egui::Sense::hover())
+                    .on_hover_ui(|ui| {
+                        card_title(ui, "A hover card");
+                        caption(ui, "A caption inside the card");
+                        ui.label("A body line");
+                    });
+            });
+            drawn = drawn_text(&output);
+            // A test paints nothing, so the texture deltas are ours to discard.
+            output.textures_delta.clear();
+        }
+
+        let size_of = |text: &str| {
+            drawn
+                .iter()
+                .find(|(drawn, _)| drawn == text)
+                .map(|(_, size)| *size)
+                .unwrap_or_else(|| panic!("{text:?} was never painted; drew {drawn:?}"))
+        };
+
+        assert_eq!(size_of("A legend"), TEXT_HEADING);
+        assert_eq!(size_of("A readout"), TEXT_BODY);
+        assert_eq!(size_of("A caption"), TEXT_SMALL);
+        // The hover card, opened as an egui tooltip, is drawn from the context's
+        // style like the panels are — never smaller.
+        assert_eq!(size_of("A hover card"), TEXT_CARD_TITLE);
+        assert_eq!(size_of("A caption inside the card"), TEXT_SMALL);
+        assert_eq!(size_of("A body line"), TEXT_BODY);
+        // And nothing anywhere falls back to egui's 9 pt default.
+        for (text, size) in &drawn {
+            assert!(
+                *size >= TEXT_SMALL,
+                "{text:?} was painted at {size} pt, below the atlas's floor"
+            );
         }
     }
 }
