@@ -60,6 +60,28 @@ pub struct CivilizationConfig {
     /// not of an empire.
     pub family_radius_frac: f32,
 
+    // ── The calendar ─────────────────────────────────────────────────────────
+    /// How many years the world's peoples lived before the first city — the depth
+    /// of prehistory.
+    ///
+    /// `None` draws it from the seed over a wide log-uniform range (five thousand
+    /// to two million years), divided by the world's own pace of development (see
+    /// [`crate::civilization::epoch::DevelopmentPace`]); `Some(years)` fixes it.
+    /// Deliberately not tied to the epoch: a calendar's zero is a recent
+    /// convention, while this is where a world's real depth lives.
+    pub species_emergence_years: Option<i32>,
+
+    /// How many of the best provinces the epoch-site selector draws from.
+    ///
+    /// The world's calendar is reckoned from one province, chosen by a seeded
+    /// weighted draw among the finest few candidates — so it is never the top
+    /// score, and never arbitrary.
+    pub epoch_site_candidates: usize,
+
+    /// A province smaller than this (km²) can never be the place a calendar is
+    /// reckoned from: an epoch needs a place, not a speck.
+    pub epoch_site_min_area_km2: f32,
+
     /// People per km² a province supports at full habitability once its
     /// civilization is fully developed. Everything downstream is this number
     /// times the province's own habitability, altitude penalty and the realm's
@@ -96,6 +118,10 @@ impl Default for CivilizationConfig {
             great_river_flow: 3_000.0,
 
             family_radius_frac: 0.05,
+
+            species_emergence_years: None,
+            epoch_site_candidates: 24,
+            epoch_site_min_area_km2: 500.0,
 
             max_density_per_km2: 22.0,
 

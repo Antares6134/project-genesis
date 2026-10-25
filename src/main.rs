@@ -199,6 +199,7 @@ fn main() {
             &hierarchy,
             relief::SEA_LEVEL,
             hydro_config.min_river_flow,
+            climate_config.mode,
             &civ_config,
             seed,
         );

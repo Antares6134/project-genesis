@@ -86,7 +86,7 @@ scaled up because it is one connected, far larger domain.
 | Deepest trench | **−10 725 m** |
 | Continental shelf (≤ −200 m) | **9.3 % of the ocean** |
 | Inhabited provinces | **11 522** (wastelands and polar ice excepted) |
-| Civilizations at Year 2 248 | **8 realms · 800 provinces · 51 573 063 people** |
+| Civilizations at 1 969 CE | **12 realms · 752 provinces · 47 921 039 people** |
 
 ---
 
@@ -141,7 +141,8 @@ depth) there, and the usual land rules — biomes, wasteland, provinces — appl
    a province census in real km², cradle scoring, a continent-aware handful of rising
    civilizations, fertile-cost expansion over the province graph, population by carrying
    capacity, contact, ancestral stocks and pre-founding inheritance, and a full dossier per
-   realm — economy, social order, craft, script, faith, era and population.
+   realm — economy, social order, craft, script, faith, era and population, all dated in the
+   world's own Common Era ([`src/civilization/epoch.rs`](src/civilization/epoch.rs)).
 
 ---
 
@@ -172,15 +173,37 @@ being a story?**
    and one creed — and a younger realm in contact with an older one may have taken up its crops,
    rites or script *centuries before* founding a city of its own.
 
-### Year Zero
+### The calendar
 
-There is no CE and no BCE on a planet nobody has inhabited yet, so this world fixes its own
-epoch: **Year Zero is the founding of Civilization #1**, exactly as our own historiography is
-fixed by Sumer around 3500 BCE. Every other realm is dated after it. A later cradle being a
-later cradle because the good ground was already taken, because the sea had to be crossed, or
-because the planet isolated it. The atlas then portrays the world at one date, a few centuries
-after the youngest realm began, so that every civilization on the map has a history rather than
-only a founding.
+There is no calendar to inherit on a planet nobody has inhabited yet, so this world fixes a
+convention of its own — and borrows the plainest one there is: years of the **Common Era**,
+counted from a single important event in its history. That event is deliberately left
+undefined — the atlas never says what happened, only that it mattered — and it is never a
+civilization's founding, because a calendar cannot take its epoch from a polity that only
+exists because somebody later decided to count years.
+
+Instead the epoch is a **place** and a **year**, and both are drawn from the seed:
+
+- **The place** is one province, chosen from the whole world for the shape a founding
+  story takes — a crossroads between realms, a lone peak, a shore, a lake, an island —
+  and never a cradle and never a throne. The epoch of a real calendar sits in a marginal
+  province of a foreign empire, not in the strongest country of its age, so the site is
+  scored for liminality and symbolic charge and *penalised* for being the richest ground
+  on the planet. A seeded weighted draw picks among the finest few, so the choice is never
+  merely the top score and never arbitrary.
+- **The year** follows the place: a few centuries into the life of whoever held it, so the
+  site and the date belong to one story. A site in the wilderness — the more usual case
+  for a shrine — belongs to nobody, and takes the oldest realm on the world as its anchor.
+
+The timeline has no beginning. Years before the epoch are counted backwards as BCE,
+exactly as our own historiography counts them, and the depth of prehistory before the
+first city is a separate, far larger quantity: a wide seeded draw biased by how kind the
+planet turned out to be, so a gentle world may reach its first hearth in five thousand
+years and a harsh or tidally-locked one may take a million. There is no fixed span
+between the first people and the first city, and no assumption that a world must have
+passed through an ice age to be habitable. The atlas then portrays the world at one date,
+a few centuries after the youngest realm began, so every civilization on the map has a
+history rather than only a founding.
 
 ---
 

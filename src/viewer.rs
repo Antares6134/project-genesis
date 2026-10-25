@@ -3,6 +3,7 @@ mod themes;
 use eframe::egui::{self, Color32, ColorImage, Stroke, TextureHandle, TextureOptions};
 use noise::{NoiseFn, OpenSimplex};
 use rayon::prelude::*;
+use crate::civilization::epoch::ce_label;
 use crate::civilization::{Civilization, CivilizationWorld};
 use crate::core::fmt::{thousands, thousands_u64};
 use crate::core::polar::{frozen_sea_name, is_frozen_sea, ICE_SHELF_TEMP, PACK_ICE_TEMP};
@@ -422,9 +423,9 @@ fn civilization_dossier(ui: &mut egui::Ui, civ: &Civilization, world: &Civilizat
     });
     ui.label(
         egui::RichText::new(format!(
-            "{} · founded Year {} · {}",
+            "{} · founded {} · {}",
             civ.rise.kind.label(),
-            civ.founding_year,
+            ce_label(civ.founding_year),
             civ.era.label()
         ))
         .small()
@@ -1170,7 +1171,8 @@ impl eframe::App for MapViewer {
                     if ui
                         .checkbox(&mut self.show_civilizations, label)
                         .on_hover_text(format!(
-                            "{}\nThe overlay tints the provinces each realm holds, on top of whatever this scope already paints.",
+                            "{}\nAtlas date: {}\nThe overlay tints the provinces each realm holds, on top of whatever this scope already paints.",
+                            world.epoch_label(),
                             world.map_year_label()
                         ))
                         .clicked()
@@ -1231,8 +1233,8 @@ impl eframe::App for MapViewer {
                     let world = &self.civilizations;
                     ui.horizontal(|ui| {
                         ui.label(format!(
-                            "🏺 CIVILIZATIONS — Year Zero: {} | Map date: {} | {} realms | {} civilized provinces | population {} | {:.1} people/km²",
-                            world.year_zero_label(),
+                            "🏺 CIVILIZATIONS — {} | Atlas date: {} | {} realms | {} civilized provinces | population {} | {:.1} people/km²",
+                            world.epoch_label(),
                             world.map_year_label(),
                             world.civilizations.len(),
                             world.civilized_provinces,
@@ -1458,8 +1460,28 @@ impl eframe::App for MapViewer {
                         return;
                     }
 
-                    ui.label(egui::RichText::new(world.year_zero_label()).small());
-                    ui.label(egui::RichText::new(world.map_year_label()).small().weak());
+                    ui.label(egui::RichText::new(world.epoch_label()).small());
+                    ui.label(
+                        egui::RichText::new(world.timeline.prehistory_label())
+                            .small()
+                            .weak(),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!("Atlas date: {}", world.map_year_label()))
+                            .small()
+                            .weak(),
+                    );
+                    if ui
+                        .button("🏛 Fly to the Common Era site")
+                        .on_hover_text("The province the world's calendar is reckoned from")
+                        .clicked()
+                    {
+                        focus_request = Some((
+                            world.timeline.epoch.site_x,
+                            world.timeline.epoch.site_y,
+                            CIV_FOCUS_ZOOM,
+                        ));
+                    }
                     ui.separator();
                     ui.label(format!(
                         "{} realms on {} civilized provinces",
@@ -1509,9 +1531,9 @@ impl eframe::App for MapViewer {
                             });
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "{} · founded Year {} · {}",
+                                    "{} · founded {} · {}",
                                     civ.cradle_kind.label(),
-                                    civ.founding_year,
+                                    ce_label(civ.founding_year),
                                     civ.era.label(),
                                 ))
                                 .small(),

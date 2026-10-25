@@ -21,11 +21,15 @@
 //!    taken up its crops, rites or script *before* founding a city of its own.
 
 use crate::civilization::config::CivilizationConfig;
+use crate::civilization::epoch::{
+    DevelopmentPace, Epoch, EpochCandidate, Timeline, place_name, select_epoch_site,
+};
 use crate::civilization::{
     CIVILIZATION_COLORS, Civilization, CivilizationWorld, Contact, ContactKind, CraftTier,
     CradleKind, Culture, Era, Faith, FaithKind, Influence, Isolation, Kinship, Literacy, Outlook,
     RiseProfile, ScaleClass, Subsistence,
 };
+use crate::climate::PlanetaryMode;
 use crate::core::fmt::{thousands, thousands_u64};
 use crate::core::sphere;
 use crate::core::{relief, Grid};
@@ -111,6 +115,7 @@ pub fn generate_civilizations(
     hierarchy: &GeopoliticalHierarchy,
     sea_level: f32,
     min_river_flow: f32,
+    planetary_mode: PlanetaryMode,
     config: &CivilizationConfig,
     seed: u64,
 ) -> CivilizationWorld {
@@ -397,10 +402,37 @@ pub fn generate_civilizations(
     }
 
     // ─── 3. FOUNDING DATES, AMBITIONS AND EXPANSION ──────────────────────────
-    // Civilization #1 founds in Year Zero by definition. Every later cradle waits
-    // for the ground it wants, and the further it is from anyone who already
-    // exists, the longer it waits: crossing an ocean or an empty continent costs
-    // generations that a neighbouring floodplain does not.
+    // Year zero of the internal frame is the founding of the first city, by the
+    // first realm to rise. Every later cradle waits for the ground it wants, and
+    // the further it is from anyone who already exists, the longer it waits:
+    // crossing an ocean or an empty continent costs generations that a
+    // neighbouring floodplain does not.
+    //
+    // How fast this world develops is read here, because the eras below are scaled
+    // by it. What that pace implies for the depth of prehistory — how long the
+    // peoples of this world lived before the first hearth — is drawn much later,
+    // once the whole history is known and every earlier draw has been made.
+    let pace = {
+        let present = stats.iter().filter(|s| s.present).collect::<Vec<_>>();
+        let (mean_habitability, frost_share) = if present.is_empty() {
+            (0.5, 0.0)
+        } else {
+            let count = present.len() as f32;
+            let hab = present.iter().map(|s| s.hab_mean()).sum::<f32>() / count;
+            let frost = present.iter().filter(|s| s.temp_mean() < 0.0).count() as f32 / count;
+            (hab, frost)
+        };
+        DevelopmentPace::from_measurements(
+            mean_habitability,
+            frost_share,
+            matches!(planetary_mode, PlanetaryMode::TidallyLocked),
+        )
+    };
+    println!(
+        "✓ Development pace: ×{:.2} — how fast this world reaches its first cities",
+        pace.multiplier(),
+    );
+
     let mut founding_years: Vec<i32> = Vec::with_capacity(picked.len());
     for (rank, cradle) in picked.iter().enumerate() {
         if rank == 0 {
@@ -543,9 +575,9 @@ pub fn generate_civilizations(
             ),
             area_km2: provinces.iter().map(|&p| stats[p as usize].area_km2).sum(),
             scale: ScaleClass::from_provinces(provinces.len()),
-            era: Era::from_age(age_years),
+            era: Era::from_age_scaled(age_years, pace.multiplier()),
             age_years,
-            founding_year: founding_years[rank],
+            founding_year_internal: founding_years[rank],
             provinces,
             seat_stats,
             displaced_from: displaced[rank],
@@ -589,7 +621,7 @@ pub fn generate_civilizations(
     for members in family_members.values() {
         let ancestor = *members
             .iter()
-            .min_by_key(|&&i| (skeletons[i].founding_year, i))
+            .min_by_key(|&&i| (skeletons[i].founding_year_internal, i))
             .unwrap();
         let name = format!("{} Tongue", skeletons[ancestor].cradle_kind.tongue());
         for &m in members {
@@ -760,12 +792,15 @@ pub fn generate_civilizations(
     let mut influences: Vec<Vec<Influence>> = vec![Vec::new(); skeletons.len()];
     for a in 0..skeletons.len() {
         for b in (a + 1)..skeletons.len() {
-            let (older, younger) = if skeletons[a].founding_year <= skeletons[b].founding_year {
+            let (older, younger) = if skeletons[a].founding_year_internal
+                <= skeletons[b].founding_year_internal
+            {
                 (a, b)
             } else {
                 (b, a)
             };
-            let gap = skeletons[younger].founding_year - skeletons[older].founding_year;
+            let gap = skeletons[younger].founding_year_internal
+                - skeletons[older].founding_year_internal;
             if gap < 150 {
                 continue; // too close in time for an inheritance to be visible
             }
@@ -847,7 +882,62 @@ pub fn generate_civilizations(
         ));
     }
 
+    // ─── 9b. THE EPOCH AND THE DEPTH OF PREHISTORY ───────────────────────────
+    // The world's calendar is reckoned from one place and one year, and both come
+    // out of the seed. The place is a province chosen for the shape a founding
+    // story takes — a crossroads between realms, a lone peak, a lake, an island —
+    // and never a cradle or a throne; the year is a few centuries into the life of
+    // whoever held it, so the place and the date belong to one story. What actually
+    // happened there is left undefined: the atlas only says it mattered.
+    //
+    // The depth of prehistory — how long this world's peoples lived before the
+    // first city — is drawn here too, at the very end, so that every earlier draw
+    // in the stage is untouched and a world generated before this stage existed
+    // still produces the same civilizations. It is a wide, seeded span divided by
+    // the world's own pace, and there is nothing Earth-like about it: a gentle
+    // world may reach its first city in five thousand years and a hard or
+    // tidally-locked one may take a million.
+    let depth_years = config.species_emergence_years.unwrap_or_else(|| {
+        // Log-uniform over five thousand to two million years: the honest
+        // distribution for a quantity that spans orders of magnitude.
+        let (lo, hi) = (5_000f32.ln(), 2_000_000f32.ln());
+        (lo + rng.random::<f32>() * (hi - lo)).exp().round() as i32
+    });
+    let prehistory_years = ((depth_years as f32 / pace.multiplier()).round() as i32).max(500);
+    println!(
+        "✓ Prehistory: {} years separate the first people from the first city",
+        thousands(prehistory_years as f32),
+    );
+
+    let epoch_candidates = build_epoch_candidates(&stats, hierarchy, &owner, &contacts, &seats);
+    let epoch_site = select_epoch_site(
+        &epoch_candidates,
+        config.epoch_site_min_area_km2,
+        config.epoch_site_candidates,
+        &mut rng,
+    );
+    let epoch = choose_epoch(
+        epoch_site,
+        &epoch_candidates,
+        &owner,
+        &skeletons,
+        hierarchy,
+        map_year,
+        &mut rng,
+    );
+    let timeline = Timeline {
+        prehistory_years,
+        atlas_year: map_year,
+        epoch,
+    };
+    // Every date the atlas shows is this one shift away from the internal frame.
+    let epoch_offset = timeline.epoch.absolute_year;
+
     // ─── 10. ASSEMBLE ────────────────────────────────────────────────────────
+    // Every date the atlas ever shows is written in the world's own era, so the
+    // internal frame is converted exactly once, here: a realm's founding and the
+    // map date both become years of the Common Era, negative for BCE. Nothing
+    // above this point ever saw a CE year, and nothing below it sees anything else.
     let mut civilizations: Vec<Civilization> = Vec::with_capacity(skeletons.len());
     for rank in 0..skeletons.len() {
         let sk = &skeletons[rank];
@@ -879,7 +969,7 @@ pub fn generate_civilizations(
             provinces: sk.provinces.clone(),
             area_km2: sk.area_km2,
             population,
-            founding_year: sk.founding_year,
+            founding_year: sk.founding_year_internal - epoch_offset,
             age_years: sk.age_years,
             era: sk.era,
             isolation,
@@ -900,11 +990,9 @@ pub fn generate_civilizations(
     let civilized_area_km2: f32 = civilizations.iter().map(|c| c.area_km2).sum();
 
     println!(
-        "✓ Year Zero: {} | map date: {} | {} civilized provinces | {} km² | population {}",
-        civilizations
-            .first()
-            .map_or("—".to_string(), |c| format!("founding of {}", c.name)),
-        map_year,
+        "✓ {} | atlas date: {} | {} civilized provinces | {} km² | population {}",
+        timeline.epoch_label(),
+        timeline.atlas_label(),
         civilized_provinces,
         civilized_area_km2 as u64,
         thousands_u64(total_population),
@@ -912,7 +1000,8 @@ pub fn generate_civilizations(
 
     CivilizationWorld {
         seed,
-        map_year,
+        map_year: map_year - epoch_offset,
+        timeline,
         civilizations,
         province_owner: owner,
         province_population,
@@ -934,7 +1023,10 @@ struct Skeleton {
     scale: ScaleClass,
     era: Era,
     age_years: u32,
-    founding_year: i32,
+    /// Founding year in the world's internal frame, whose year zero is the first
+    /// city. The atlas never shows this; [`Civilization::founding_year`] carries the
+    /// same date written in the world's own era.
+    founding_year_internal: i32,
     /// The cradle province a latecomer was pushed off, if it ever was.
     displaced_from: Option<u32>,
 }
@@ -978,6 +1070,127 @@ impl PartialOrd for Step {
 /// exist on this world.
 fn civilization_name(id: u32) -> String {
     format!("Civilization #{id}")
+}
+
+/// Gather every province worth considering as the place a calendar is reckoned
+/// from.
+///
+/// Runs after contacts and inheritance, because a crossroads is only a crossroads
+/// once somebody is standing on the other side of it. Every field is a measurement
+/// the census already took, so the choice can be audited line by line.
+fn build_epoch_candidates(
+    stats: &[ProvinceStats],
+    hierarchy: &GeopoliticalHierarchy,
+    owner: &[u16],
+    contacts: &[Vec<Contact>],
+    seats: &[u32],
+) -> Vec<EpochCandidate> {
+    let mut out = Vec::new();
+    for (i, s) in stats.iter().enumerate() {
+        if !s.present {
+            continue;
+        }
+        let node = &hierarchy.provinces[i];
+        let prov = i as u32;
+
+        // Crossroads: which realms, and how many great regions, meet here.
+        let mut frontier_realm_ids: Vec<u16> = Vec::new();
+        let mut superregions: Vec<u32> = vec![node.superregion_id];
+        for &(nb, _) in &node.neighbors {
+            let nb_idx = nb as usize;
+            let other_owner = owner.get(nb_idx).copied().unwrap_or(0);
+            if other_owner != 0 && !frontier_realm_ids.contains(&other_owner) {
+                frontier_realm_ids.push(other_owner);
+            }
+            if let Some(superregion) = hierarchy
+                .provinces
+                .get(nb_idx)
+                .map(|n| n.superregion_id)
+                .filter(|sr| !superregions.contains(sr))
+            {
+                superregions.push(superregion);
+            }
+        }
+
+        // A story travels with trade: how far could the holder's word carry?
+        let holder = owner.get(i).copied().unwrap_or(0);
+        let realm_contacts = if holder == 0 {
+            0
+        } else {
+            contacts.get(holder as usize - 1).map_or(0, |c| c.len())
+        };
+
+        out.push(EpochCandidate {
+            prov,
+            area_km2: s.area_km2,
+            hab: s.hab_mean(),
+            temp: s.temp_mean(),
+            precip: s.precip_mean(),
+            coastal: s.sea_px > 0,
+            lakeshore: s.lake_px > 0,
+            island: node.anchor_id != node.id,
+            peak_m: s.elev_max_m,
+            mean_m: s.elev_mean_m(),
+            flow_max: s.flow_max,
+            frontier_realms: frontier_realm_ids.len(),
+            group_span: superregions.len(),
+            realm_contacts,
+            is_seat: seats.contains(&prov),
+        });
+    }
+    out
+}
+
+/// Decide the world's epoch: where the event happened, and when.
+///
+/// The year follows the place — a few centuries into the life of whoever held it,
+/// so the place and the date are one story. A wilderness site, which is the more
+/// usual case for a shrine, takes the oldest realm in the world as its anchor. The
+/// result is always strictly inside the civilized era, so no realm is ever dated
+/// from an event that has not happened yet.
+#[allow(clippy::too_many_arguments)]
+fn choose_epoch(
+    site: Option<u32>,
+    candidates: &[EpochCandidate],
+    owner: &[u16],
+    skeletons: &[Skeleton],
+    hierarchy: &GeopoliticalHierarchy,
+    atlas_year: i32,
+    rng: &mut ChaCha8Rng,
+) -> Epoch {
+    let site = site.unwrap_or(0);
+    let site_realm = owner
+        .get(site as usize)
+        .copied()
+        .filter(|&o| o != 0)
+        .map(u32::from);
+
+    let anchor_founding = site_realm
+        .and_then(|id| skeletons.get(id as usize - 1).map(|sk| sk.founding_year_internal))
+        .or_else(|| skeletons.iter().map(|sk| sk.founding_year_internal).min())
+        .unwrap_or(0);
+    // Strictly inside the civilized era: after the first hearth, before the atlas.
+    let lo = 1;
+    let hi = (atlas_year - 1).max(lo);
+    let year = (anchor_founding + rng.random_range(300..=1_200)).clamp(lo, hi);
+
+    let candidate = candidates.iter().find(|c| c.prov == site);
+    let (site_x, site_y) = hierarchy
+        .provinces
+        .get(site as usize)
+        .map_or((0.0, 0.0), |n| (n.center_x, n.center_y));
+    let site_name = candidate
+        .map(place_name)
+        .unwrap_or_else(|| format!("Province #{site}"));
+
+    Epoch {
+        absolute_year: year,
+        site_province: site,
+        site_x,
+        site_y,
+        site_name,
+        site_realm,
+    }
 }
 
 /// Union-find root of an ancestral-stock family, path-compressed.

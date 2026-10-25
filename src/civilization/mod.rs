@@ -15,14 +15,23 @@
 //!
 //! ## The calendar
 //!
-//! There is no CE and no BCE on a planet nobody has inhabited yet, so this world
-//! fixes its own **Year Zero**: the founding of Civilization #1, exactly as our
-//! own historiography is fixed by Sumer around 3500 BCE. Every other civilization
-//! is dated *after* it — a later cradle is a later cradle because the good ground
-//! was already taken, because the sea had to be crossed, or because the planet
-//! isolated it. The atlas then portrays the world at a single date (see
-//! [`CivilizationWorld::map_year`]), at which every realm has an age, an era, a
-//! culture, a faith and a population.
+//! There is no calendar to inherit on a planet nobody has inhabited yet, so this
+//! world fixes a convention of its own — the plainest one there is: years of the
+//! **Common Era**, counted from a single important event in its history. The event
+//! is deliberately undefined, and it is never a civilization's founding — a calendar
+//! cannot take its epoch from a polity that only exists because somebody later
+//! decided to count years. Instead the epoch is a *place* and a *year*, both drawn
+//! from the seed: a province chosen for the shape a founding story takes (a
+//! crossroads, a lone peak, a lake, an island — never a cradle, never a throne), and
+//! a year a few centuries into the life of whoever held it.
+//!
+//! The timeline has no beginning. Years before the epoch are counted backwards as
+//! BCE, and the depth of prehistory before the first city is a separate, much
+//! larger quantity drawn per world and biased by how kind the planet turned out to
+//! be — there is no fixed span between the first people and the first hearth. The
+//! atlas then portrays the world at a single date (see [`CivilizationWorld::map_year`]),
+//! at which every realm has an age, an era, a culture, a faith and a population. See
+//! [`epoch`] for the whole model.
 //!
 //! ## Determinism
 //!
@@ -33,10 +42,13 @@
 //! populations.
 
 pub mod config;
+pub mod epoch;
 pub mod generator;
 pub mod report;
 
 pub use config::CivilizationConfig;
+#[allow(unused_imports)]
+pub use epoch::{Epoch, Timeline};
 pub use generator::generate_civilizations;
 pub use report::report_civilizations;
 
@@ -450,6 +462,16 @@ impl Era {
         }
     }
 
+    /// The era reached by a realm `age_years` old on a world developing at `pace`.
+    ///
+    /// The thresholds above are the ordinary case; a world that developed quickly
+    /// (`pace > 1`) reaches its later ages sooner, and a slow one later. Without
+    /// this a very slow world would still be building its first granaries at the
+    /// map date, and a very fast one would leap straight to empire.
+    pub fn from_age_scaled(age_years: u32, pace: f32) -> Self {
+        Self::from_age((age_years as f32 / pace.max(0.05)) as u32)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Era::FirstSettlements => "Age of First Settlements",
@@ -688,8 +710,9 @@ pub struct Civilization {
     /// Total population at the map date.
     pub population: u64,
 
-    /// Years after the world's Year Zero, i.e. after the founding of
-    /// Civilization #1. Civilization #1 itself is always `0`.
+    /// The year the realm was founded, written in the world's own era — negative
+    /// for BCE, so a realm older than the epoch carries a BCE date. See
+    /// [`epoch::ce_label`](crate::civilization::epoch::ce_label).
     pub founding_year: i32,
     /// Years elapsed between founding and the map date.
     pub age_years: u32,
@@ -730,10 +753,13 @@ impl Civilization {
 pub struct CivilizationWorld {
     /// The seed the whole world was grown from.
     pub seed: u64,
-    /// The date the atlas portrays: years **after** Year Zero. It is set to the
-    /// founding of the youngest civilization, so every realm on the map exists
-    /// and none has to be extrapolated.
+    /// The date the atlas portrays, in the world's own era (negative = BCE). It is
+    /// set a few centuries after the youngest realm began, so every realm on the
+    /// map exists and none has to be extrapolated. See [`Timeline`].
     pub map_year: i32,
+    /// The world's calendar: what its years are reckoned from, and how deep its
+    /// prehistory runs.
+    pub timeline: Timeline,
     /// Number of civilizations that rose.
     pub civilizations: Vec<Civilization>,
     /// Province id → owning civilization id (0 = wilderness, water or wasteland).
@@ -755,6 +781,7 @@ impl CivilizationWorld {
         Self {
             seed,
             map_year: 0,
+            timeline: Timeline::empty(),
             civilizations: Vec::new(),
             province_owner: Vec::new(),
             province_population: Vec::new(),
@@ -809,21 +836,18 @@ impl CivilizationWorld {
         }
     }
 
-    /// `Year Zero — the founding of Civilization #1`, the world's own epoch.
-    pub fn year_zero_label(&self) -> String {
-        match self.civilizations.first() {
-            Some(first) => format!("Year Zero — the founding of {}", first.name),
-            None => "Year Zero — no civilization ever rose on this world".to_string(),
-        }
+    /// `The Common Era — reckoned from an important event at the Green Crossing`.
+    ///
+    /// The world's own calendar, in one line: the epoch is a convention counted
+    /// from a single important event, never from a civilization's founding. See
+    /// [`crate::civilization::epoch`].
+    pub fn epoch_label(&self) -> String {
+        self.timeline.epoch_label()
     }
 
-    /// `Year 1 240 of the First Civilization (Civilization #1)`, the map date.
+    /// `300 CE` — the date the atlas portrays, in the world's own era.
     pub fn map_year_label(&self) -> String {
-        let years = crate::core::fmt::thousands(self.map_year.max(0) as f32);
-        match self.civilizations.first() {
-            Some(first) => format!("Year {years} of the First Civilization ({})", first.name),
-            None => format!("Year {years}"),
-        }
+        epoch::ce_label(self.map_year)
     }
 
     /// Mean population density across every civilized province, per km².

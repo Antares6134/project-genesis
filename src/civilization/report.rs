@@ -6,6 +6,7 @@
 //! then one block per realm in founding order: why it rose where it rose, what it
 //! became, who it knows and what it inherited.
 
+use crate::civilization::epoch::ce_label;
 use crate::civilization::{Civilization, CivilizationWorld};
 use crate::core::fmt::{thousands, thousands_u64};
 
@@ -18,9 +19,18 @@ pub fn report_civilizations(world: &CivilizationWorld) {
         return;
     }
 
-    println!("   {}", world.year_zero_label());
+    println!("   {}", world.epoch_label());
     println!(
-        "   Map date: {} | {} realms | {} civilized provinces | {} km² | population {}",
+        "   Epoch site: province #{} ({})",
+        world.timeline.epoch.site_province,
+        match world.timeline.epoch.site_realm {
+            Some(id) => world.name_of(id),
+            None => "unclaimed wilderness",
+        }
+    );
+    println!("   {}", world.timeline.prehistory_label());
+    println!(
+        "   Atlas date: {} | {} realms | {} civilized provinces | {} km² | population {}",
         world.map_year_label(),
         world.civilizations.len(),
         world.civilized_provinces,
@@ -47,8 +57,8 @@ fn report_one(world: &CivilizationWorld, civ: &Civilization) {
         civ.scale.label()
     );
     println!(
-        "      Founded Year {} (age {} · {} · {})",
-        civ.founding_year,
+        "      Founded {} (age {} · {} · {})",
+        ce_label(civ.founding_year),
         thousands(civ.age_years as f32),
         civ.era.label(),
         civ.isolation.label(),
