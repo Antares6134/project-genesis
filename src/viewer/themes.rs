@@ -57,9 +57,14 @@ pub fn swatch(ui: &mut egui::Ui, color: [u8; 3]) {
 pub fn legend_row(ui: &mut egui::Ui, color: [u8; 3], label: &str, note: &str) {
     ui.horizontal(|ui| {
         swatch(ui, color);
-        ui.label(egui::RichText::new(label).small());
+        // Both lines wrap rather than extend. In a horizontal row egui lets a
+        // label run past the row, and the legend panels are painted *before* the
+        // map canvas: a row wider than its panel widens the panel's own frame,
+        // and the map then covers that overhang — the reader loses the left end
+        // of the row. A wrapped row is a line longer; an extended one is gone.
+        ui.add(egui::Label::new(egui::RichText::new(label).small()).wrap());
         if !note.is_empty() {
-            ui.label(egui::RichText::new(note).small().weak());
+            ui.add(egui::Label::new(egui::RichText::new(note).small().weak()).wrap());
         }
     });
 }

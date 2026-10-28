@@ -10,7 +10,7 @@ government, a faith and a population of their own.
 Every plate below was rendered from one cached world (seed `3286592765982`); a seed always
 reproduces the same planet.
 
-[![The physical atlas: relief, biomes, rivers and ice](atlas_physical.png)](atlas_physical.png)
+[![The physical atlas: relief, biomes, rivers and ice](./exports/atlas_physical.png)](./exports/atlas_physical.png)
 
 ## Highlights
 
@@ -23,7 +23,7 @@ reproduces the same planet.
 - **Two matching hierarchies** — land and ocean each cut into *Provinces → Areas → Regions →
   Superregions → Continents/Basins*.
 - **A dawn of history** — a cradle, a rise story, an economy, a government, a faith, ancestry,
-  contacts and real populations for every realm, dated in the world's own Common Era.
+  contacts and real populations for every realm, dated in the world's own era.
 - **One painter for both outputs** — the headless exporter and the interactive viewer share
   their cartography, so the printed maps can never disagree with the window.
 
@@ -46,8 +46,9 @@ cargo run --release -- 3286592765982 --load --plates           # re-render every
 | `--save` | Write the generated world to `world_<seed>.bin`. |
 | `--load` | Reuse `world_<seed>.bin` instead of regenerating (much faster). |
 | `--viewer` | Launch the interactive desktop atlas. |
-| `--civs` | Run the history stage, print the civilization dossier, export its 8K plate. |
-| `--plates` | Export the 17 `atlas_*.png` scope and tier plates used below. |
+| `--civs` | Run the history stage, print the dossier, export its 8K plate. |
+| `--civs-all` | The same, with a full dossier for every society — hundreds of them. |
+| `--plates` | Export the 17 `./exports/atlas_*.png` scope and tier plates used below. |
 
 Every headless run also exports `world_physical_map.png`, `world_topographic_map.png` (a
 contoured elevation survey) and `world_political_map.png` (the land hierarchy). The history
@@ -56,7 +57,7 @@ stage runs automatically with `--viewer` and `--plates`, so the atlas always has
 ## Atlas gallery
 
 Nine map scopes, each with its own legend; the **Civilizations overlay** checkbox tints the
-provinces each realm holds on top of *any* scope.
+provinces each society holds on top of *any* scope.
 
 | Scope | What it portrays |
 | :--- | :--- |
@@ -72,15 +73,15 @@ provinces each realm holds on top of *any* scope.
 
 | 🗺 Physical | ⛰ Topographic | 🌦 Climate |
 | :---: | :---: | :---: |
-| [![Physical](atlas_physical.png)](atlas_physical.png) | [![Topographic](atlas_topographic.png)](atlas_topographic.png) | [![Climate](atlas_climate.png)](atlas_climate.png) |
+| [![Physical](./exports/atlas_physical.png)](./exports/atlas_physical.png) | [![Topographic](./exports/atlas_topographic.png)](./exports/atlas_topographic.png) | [![Climate](./exports/atlas_climate.png)](./exports/atlas_climate.png) |
 
 | 🌡 Temperature | 🪨 Terrain | 🏺 Civilizations |
 | :---: | :---: | :---: |
-| [![Temperature](atlas_temperature.png)](atlas_temperature.png) | [![Terrain](atlas_terrain.png)](atlas_terrain.png) | [![Civilizations](atlas_civilizations.png)](atlas_civilizations.png) |
+| [![Temperature](./exports/atlas_temperature.png)](./exports/atlas_temperature.png) | [![Terrain](./exports/atlas_terrain.png)](./exports/atlas_terrain.png) | [![Civilizations](./exports/atlas_civilizations.png)](./exports/atlas_civilizations.png) |
 
 | 🏛 Land | 🌊 Water | 🌍 Everywhere |
 | :---: | :---: | :---: |
-| [![Land](atlas_land_regions.png)](atlas_land_regions.png) | [![Water](atlas_water_regions.png)](atlas_water_regions.png) | [![Everywhere](atlas_everywhere_regions.png)](atlas_everywhere_regions.png) |
+| [![Land](./exports/atlas_land_regions.png)](./exports/atlas_land_regions.png) | [![Water](./exports/atlas_water_regions.png)](./exports/atlas_water_regions.png) | [![Everywhere](./exports/atlas_everywhere_regions.png)](./exports/atlas_everywhere_regions.png) |
 
 ### Land tiers
 
@@ -89,7 +90,7 @@ the one below it, so switching tiers never moves a border — it only coarsens t
 
 | Provinces | Areas | Regions | Superregions | Continents |
 | :---: | :---: | :---: | :---: | :---: |
-| [![Land provinces](atlas_land_provinces.png)](atlas_land_provinces.png) | [![Land areas](atlas_land_areas.png)](atlas_land_areas.png) | [![Land regions](atlas_land_regions.png)](atlas_land_regions.png) | [![Land superregions](atlas_land_superregions.png)](atlas_land_superregions.png) | [![Land continents](atlas_land_continents.png)](atlas_land_continents.png) |
+| [![Land provinces](./exports/atlas_land_provinces.png)](./exports/atlas_land_provinces.png) | [![Land areas](./exports/atlas_land_areas.png)](./exports/atlas_land_areas.png) | [![Land regions](./exports/atlas_land_regions.png)](./exports/atlas_land_regions.png) | [![Land superregions](./exports/atlas_land_superregions.png)](./exports/atlas_land_superregions.png) | [![Land continents](./exports/atlas_land_continents.png)](./exports/atlas_land_continents.png) |
 
 ### Ocean tiers
 
@@ -98,7 +99,7 @@ scaled up because it is one connected, far larger domain.
 
 | Marine provinces | Oceanic areas | Oceanic regions | Oceanic superregions | Continental basins |
 | :---: | :---: | :---: | :---: | :---: |
-| [![Marine provinces](atlas_water_provinces.png)](atlas_water_provinces.png) | [![Oceanic areas](atlas_water_areas.png)](atlas_water_areas.png) | [![Oceanic regions](atlas_water_regions.png)](atlas_water_regions.png) | [![Oceanic superregions](atlas_water_superregions.png)](atlas_water_superregions.png) | [![Ocean basins](atlas_water_basins.png)](atlas_water_basins.png) |
+| [![Marine provinces](./exports/atlas_water_provinces.png)](./exports/atlas_water_provinces.png) | [![Oceanic areas](./exports/atlas_water_areas.png)](./exports/atlas_water_areas.png) | [![Oceanic regions](./exports/atlas_water_regions.png)](./exports/atlas_water_regions.png) | [![Oceanic superregions](./exports/atlas_water_superregions.png)](./exports/atlas_water_superregions.png) | [![Ocean basins](./exports/atlas_water_basins.png)](./exports/atlas_water_basins.png) |
 
 ## This world at a glance
 
@@ -142,25 +143,42 @@ elevation there rather than depth, and the usual land rules apply to it.
 
 ## The dawn of history
 
-**Cradles.** Every province is measured once — area in km², habitability, peak river
-discharge, climate, relief and shore — and scored as a potential home. Cradles are drawn from
-the richest superregions, one to three each, with a fifth of the places held back for realms
-that rise alone on a far continent: roughly **18–32 realms** on a clustered world.
+The dawn does not leave a wilderness around a handful of clearings: it **partitions the whole
+inhabited world**. Every province belongs to somebody: a state, a chiefdom, a farming village,
+a herd people or a band of foragers.
 
-**Expansion.** Each cradle floods outward through the province graph cheapest-first — a step
-costs the terrain it crosses, discounted by the target's fertility and multiplied by the
-length of any jump. That one rule bends frontiers along river valleys, stalls them on mountain
-walls, hops straits to the next island, and stops dead at an older realm's border.
+**What the country can feed.** Every province is read for its own country: a biome, and how well
+it would carry a field or a herd. This half of the model knows nothing about states, a floodplain
+is farmable whether or not anyone has reached it yet.
 
-**Government and people.** Each realm has one government, from band to tribe to chiefdom, and
-— once developed enough — to a state regime chosen from its economy and ethos (a divine
-monarch or temple republic for a river people, merchants or a landed elite for a boat people,
-a tyrant or a clique for a herd people). It climbs a single axis of development toward the
-atlas date, and that level decides how many people each province feeds. Realms in contact
-share a land frontier, a sea route or a distant rumour; realms grown from the same country
-share an ancestral stock, a tongue family and often a creed.
+**How far that has spread.** One queue, seeded at every cradle at once, grows all the states
+together and leaves behind a cost field: how far every province lies from the nearest state, and
+which state that is. A step costs the terrain it crosses, discounted by the target's fertility
+and multiplied by the length of any jump, so the field bends along river valleys, stalls on
+mountain walls and hops straits — and farming spreads outward from the people who invented it
+rather than appearing wherever rain allows.
 
-**The world's age.** The age belongs to the world and its date, never to a realm:
+**The five-way scheme.** The two halves meet: ground that can be farmed *and* lies within reach of
+a state is farmed, ranked or ruled; ground that can be farmed but lies beyond that reach is still
+wild; dry grass carries herds; everything else is hunted. A fertile country nobody reached may
+rise on its own account, as the Amazon and New Guinea did. The result is a mosaic of
+
+*Hunter-gatherers → Nomadic pastoralists → Simple farming societies → Complex farming societies
+→ State societies*
+
+roughly 67 / 8 / 16 / 5 / 2 per cent of the inhabited world, close to what a real map of 2000 BCE
+shows. Each tier decides a society's colour, how many people each province feeds, and what the
+atlas calls it ([`src/civilization/mod.rs`](src/civilization/mod.rs)).
+
+**Government and people.** Every society has one government, from band to tribe to chiefdom, and —
+once it is a state — a regime chosen from its economy and ethos (a divine monarch or temple
+republic for a river people, merchants or a landed elite for a boat people, a tyrant or a clique
+for a herd people). Only states climb the development axis toward the atlas date; a band of
+foragers is not a less-developed state but a different kind of society, and its place on the axis
+is set by its tier. Societies in contact share a land frontier, a sea route or a distant rumour;
+those grown from the same country share an ancestral stock, a tongue family and often a creed.
+
+**The world's age.** The age belongs to the world and its date, never to a society:
 *Cultivation → Irrigation → Copper & Alloys → Refinement → Architecture → Automated Mills →
 Oceanic Currents → Industrial → Information → Molecular → Planetary*. This build simulates to
 **Copper & Alloys**, so the later ages complete the ladder rather than being reached
@@ -169,9 +187,11 @@ Oceanic Currents → Industrial → Information → Molecular → Planetary*. Th
 **The calendar.** Years of the **Common Era**, counted from a single deliberately undefined
 event. The epoch is a seeded *place* and *year*: a province chosen for the shape a founding
 story takes — a crossroads, a lone peak, a shore, a lake, an island, never a cradle and never
-a throne — and a few centuries into the life of whoever held it. Earlier years are counted back
-as BCE, and the depth of prehistory before the first city is a separate, far larger quantity
-biased by how kind the planet turned out to be ([`src/civilization/epoch.rs`](src/civilization/epoch.rs)).
+a throne — and a year placed a few centuries to a couple of millennia *after* the atlas date.
+Because the map portrays the world in its dawn, every date it shows is therefore counted back
+as BCE, and the depth of prehistory before the first
+city is a separate, far larger quantity biased by how kind the planet turned out to be
+([`src/civilization/epoch.rs`](src/civilization/epoch.rs)).
 
 ## Determinism and caching
 
@@ -194,7 +214,7 @@ political and history stages.
 | [`src/civilization/`](src/civilization/) | Cradles, expansion, development, ages, the calendar, dossiers. |
 | [`src/export/`](src/export/) | Palettes, legends and the headless PNG painters. |
 | [`src/viewer/`](src/viewer/) | The interactive egui atlas: scopes, tiers, legends and hover readouts. |
-| `src/main.rs` | CLI parsing and the render stages, headless or interactive. |
+| [`src/main.rs`](src/main.rs) | CLI parsing and the render stages, headless or interactive. |
 
 Built with Rust (edition 2024) and a small dependency set: `eframe`/`egui`, `noise`,
 `rand_chacha`, `rayon`, `bincode`, `image` and `serde`.

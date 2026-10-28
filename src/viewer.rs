@@ -5,7 +5,7 @@ use eframe::egui::{
 };
 use noise::{NoiseFn, OpenSimplex};
 use rayon::prelude::*;
-use crate::civilization::epoch::ce_label;
+use crate::civilization::SocietyTier;
 use crate::civilization::{Civilization, CivilizationWorld};
 use crate::core::fmt::{thousands, thousands_u64};
 use crate::core::polar::{frozen_sea_name, is_frozen_sea, ICE_SHELF_TEMP, PACK_ICE_TEMP};
@@ -54,6 +54,12 @@ const TEXT_HEADING: f32 = 20.0;
 /// The width a hover card may claim: wide enough for a full sentence at
 /// [`TEXT_BODY`], narrow enough to keep the map underneath in view.
 const CARD_WIDTH: f32 = 430.0;
+
+/// The width of a legend panel. The five thematic legends are all keys, so they
+/// share one width; the dawn of history is the only one that lists societies by
+/// name, and gets a little more room for it.
+const LEGEND_WIDTH: f32 = 330.0;
+const CIV_LEGEND_WIDTH: f32 = 350.0;
 
 /// Install the atlas's type scale, spacing and metrics on one [`egui::Style`].
 ///
@@ -513,6 +519,12 @@ fn civ_border_shade(
     color
 }
 
+/// A partitioned world carries hundreds of societies, and building a widget for
+/// every one of them every frame would cost more than the map it describes: the
+/// legend lists the first few of each tier, in the order the atlas assembled them,
+/// and says how many it left out.
+const LISTED_PER_TIER: usize = 24;
+
 /// A short dossier for one civilization, as the Civilizations map mode shows it
 /// on hover: where it rose and why, how it lives, what it believes, and how many
 /// people it holds. Deliberately a card, not a monograph — the full measurements
@@ -528,13 +540,16 @@ fn civilization_dossier(ui: &mut egui::Ui, civ: &Civilization, world: &Civilizat
     caption(
         ui,
         format!(
-            "{} · founded {} · {}",
+            "{} · {} — {}",
+            civ.tier.label(),
             civ.rise.kind.label(),
-            ce_label(civ.founding_year),
             civ.culture.government.label()
         ),
     );
-    caption(ui, civ.year_label());
+    caption(ui, civ.origin_label());
+    if civ.founding_year.is_some() {
+        caption(ui, civ.year_label());
+    }
 
     ui.separator();
     caption(ui, civ.cradle_kind.describe());
@@ -581,6 +596,55 @@ fn civilization_dossier(ui: &mut egui::Ui, civ: &Civilization, world: &Civilizat
             .collect();
         caption(ui, format!("Neighbours: {}", neighbours.join(", ")));
     }
+}
+
+/// One row of the five-way key: a tier's colour, its name, and how much of the
+/// world's inhabited land the tier holds.
+///
+/// The line is **wrapped, never widened**. A legend panel is painted *before* the
+/// map canvas and is only ever clipped to itself, so a row wider than the panel
+/// widens the panel's own frame: the map, painted afterwards, then covers the
+/// overhang — and the reader loses the left end of every over-long row behind
+/// the map. Keep every row of a legend inside the width it was given.
+fn society_key_row(ui: &mut egui::Ui, tier: SocietyTier, count: usize, share: f32) {
+    ui.horizontal(|ui| {
+        themes::swatch(ui, tier.legend_color());
+        // `.wrap()` is the whole point: egui lets a label in a horizontal row
+        // extend past the row (a vertical layout wraps, a horizontal one does
+        // not), and a wrapped line costs the row a second line instead of the
+        // panel its left edge.
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(format!(
+                    "{} — {count} societies · {share:.1}% of the land",
+                    tier.label(),
+                ))
+                .small(),
+            )
+            .wrap(),
+        );
+    })
+    .response
+    .on_hover_text(tier.describe());
+}
+
+/// One society's entry in the dawn legend: its colour and its name, as a button
+/// that flies the map to the society's heartland. Returns `true` when the reader
+/// clicked it.
+///
+/// A society's name is *data* — the atlas did not choose it — so the button
+/// truncates rather than widen the row. Widening a row widens the panel's frame
+/// (see [`society_key_row`]), and the map then covers the panel's left edge.
+fn society_entry(ui: &mut egui::Ui, color: [u8; 3], name: &str, selected: bool) -> bool {
+    let mut clicked = false;
+    ui.horizontal(|ui| {
+        themes::swatch(ui, color);
+        clicked = ui
+            .add(egui::Button::selectable(selected, egui::RichText::new(name).strong()).truncate())
+            .on_hover_text("Click to fly to this society's heartland")
+            .clicked();
+    });
+    clicked
 }
 
 impl MapViewer {
@@ -1385,7 +1449,7 @@ impl eframe::App for MapViewer {
             egui::Panel::right("hypsometric_legend")
                 .frame(panel_frame.clone())
                 .resizable(false)
-                .exact_size(330.0)
+                .exact_size(LEGEND_WIDTH)
                 .show(ui, |ui| {
                     panel_title(ui, "⛰ Topographic Scale");
                     caption(ui, "Tint = elevation above / depth below the sea surface.");
@@ -1446,7 +1510,7 @@ impl eframe::App for MapViewer {
             egui::Panel::right("climate_legend")
                 .frame(panel_frame.clone())
                 .resizable(false)
-                .exact_size(330.0)
+                .exact_size(LEGEND_WIDTH)
                 .show(ui, |ui| {
                     panel_title(ui, "🌦 Climate Zones");
                     caption(
@@ -1483,7 +1547,7 @@ impl eframe::App for MapViewer {
             egui::Panel::right("temperature_legend")
                 .frame(panel_frame.clone())
                 .resizable(false)
-                .exact_size(330.0)
+                .exact_size(LEGEND_WIDTH)
                 .show(ui, |ui| {
                     panel_title(ui, "🌡 Temperature");
                     caption(
@@ -1511,7 +1575,7 @@ impl eframe::App for MapViewer {
             egui::Panel::right("terrain_legend")
                 .frame(panel_frame.clone())
                 .resizable(false)
-                .exact_size(330.0)
+                .exact_size(LEGEND_WIDTH)
                 .show(ui, |ui| {
                     panel_title(ui, "🪨 Terrain Types");
                     caption(
@@ -1541,7 +1605,7 @@ impl eframe::App for MapViewer {
             egui::Panel::right("civilizations_legend")
                 .frame(panel_frame.clone())
                 .resizable(false)
-                .exact_size(350.0)
+                .exact_size(CIV_LEGEND_WIDTH)
                 .show(ui, |ui| {
                     panel_title(ui, "🏺 The Dawn of Civilization");
                     let world = &self.civilizations;
@@ -1583,62 +1647,93 @@ impl eframe::App for MapViewer {
                     }
                     ui.separator();
                     ui.label(format!(
-                        "{} realms on {} civilized provinces",
+                        "{} societies on {} inhabited provinces",
                         world.civilizations.len(),
                         thousands(world.civilized_provinces as f32),
                     ));
                     ui.label(format!(
-                        "{} km² held · world population {}",
+                        "{} km² inhabited · world population {}",
                         thousands(world.civilized_area_km2),
                         thousands_u64(world.total_population),
                     ));
                     ui.label(format!(
-                        "Mean density {:.1} people/km²",
+                        "Mean density {:.2} people/km²",
                         world.mean_density_per_km2()
                     ));
-                    caption(ui, "Click a realm to fly to its cradle.");
                     ui.separator();
 
+                    // ── THE FIVE-WAY KEY ──────────────────────────────────────
+                    // The map is a mosaic of five kinds of society, so the legend
+                    // leads with what the colours *mean* and only then lists who holds
+                    // what: a reader should be able to read the world's shape off the
+                    // key alone.
+                    let counts = world.counts_by_tier();
+                    let areas = world.area_by_tier();
+                    let inhabited_area: f32 = areas.iter().sum::<f32>().max(1.0);
+                    caption(ui, "How the world is organised");
+                    for (index, tier) in SocietyTier::LADDER.iter().enumerate() {
+                        society_key_row(
+                            ui,
+                            *tier,
+                            counts[index],
+                            100.0 * areas[index] / inhabited_area,
+                        );
+                    }
+                    ui.separator();
+                    caption(ui, "Click a society to fly to its heartland.");
+
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        for (index, civ) in world.civilizations.iter().enumerate() {
-                            let id = index as u32 + 1;
-                            ui.horizontal(|ui| {
-                                themes::swatch(ui, civ.color);
-                                let selected = self.selected_civ == Some(id);
-                                if ui
-                                    .selectable_label(
-                                        selected,
-                                        egui::RichText::new(civ.name.as_str()).strong(),
-                                    )
-                                    .on_hover_text("Click to fly to this realm's cradle")
-                                    .clicked()
-                                {
-                                    clicked_civ = Some(id);
-                                }
-                            });
+                        for tier in SocietyTier::LADDER {
+                            let shown = world
+                                .civilizations
+                                .iter()
+                                .filter(|civ| civ.tier == tier)
+                                .count();
+                            if shown == 0 {
+                                continue;
+                            }
+                            ui.add_space(4.0);
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "{} · founded {} · {} — {}",
-                                    civ.cradle_kind.label(),
-                                    ce_label(civ.founding_year),
-                                    civ.culture.government.label(),
-                                    if civ.culture.government.is_state() {
-                                        "a state"
-                                    } else {
-                                        "pre-state"
-                                    },
+                                    "{} ({shown})",
+                                    tier.label()
                                 ))
-                                .small(),
+                                .strong(),
                             );
-                            caption(
-                                ui,
-                                format!(
-                                    "{} provinces · {} people",
-                                    civ.provinces.len(),
-                                    thousands_u64(civ.population),
-                                ),
-                            );
-                            ui.separator();
+                            let mut listed = 0usize;
+                            for (index, civ) in world.civilizations.iter().enumerate() {
+                                if civ.tier != tier || listed >= LISTED_PER_TIER {
+                                    continue;
+                                }
+                                listed += 1;
+                                let id = index as u32 + 1;
+                                let selected = self.selected_civ == Some(id);
+                                if society_entry(ui, civ.color, civ.name.as_str(), selected) {
+                                    clicked_civ = Some(id);
+                                }
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} · {}",
+                                        civ.environment.label(),
+                                        civ.culture.government.label(),
+                                    ))
+                                    .small(),
+                                );
+                                caption(
+                                    ui,
+                                    format!(
+                                        "{} provinces · {} people",
+                                        civ.provinces.len(),
+                                        thousands_u64(civ.population),
+                                    ),
+                                );
+                            }
+                            if shown > listed {
+                                caption(
+                                    ui,
+                                    format!("… and {} more, all on the map.", shown - listed),
+                                );
+                            }
                         }
                     });
                 });
@@ -2045,16 +2140,29 @@ impl eframe::App for MapViewer {
                                 ui.strong(format!("Province #{}", node.anchor_id));
                             });
                         }
-                        // ── The realm this province belongs to ────────────────
+                        // ── The society this province belongs to ──────────────
                         // Shown in every scope, because the province's population
-                        // and its civilization are facts about the province, not
-                        // about the map mode currently on screen.
+                        // and its holders are facts about the province, not about the
+                        // map mode currently on screen.
                         let owner = self.civilizations.owner_of(id);
                         if owner != 0 {
                             ui.horizontal(|ui| {
-                                ui.label("Civilization:");
+                                ui.label("Society:");
                                 ui.strong(self.civilizations.name_of(owner));
                             });
+                            if let Some(tier) = self.civilizations.tier_of(id) {
+                                let environment = self
+                                    .civilizations
+                                    .civilization(owner)
+                                    .map_or("", |civ| civ.environment.label());
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} · {environment}",
+                                        tier.label()
+                                    ))
+                                    .small(),
+                                );
+                            }
                         }
                         ui.separator();
                         ui.label(format!("Size: {} px", node.pixel_count));
@@ -2072,7 +2180,7 @@ impl eframe::App for MapViewer {
                                         .max(1.0),
                             ));
                             ui.label(format!(
-                                "Realm population: {} people",
+                                "Society population: {} people",
                                 thousands_u64(
                                     self.civilizations
                                         .civilization(owner)
@@ -2098,6 +2206,95 @@ impl eframe::App for MapViewer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Everything one frame painted, as a single bounding rectangle.
+    fn painted_bounds(output: &egui::FullOutput) -> egui::Rect {
+        output
+            .shapes
+            .iter()
+            .fold(egui::Rect::NOTHING, |bounds, clipped| {
+                // The shape's own extent, deliberately not its clip: whether a
+                // shape is *visible* is exactly what is in question here.
+                bounds.union(clipped.shape.visual_bounding_rect())
+            })
+    }
+
+    /// A legend is painted *before* the map canvas, and the canvas is clipped only
+    /// to itself: anything the legend paints past the space it reserved is
+    /// covered by the map. A legend row is the one piece of a panel that can
+    /// grow, and a row wider than its panel widens the panel's own *frame*, so
+    /// the panel's background — and with it the left end of every over-long row —
+    /// used to disappear behind the map.
+    ///
+    /// Only the legend is shown, so every shape in the output belongs to it.
+    #[test]
+    fn a_legend_never_paints_under_the_map_canvas() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1720.0, 1040.0));
+        let mut canvas = egui::Rect::NOTHING;
+        let mut legend_ink = egui::Rect::NOTHING;
+        let mut drawn = Vec::new();
+
+        for frame in 0..3 {
+            let mut input = egui::RawInput::default();
+            input.screen_rect = Some(screen);
+            input.time = Some(1.0 + f64::from(frame));
+
+            let mut output = ctx.run_ui(input, |ui| {
+                egui::Panel::right("civilizations_legend")
+                    .frame(atlas_panel_frame(ui.style()))
+                    .resizable(false)
+                    .exact_size(CIV_LEGEND_WIDTH)
+                    .show(ui, |ui| {
+                        // The legend as the atlas lays it out, with the widest
+                        // rows a world can put in it.
+                        panel_title(ui, "🏺 The Dawn of Civilization");
+                        ui.separator();
+                        caption(ui, "How the world is organised");
+                        for (index, tier) in SocietyTier::LADDER.iter().enumerate() {
+                            society_key_row(ui, *tier, 9_999 + index, 100.0 / 5.0);
+                        }
+                        ui.separator();
+                        // A society's name comes from the world, not from this
+                        // file: the longest a name can get must still fit.
+                        society_entry(
+                            ui,
+                            SocietyTier::States.legend_color(),
+                            "The Sunlit Isle Confederacy of the Common Era",
+                            false,
+                        );
+                    });
+
+                let (rect, _) =
+                    ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+                canvas = rect;
+            });
+            legend_ink = painted_bounds(&output);
+            drawn = drawn_text(&output);
+            // A test paints nothing, so the texture deltas are ours to discard.
+            output.textures_delta.clear();
+        }
+
+        assert!(
+            legend_ink.min.x >= canvas.max.x - 1.0,
+            "the legend paints from x = {:.1} but the map canvas ends at x = {:.1}: \
+             the map would be drawn over the legend's left edge",
+            legend_ink.min.x,
+            canvas.max.x,
+        );
+        // ...and it was moved, not lost: every tier of the key is still painted.
+        let key_rows = drawn
+            .iter()
+            .filter(|(text, _)| text.contains("% of the land"))
+            .count();
+        assert_eq!(
+            key_rows,
+            SocietyTier::LADDER.len(),
+            "a key row must wrap inside the panel, never be dropped from it"
+        );
+    }
 
     /// The size the atlas draws a given style in.
     fn size_of(style: &egui::Style, text_style: TextStyle) -> f32 {

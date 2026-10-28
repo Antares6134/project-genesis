@@ -23,10 +23,12 @@
 //! decided to count years. Instead the epoch is a *place* and a *year*, both drawn
 //! from the seed: a province chosen for the shape a founding story takes (a
 //! crossroads, a lone peak, a lake, an island — never a cradle, never a throne), and
-//! a year a few centuries into the life of whoever held it.
+//! a year placed a few centuries to a couple of millennia *after* the atlas date.
 //!
 //! The timeline has no beginning. Years before the epoch are counted backwards as
-//! BCE, and the depth of prehistory before the first city is a separate, much
+//! BCE — and because the atlas portrays a world in its dawn, that is every date the
+//! map shows, exactly as a map of our own 2000 BCE is dated in the years before the
+//! Common Era. The depth of prehistory before the first city is a separate, much
 //! larger quantity drawn per world and biased by how kind the planet turned out to
 //! be — there is no fixed span between the first people and the first hearth. The
 //! atlas then portrays the world at a single date (see [`CivilizationWorld::map_year`]),
@@ -52,63 +54,7 @@ pub use config::CivilizationConfig;
 #[allow(unused_imports)]
 pub use epoch::{Epoch, Timeline};
 pub use generator::generate_civilizations;
-pub use report::report_civilizations;
-
-/// The hand-picked anchors of the civilization palette.
-///
-/// These ten mutually distinguishable earth tones (ochre, lapis, jade,
-/// terracotta…) are tried first, because they are the *subject* of their map
-/// mode and should read as a family. A clustered world can carry more than ten
-/// realms, so [`civilization_color`] continues the palette with a golden-ratio
-/// hue walk in the same muted register.
-pub const CIVILIZATION_COLORS: [[u8; 3]; 10] = [
-    [188, 74, 58],   // terracotta — fired brick and flood silt
-    [66, 108, 168],  // lapis — river-borne trade and deep water
-    [186, 144, 58],  // ochre — dry grain country
-    [88, 148, 96],   // jade — forest and terrace
-    [150, 100, 168], // amethyst — highland oracle country
-    [206, 132, 92],  // copper — smelted metal and desert light
-    [70, 152, 150],  // turquoise — island and strait
-    [166, 166, 92],  // olive — steppe and thorn scrub
-    [196, 100, 140], // rose — savanna blossom
-    [120, 122, 176], // slate violet — cold northern shore
-];
-
-/// The colour of the civilization at `index` in the palette.
-///
-/// The first ten entries are the hand-picked anchors; beyond them the palette
-/// continues with a golden-ratio hue walk, so a world of thirty clustered realms
-/// still gets thirty distinct, evenly-spread tones.
-pub fn civilization_color(index: usize) -> [u8; 3] {
-    if let Some(anchor) = CIVILIZATION_COLORS.get(index) {
-        return *anchor;
-    }
-    const GOLDEN_RATIO: f32 = 0.618_034;
-    let hue = (index as f32 * GOLDEN_RATIO).fract();
-    let (r, g, b) = hsv_to_rgb(hue, 0.42, 0.72);
-    [
-        (r * 255.0).round() as u8,
-        (g * 255.0).round() as u8,
-        (b * 255.0).round() as u8,
-    ]
-}
-
-/// `hue`/`saturation`/`value` in `0..=1` to `r`/`g`/`b` in `0..=1`.
-fn hsv_to_rgb(hue: f32, saturation: f32, value: f32) -> (f32, f32, f32) {
-    let sector = (hue * 6.0).floor();
-    let fraction = hue * 6.0 - sector;
-    let p = value * (1.0 - saturation);
-    let q = value * (1.0 - fraction * saturation);
-    let t = value * (1.0 - (1.0 - fraction) * saturation);
-    match sector as i32 % 6 {
-        0 => (value, t, p),
-        1 => (q, value, p),
-        2 => (p, value, t),
-        3 => (p, q, value),
-        4 => (t, p, value),
-        _ => (value, p, q),
-    }
-}
+pub use report::{report_civilizations, report_civilizations_all};
 
 // ─── WHY A CIVILIZATION ROSE WHERE IT DID ────────────────────────────────────
 
@@ -198,6 +144,112 @@ impl CradleKind {
     }
 }
 
+// ─── WHAT COUNTRY A PEOPLE LIVES IN ──────────────────────────────────────────
+
+/// The biome a province's people live in.
+///
+/// Read off a province's own climate, soil, relief and water — for **every**
+/// inhabited province, not only for the handful of seats that grow states. This is
+/// the coarse half of the model: the environment decides what a country *can*
+/// feed (see [`Subsistence`]), while how far it lies from the nearest state decides
+/// how much of that potential has actually been worked (see [`SocietyTier`]).
+///
+/// Where [`CradleKind`] answers "why did a *state* rise here?", `Environment`
+/// answers "what is the country like?" for a forest band or a herd people too.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Environment {
+    /// Permanent ice and the frost-shattered ground at its edge.
+    IceMargin,
+    /// Cold, treeless ground: lichen, moss and the summer herd.
+    Tundra,
+    /// Cold conifer forest and bog.
+    Taiga,
+    /// Temperate forest with rain and soil enough for grain, timber and forage.
+    Woodland,
+    /// Dry grassland: too dry for a plough, rich enough for herds.
+    Steppe,
+    /// Hot, seasonally wet grass and scrub: grain and herds together.
+    Savanna,
+    /// Arid ground where rain almost never falls.
+    Desert,
+    /// Wet tropical forest broken by rivers.
+    TropicalForest,
+    /// High, thin-aired ground: terraces, springs and a wall of rock.
+    Highland,
+    /// A shore reached only by water: an island's country.
+    IslandShore,
+    /// A lake shore: fish, reeds, fresh water and a navigable surface.
+    Lacustrine,
+    /// A great river's floodplain: annual silt and irrigation.
+    Floodplain,
+    /// A great river meeting the sea: silt, salt, fish and a harbour at once.
+    Delta,
+    /// A temperate shore with no great river: boats, fish and salt.
+    Coast,
+}
+
+impl Environment {
+    /// Short name of the country, for the atlas legend and the dossier.
+    pub fn label(self) -> &'static str {
+        match self {
+            Environment::IceMargin => "Ice margin",
+            Environment::Tundra => "Tundra",
+            Environment::Taiga => "Taiga",
+            Environment::Woodland => "Woodland",
+            Environment::Steppe => "Steppe",
+            Environment::Savanna => "Savanna",
+            Environment::Desert => "Desert",
+            Environment::TropicalForest => "Tropical forest",
+            Environment::Highland => "Highland",
+            Environment::IslandShore => "Island shore",
+            Environment::Lacustrine => "Lakeshore",
+            Environment::Floodplain => "River floodplain",
+            Environment::Delta => "River delta",
+            Environment::Coast => "Open coast",
+        }
+    }
+
+    /// The noun a people of this country are named by: `taiga hunter-gatherers`.
+    pub fn noun(self) -> &'static str {
+        match self {
+            Environment::IceMargin => "polar",
+            Environment::Tundra => "tundra",
+            Environment::Taiga => "taiga",
+            Environment::Woodland => "woodland",
+            Environment::Steppe => "steppe",
+            Environment::Savanna => "savanna",
+            Environment::Desert => "desert",
+            Environment::TropicalForest => "tropical forest",
+            Environment::Highland => "highland",
+            Environment::IslandShore => "island",
+            Environment::Lacustrine => "lakeside",
+            Environment::Floodplain => "floodplain",
+            Environment::Delta => "delta",
+            Environment::Coast => "coastal",
+        }
+    }
+
+    /// One sentence on what living here is like.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Environment::IceMargin => "ice lies on the ground all year and only the sea's edge gives a living",
+            Environment::Tundra => "nothing grows tall enough to hide a man, so the summer herd is the whole harvest",
+            Environment::Taiga => "cold conifer forest and bog, where the rivers are the only roads",
+            Environment::Woodland => "rain, timber and soil arrive together, so a household can hunt, forage and clear a field in one country",
+            Environment::Steppe => "too dry for a plough, rich enough for herds: wealth walks, and so does the people who own it",
+            Environment::Savanna => "rain comes in one season, so grain, herds and game can all be husbanded in one country",
+            Environment::Desert => "rain almost never falls, so every crossing is measured in wells",
+            Environment::TropicalForest => "the forest gives everything except open ground, so gardens are cut and abandoned as the soil runs out",
+            Environment::Highland => "rock walls keep the neighbours out and springs keep the valley green",
+            Environment::IslandShore => "water is the only road, so every household is a boat and every coast is a frontier",
+            Environment::Lacustrine => "the lake gives fish, reeds, fresh water and a road that carries a canoe in every direction",
+            Environment::Floodplain => "the river rebuilds the soil every year, so nobody has to move and nobody can leave",
+            Environment::Delta => "silt, fish and salt water meet in one place, so farming and shipping grow up in the same village",
+            Environment::Coast => "there is no great river, but the sea feeds a shore that can sail rather than plough",
+        }
+    }
+}
+
 // ─── HOW A CIVILIZATION LIVES ────────────────────────────────────────────────
 
 /// How a civilization feeds itself.
@@ -209,6 +261,8 @@ pub enum Subsistence {
     FishingAndSeafaring,
     ShiftingCultivation,
     TerraceFarming,
+    /// Hunting, fishing and gathering: no field is planted and no herd is kept.
+    Foraging,
 }
 
 impl Subsistence {
@@ -220,6 +274,7 @@ impl Subsistence {
             Subsistence::FishingAndSeafaring => "Fishing and seafaring",
             Subsistence::ShiftingCultivation => "Shifting cultivation",
             Subsistence::TerraceFarming => "Terrace farming",
+            Subsistence::Foraging => "Hunting and gathering",
         }
     }
 
@@ -232,6 +287,7 @@ impl Subsistence {
             Subsistence::FishingAndSeafaring => "the fishing boat",
             Subsistence::ShiftingCultivation => "the forest garden plot",
             Subsistence::TerraceFarming => "the terraced slope",
+            Subsistence::Foraging => "the hunting ground",
         }
     }
 
@@ -244,6 +300,147 @@ impl Subsistence {
             Subsistence::FishingAndSeafaring => "The catch is a daily tax on the water and the boat is the family's capital, so skill outranks land.",
             Subsistence::ShiftingCultivation => "Forest soil gives two or three harvests and then rests for a generation, so the village moves on a slow, deliberate cycle.",
             Subsistence::TerraceFarming => "Every field is a wall of stone built up the valley side, and every wall belongs to somebody's grandfather.",
+            Subsistence::Foraging => "Nothing is planted and nothing is herded: the country is read rather than worked, and a band knows one valley the way a farmer knows one field.",
+        }
+    }
+}
+
+// ─── HOW ORGANISED A PEOPLE IS ───────────────────────────────────────────────
+
+/// How far a people has organised itself — the five-way scheme the atlas paints.
+///
+/// This is the coarse band of the same axis [`Government`] walks in detail, and it
+/// is what the Civilizations map mode colours by. A world at any date is a *mosaic*
+/// of all five: a state with archives and canals is a contemporary of a band of
+/// foragers two valleys away, and the map shows both. The tier decides a society's
+/// colour, how many people each province feeds, and what the atlas calls it.
+///
+/// Ordered from least to most organised, so a comparison is also a ranking.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum SocietyTier {
+    /// Bands who hunt, fish and gather: no fields, no herds, no state.
+    HunterGatherers,
+    /// Herders who move with their animals: wealth walks, and so do they.
+    NomadicPastoralists,
+    /// Villages that farm, with no rank or apparatus above the household.
+    SimpleFarmers,
+    /// Ranked farming societies under chiefs and lineages.
+    ComplexFarmers,
+    /// States: offices, an apparatus, and power held rather than shared by all.
+    States,
+}
+
+impl SocietyTier {
+    /// Every tier, least organised first — the atlas legend's order.
+    pub const LADDER: [SocietyTier; 5] = [
+        SocietyTier::HunterGatherers,
+        SocietyTier::NomadicPastoralists,
+        SocietyTier::SimpleFarmers,
+        SocietyTier::ComplexFarmers,
+        SocietyTier::States,
+    ];
+
+    /// The tier's index on the ladder, for the per-province tier table.
+    pub fn index(self) -> u8 {
+        match self {
+            SocietyTier::HunterGatherers => 0,
+            SocietyTier::NomadicPastoralists => 1,
+            SocietyTier::SimpleFarmers => 2,
+            SocietyTier::ComplexFarmers => 3,
+            SocietyTier::States => 4,
+        }
+    }
+
+    /// The tier an index came from; out-of-range indices fall back to the least
+    /// organised tier rather than panicking.
+    pub fn from_index(index: u8) -> Self {
+        match index {
+            1 => SocietyTier::NomadicPastoralists,
+            2 => SocietyTier::SimpleFarmers,
+            3 => SocietyTier::ComplexFarmers,
+            4 => SocietyTier::States,
+            _ => SocietyTier::HunterGatherers,
+        }
+    }
+
+    /// The name the atlas writes for this tier.
+    pub fn label(self) -> &'static str {
+        match self {
+            SocietyTier::HunterGatherers => "Hunter-gatherers",
+            SocietyTier::NomadicPastoralists => "Nomadic pastoralists",
+            SocietyTier::SimpleFarmers => "Simple farming societies",
+            SocietyTier::ComplexFarmers => "Complex farming societies",
+            SocietyTier::States => "State societies",
+        }
+    }
+
+    /// The suffix a society of this tier is named by.
+    pub fn noun(self) -> &'static str {
+        match self {
+            SocietyTier::HunterGatherers => "hunter-gatherers",
+            SocietyTier::NomadicPastoralists => "pastoralists",
+            SocietyTier::SimpleFarmers => "farmers",
+            SocietyTier::ComplexFarmers => "chiefdoms",
+            SocietyTier::States => "realm",
+        }
+    }
+
+    /// The base colour of this tier on the Civilizations map mode.
+    ///
+    /// Five mutually distinguishable hues in the atlas's own muted register; every
+    /// society inside a tier takes a lightness step off its tier's base, so
+    /// neighbours still read apart without the map becoming confetti.
+    pub fn legend_color(self) -> [u8; 3] {
+        match self {
+            SocietyTier::HunterGatherers => [232, 199, 61],
+            SocietyTier::NomadicPastoralists => [150, 113, 168],
+            SocietyTier::SimpleFarmers => [124, 156, 62],
+            SocietyTier::ComplexFarmers => [224, 133, 48],
+            SocietyTier::States => [58, 118, 186],
+        }
+    }
+
+    /// True for the tiers with a centralised apparatus behind them.
+    pub fn is_state(self) -> bool {
+        self == SocietyTier::States
+    }
+
+    /// How much of a province's carrying capacity this tier actually draws.
+    ///
+    /// A province's capacity is measured as what a *state* could take from it; every
+    /// other tier is a fraction of that. A band of foragers lives off the same
+    /// country at less than a hundredth of it, a ranked chiefdom at a half, and a
+    /// state's figure is then scaled again by its own measured development. These few
+    /// numbers are what makes a world's population look like a world's rather than a
+    /// sum of empires.
+    pub fn density_factor(self) -> f32 {
+        match self {
+            SocietyTier::HunterGatherers => 0.007,
+            SocietyTier::NomadicPastoralists => 0.045,
+            SocietyTier::SimpleFarmers => 0.150,
+            SocietyTier::ComplexFarmers => 0.500,
+            SocietyTier::States => 1.0,
+        }
+    }
+
+    /// One sentence on how such a people lives.
+    pub fn describe(self) -> &'static str {
+        match self {
+            SocietyTier::HunterGatherers => {
+                "A country of bands: a few families read one valley, move with the season, and answer to nobody but their own elders."
+            }
+            SocietyTier::NomadicPastoralists => {
+                "A country of herders: wealth is counted in animals and measured in pasture, so the people move and the horizon is their border."
+            }
+            SocietyTier::SimpleFarmers => {
+                "A country of villages: fields are cleared and kept, the household is the unit of work, and no rank stands above it."
+            }
+            SocietyTier::ComplexFarmers => {
+                "A ranked farming country: chiefs and lineages hold the land, tribute flows upward, and a great man is buried with more than he could use."
+            }
+            SocietyTier::States => {
+                "A state: offices, archives and a standing apparatus, which can tax a harvest it never touched and raise a wall it will not live to see finished."
+            }
         }
     }
 }
@@ -654,6 +851,11 @@ pub struct Civilization {
     /// The realm's colour on the Civilizations map mode.
     pub color: [u8; 3],
 
+    /// How organised this people is — the five-way scheme the atlas paints.
+    pub tier: SocietyTier,
+    /// The country they live in, read off their own provinces.
+    pub environment: Environment,
+
     pub cradle_kind: CradleKind,
     /// The realm's size class, kept internal: scope is shown as area and
     /// population, never as a tier.
@@ -682,8 +884,13 @@ pub struct Civilization {
     /// The year the realm was founded, written in the world's own era — negative
     /// for BCE, so a realm older than the epoch carries a BCE date. See
     /// [`epoch::ce_label`](crate::civilization::epoch::ce_label).
-    pub founding_year: i32,
-    /// Years elapsed between founding and the map date.
+    ///
+    /// `None` for a people rather than a polity: a band of foragers and a herd
+    /// people have no founding year, because nobody founded them — they were
+    /// already there. Dating them would repeat the error the dossier's whole
+    /// rework exists to undo.
+    pub founding_year: Option<i32>,
+    /// Years elapsed between founding and the map date. Zero for a people.
     pub age_years: u32,
 
     /// Every realm it can reach, ascending by id.
@@ -704,6 +911,15 @@ impl Civilization {
     /// `Year 1 240` — the realm's own calendar at the map date.
     pub fn year_label(&self) -> String {
         format!("Year {}", crate::core::fmt::thousands(self.age_years as f32))
+    }
+
+    /// How the atlas opens a society's story: a founding date for a polity, a
+    /// statement of prior occupation for a people.
+    pub fn origin_label(&self) -> String {
+        match self.founding_year {
+            Some(year) => format!("Founded {}", epoch::ce_label(year)),
+            None => "Older than any city: a people, not a polity".to_string(),
+        }
     }
 }
 
@@ -730,11 +946,16 @@ pub struct CivilizationWorld {
     pub civilizations: Vec<Civilization>,
     /// Province id → owning civilization id (0 = wilderness, water or wasteland).
     pub province_owner: Vec<u16>,
+    /// Province id → the tier of whoever holds it, as a [`SocietyTier::index`].
+    /// The atlas colours by this, so the map reads as a mosaic of societies even
+    /// where the holder itself is too small to see.
+    pub province_tier: Vec<u8>,
     /// Province id → population at the map date (0 = not civilized).
     pub province_population: Vec<u64>,
     /// Sum of every civilized province's population.
     pub total_population: u64,
-    /// Number of provinces held by a civilization.
+    /// Number of provinces held by *somebody* — every inhabited province on the
+    /// world, since the dawn partitions the whole of it between peoples and states.
     pub civilized_provinces: usize,
     /// Total area held by all civilizations, in km².
     pub civilized_area_km2: f32,
@@ -750,6 +971,7 @@ impl CivilizationWorld {
             timeline: Timeline::empty(),
             civilizations: Vec::new(),
             province_owner: Vec::new(),
+            province_tier: Vec::new(),
             province_population: Vec::new(),
             total_population: 0,
             civilized_provinces: 0,
@@ -778,6 +1000,52 @@ impl CivilizationWorld {
             .get(province_id as usize)
             .copied()
             .unwrap_or(0)
+    }
+
+    /// The tier of `province_id`'s holder, or `None` where nobody lives.
+    #[inline(always)]
+    pub fn tier_of(&self, province_id: u32) -> Option<SocietyTier> {
+        let raw = self.province_tier.get(province_id as usize).copied()?;
+        if self.owner_of(province_id) == 0 {
+            return None;
+        }
+        Some(SocietyTier::from_index(raw))
+    }
+
+    /// How many societies stand at each tier, in [`SocietyTier::LADDER`] order.
+    pub fn counts_by_tier(&self) -> [usize; 5] {
+        let mut counts = [0usize; 5];
+        for civ in &self.civilizations {
+            counts[civ.tier.index() as usize] += 1;
+        }
+        counts
+    }
+
+    /// How much land each tier holds, in km², in [`SocietyTier::LADDER`] order.
+    pub fn area_by_tier(&self) -> [f32; 5] {
+        let mut areas = [0.0f32; 5];
+        for civ in &self.civilizations {
+            areas[civ.tier.index() as usize] += civ.area_km2;
+        }
+        areas
+    }
+
+    /// How many people each tier feeds, in [`SocietyTier::LADDER`] order.
+    pub fn population_by_tier(&self) -> [u64; 5] {
+        let mut totals = [0u64; 5];
+        for civ in &self.civilizations {
+            totals[civ.tier.index() as usize] += civ.population;
+        }
+        totals
+    }
+
+    /// How many provinces each tier holds, in [`SocietyTier::LADDER`] order.
+    pub fn provinces_by_tier(&self) -> [usize; 5] {
+        let mut counts = [0usize; 5];
+        for civ in &self.civilizations {
+            counts[civ.tier.index() as usize] += civ.provinces.len();
+        }
+        counts
     }
 
     /// A civilization by id (1-based), if it exists.

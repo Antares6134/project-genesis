@@ -9,8 +9,9 @@ mod civilization;
 mod viewer;
 
 use climate::{simulate_moisture, simulate_temperature, simulate_winds, ClimateConfig};
-use civilization::{
-    generate_civilizations, report_civilizations, CivilizationConfig, CivilizationWorld,
+use crate::civilization::{
+    generate_civilizations, report_civilizations, report_civilizations_all, CivilizationConfig,
+    CivilizationWorld,
 };
 use geopolitics::{
     build_geopolitical_hierarchy, build_ocean_hierarchy, extract_ocean_graph, extract_province_graph,
@@ -42,6 +43,7 @@ fn main() {
     let mut run_viewer = false;
     let mut run_plates = false;
     let mut run_civilizations = false;
+    let mut report_all_societies = false;
 
     for arg in env::args().skip(1) {
         if arg == "--save" { save_cache = true; } 
@@ -49,6 +51,7 @@ fn main() {
         else if arg == "--viewer" { run_viewer = true; }
         else if arg == "--plates" { run_plates = true; }
         else if arg == "--civs" { run_civilizations = true; }
+        else if arg == "--civs-all" { run_civilizations = true; report_all_societies = true; }
         else if let Ok(parsed_seed) = arg.parse::<u64>() { seed = parsed_seed; }
     }
 
@@ -68,7 +71,7 @@ fn main() {
     let civ_config = CivilizationConfig::default();
 
     println!("Active Seed: {} | Canvas: 8192x4096", seed);
-    let cache_path = format!("world_{}.bin", seed);
+    let cache_path = format!("./saved_seeds/world_{}.bin", seed);
 
     let total_start = Instant::now();
 
@@ -209,7 +212,11 @@ fn main() {
         );
         if run_civilizations {
             println!();
-            report_civilizations(&world);
+            if report_all_societies {
+                report_civilizations_all(&world);
+            } else {
+                report_civilizations(&world);
+            }
         }
         world
     } else {
@@ -326,23 +333,23 @@ fn main() {
     if run_plates {
         let plate_start = Instant::now();
         let plates: [(&str, viewer::MapScope, viewer::MapTier); 17] = [
-            ("atlas_physical.png",            viewer::MapScope::Physical,      viewer::MapTier::Regions),
-            ("atlas_topographic.png",         viewer::MapScope::Topographic,   viewer::MapTier::Regions),
-            ("atlas_climate.png",             viewer::MapScope::Climate,       viewer::MapTier::Regions),
-            ("atlas_temperature.png",         viewer::MapScope::Temperature,   viewer::MapTier::Regions),
-            ("atlas_terrain.png",             viewer::MapScope::Terrain,       viewer::MapTier::Regions),
-            ("atlas_civilizations.png",       viewer::MapScope::Civilizations, viewer::MapTier::Regions),
-            ("atlas_land_provinces.png",      viewer::MapScope::Land,          viewer::MapTier::Provinces),
-            ("atlas_land_areas.png",          viewer::MapScope::Land,          viewer::MapTier::Areas),
-            ("atlas_land_regions.png",        viewer::MapScope::Land,          viewer::MapTier::Regions),
-            ("atlas_land_superregions.png",   viewer::MapScope::Land,          viewer::MapTier::Superregions),
-            ("atlas_land_continents.png",     viewer::MapScope::Land,          viewer::MapTier::Continents),
-            ("atlas_water_provinces.png",     viewer::MapScope::Water,         viewer::MapTier::Provinces),
-            ("atlas_water_areas.png",         viewer::MapScope::Water,         viewer::MapTier::Areas),
-            ("atlas_water_regions.png",       viewer::MapScope::Water,         viewer::MapTier::Regions),
-            ("atlas_water_superregions.png",  viewer::MapScope::Water,         viewer::MapTier::Superregions),
-            ("atlas_water_basins.png",        viewer::MapScope::Water,         viewer::MapTier::Continents),
-            ("atlas_everywhere_regions.png",  viewer::MapScope::Everywhere,    viewer::MapTier::Regions),
+            ("./exports/atlas_physical.png",            viewer::MapScope::Physical,      viewer::MapTier::Provinces),
+            ("./exports/atlas_topographic.png",         viewer::MapScope::Topographic,   viewer::MapTier::Provinces),
+            ("./exports/atlas_climate.png",             viewer::MapScope::Climate,       viewer::MapTier::Provinces),
+            ("./exports/atlas_temperature.png",         viewer::MapScope::Temperature,   viewer::MapTier::Provinces),
+            ("./exports/atlas_terrain.png",             viewer::MapScope::Terrain,       viewer::MapTier::Provinces),
+            ("./exports/atlas_civilizations.png",       viewer::MapScope::Civilizations, viewer::MapTier::Continents),
+            ("./exports/atlas_land_provinces.png",      viewer::MapScope::Land,          viewer::MapTier::Provinces),
+            ("./exports/atlas_land_areas.png",          viewer::MapScope::Land,          viewer::MapTier::Areas),
+            ("./exports/atlas_land_regions.png",        viewer::MapScope::Land,          viewer::MapTier::Regions),
+            ("./exports/atlas_land_superregions.png",   viewer::MapScope::Land,          viewer::MapTier::Superregions),
+            ("./exports/atlas_land_continents.png",     viewer::MapScope::Land,          viewer::MapTier::Continents),
+            ("./exports/atlas_water_provinces.png",     viewer::MapScope::Water,         viewer::MapTier::Provinces),
+            ("./exports/atlas_water_areas.png",         viewer::MapScope::Water,         viewer::MapTier::Areas),
+            ("./exports/atlas_water_regions.png",       viewer::MapScope::Water,         viewer::MapTier::Regions),
+            ("./exports/atlas_water_superregions.png",  viewer::MapScope::Water,         viewer::MapTier::Superregions),
+            ("./exports/atlas_water_basins.png",        viewer::MapScope::Water,         viewer::MapTier::Continents),
+            ("./exports/atlas_everywhere_regions.png",  viewer::MapScope::Everywhere,    viewer::MapTier::Regions),
         ];
 
         let mut plate_viewer = viewer::MapViewer::new(

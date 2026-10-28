@@ -6,12 +6,24 @@
 //! then one block per realm in founding order: why it rose where it rose, what it
 //! became, who it knows and what it inherited.
 
-use crate::civilization::epoch::ce_label;
-use crate::civilization::{Civilization, CivilizationWorld};
+use crate::civilization::{Civilization, CivilizationWorld, SocietyTier};
 use crate::core::fmt::{thousands, thousands_u64};
 
-/// Print the dawn of history: the calendar, then one dossier per civilization.
+/// Print the dawn of history: the calendar, the five-way scheme, then a full
+/// dossier for every state and one line for every people.
 pub fn report_civilizations(world: &CivilizationWorld) {
+    report(world, false);
+}
+
+/// Print the dawn of history with a full dossier for **every** society.
+///
+/// A partitioned world carries hundreds of societies, so this is opt-in
+/// (`--civs-all`): four hundred full dossiers is a wall of text, not a report.
+pub fn report_civilizations_all(world: &CivilizationWorld) {
+    report(world, true);
+}
+
+fn report(world: &CivilizationWorld, all: bool) {
     println!("── Dawn of civilization (seed {}) ─────────────────────", world.seed);
 
     if world.is_empty() {
@@ -30,13 +42,30 @@ pub fn report_civilizations(world: &CivilizationWorld) {
     );
     println!("   {}", world.timeline.prehistory_label());
     println!(
-        "   Atlas date: {} | {} realms | {} civilized provinces | {} km² | population {}",
+        "   Atlas date: {} | {} societies on {} inhabited provinces | {} km² | population {}",
         world.map_year_label(),
         world.civilizations.len(),
         world.civilized_provinces,
         thousands(world.civilized_area_km2),
         thousands_u64(world.total_population),
     );
+    // The five-way scheme, as the map paints it. The shares are the model's single
+    // most useful diagnostic: a world of nothing but states is a bug, not a world.
+    let counts = world.counts_by_tier();
+    let provinces = world.provinces_by_tier();
+    let areas = world.area_by_tier();
+    let populations = world.population_by_tier();
+    let inhabited_area: f32 = areas.iter().sum::<f32>().max(1.0);
+    for (index, tier) in SocietyTier::LADDER.iter().enumerate() {
+        println!(
+            "     {:<26} {:>4} societies · {:>6} provinces · {:>5.1}% of the land · {:>11} people",
+            tier.label(),
+            counts[index],
+            provinces[index],
+            100.0 * areas[index] / inhabited_area,
+            thousands_u64(populations[index]),
+        );
+    }
     println!(
         "   World age: {} ({}) — {}.",
         world.age_label(),
@@ -50,25 +79,44 @@ pub fn report_civilizations(world: &CivilizationWorld) {
     println!();
 
     for civ in &world.civilizations {
-        report_one(world, civ);
+        if all || civ.tier.is_state() {
+            report_one(world, civ);
+        } else {
+            report_line(civ);
+        }
     }
+}
+
+/// One line for a people that is not a polity: what it is, where it is, how many
+/// it feeds. Enough to audit the map without burying the states.
+fn report_line(civ: &Civilization) {
+    println!(
+        "   · {:<32} {:<44} {:>4} provinces · {:>9} km² · {:>10} people ({:.2}/km²)",
+        civ.name,
+        format!("{} ({})", civ.tier.label(), civ.environment.label()),
+        civ.provinces.len(),
+        thousands(civ.area_km2),
+        thousands_u64(civ.population),
+        civ.density_per_km2,
+    );
 }
 
 /// Print one realm's dossier.
 fn report_one(world: &CivilizationWorld, civ: &Civilization) {
     println!(
-        "   🏺 {} — {} · {}",
+        "   🏺 {} — {} · {} · {}",
         civ.name,
+        civ.tier.label(),
         civ.cradle_kind.label(),
         civ.culture.government.label()
     );
+    println!("      {}", civ.origin_label());
+    if civ.founding_year.is_some() {
+        println!("      {}", civ.year_label());
+    }
     println!(
-        "      Founded {} (age {})",
-        ce_label(civ.founding_year),
-        thousands(civ.age_years as f32),
-    );
-    println!(
-        "      Seat: province #{} · {:.1}° {} {:.1}° {} | {} provinces · {} km² · {} people ({:.1}/km²)",
+        "      {}: province #{} · {:.1}° {} {:.1}° {} | {} provinces · {} km² · {} people ({:.1}/km²)",
+        if civ.tier.is_state() { "Seat" } else { "Heartland" },
         civ.seat_province,
         civ.seat_latitude_deg.abs(),
         if civ.seat_latitude_deg >= 0.0 { "N" } else { "S" },

@@ -5,8 +5,8 @@
 //! fixes a convention of its own — and borrows the plainest one there is: years of
 //! the **Common Era**, counted from a single important event in the world's
 //! history. That event is deliberately left undefined: the atlas never says what
-//! happened, only that whatever it was, the world's peoples have reckoned their
-//! years from it ever since.
+//! happened, only that whatever it was, the world's peoples reckon their years
+//! from it.
 //!
 //! Two decisions place the epoch, and both come out of the seed:
 //!
@@ -15,13 +15,17 @@
 //!   epoch of a real calendar is not the capital of whoever was strongest, but a
 //!   crossroads, a lone peak, a lake or an island whose story travelled further
 //!   than any army could. Jerusalem, not Sumer.
-//! * **the year** — a few centuries into the life of whatever held that place, so
-//!   the place and the date belong to one story.
+//! * **the year** — placed a few centuries to a couple of millennia *after* the
+//!   atlas date, so the world the map portrays stands in the years before its own
+//!   calendar begins.
 //!
-//! The epoch is a *convention*, not a beginning. Years before it are counted
-//! backwards as BCE, exactly as our own historiography counts them, so the timeline
-//! extends as far back as the world's prehistory runs — and that depth is a
-//! separate, much larger quantity, drawn per world (see
+//! The epoch is a *convention*, not a beginning — and, for the early ages this build
+//! reaches, it lies in the world's own future. The atlas portrays a world in its
+//! dawn, so every date it shows is BCE, exactly as a map of our own 2000 BCE is
+//! dated in the years before the Common Era. As later builds carry the ladder past
+//! this horizon, worlds will begin to stand after the event and read CE. Either way
+//! the timeline has no beginning: it extends as far back as the world's prehistory
+//! runs, and that depth is a separate, much larger quantity, drawn per world (see
 //! [`Timeline::prehistory_years`]).
 //!
 //! Nothing about any of this is Earth's own. There is no fixed three hundred
@@ -69,11 +73,14 @@ pub struct Epoch {
 ///   internal year `−prehistory_years`. It is wide-ranged and seeded, because a
 ///   gentle world may reach its first city in five thousand years and a hard one
 ///   may take a million.
-/// * [`Epoch`] is a **recent convention**, a few centuries to a few millennia into
-///   the civilized era.
+/// * [`Epoch`] is a **convention placed on that timeline**: for the early ages this
+///   build reaches, it sits a few centuries to a couple of millennia *ahead* of the
+///   atlas date, so the world the map portrays stands in the years before its own
+///   calendar begins.
 ///
 /// Neither is bounded by the other: the epoch is a measuring stick placed partway
-/// along a timeline that runs arbitrarily far back.
+/// along a timeline that runs arbitrarily far back, and the atlas may fall on either
+/// side of it — BCE before it, CE after.
 #[derive(Clone, Debug)]
 pub struct Timeline {
     /// The depth of prehistory: years from the first people to the first city.
@@ -392,6 +399,32 @@ mod tests {
         assert_eq!(
             timeline.prehistory_label(),
             "The first people appeared 42 400 years before the Common Era; the first cities rose 2 400 years before it"
+        );
+    }
+
+    /// A world portrayed *before* its calendar's epoch reads BCE: the atlas and every
+    /// founding lie in the years before the Common Era, and the first cities are as
+    /// deep in that era as the epoch stands ahead of them.
+    #[test]
+    fn a_world_before_its_epoch_reads_bce() {
+        let timeline = Timeline {
+            prehistory_years: 40_000,
+            atlas_year: 1_700,
+            age: Age::CopperAndAlloys,
+            epoch: Epoch {
+                absolute_year: 3_700, // two thousand years after the atlas
+                site_province: 7,
+                site_x: 1.0,
+                site_y: 2.0,
+                site_name: "the Green Crossing".to_string(),
+                site_realm: None,
+            },
+        };
+        assert_eq!(timeline.atlas_label(), "2 000 BCE");
+        assert_eq!(timeline.ce(0), "3 700 BCE");
+        assert_eq!(
+            timeline.prehistory_label(),
+            "The first people appeared 43 700 years before the Common Era; the first cities rose 3 700 years before it"
         );
     }
 
