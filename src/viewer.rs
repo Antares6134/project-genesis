@@ -333,6 +333,30 @@ fn lat_lon_label(lat: f32, lon: f32) -> String {
     )
 }
 
+/// The ink a political plate is drawn in: a warm near-black, so a frontier reads as
+/// a pen line rather than as a darker shade of the fill.
+const CIV_INK: [f32; 3] = [54.0, 46.0, 40.0];
+
+/// The sea of the Civilizations plate: flattened and pulled towards a pale slate.
+///
+/// The physical sea is nearly black in its deeps, which on every other scope is
+/// exactly right — those plates are *about* the ocean. Here it is context, and left
+/// alone it out-shouts the land it is supposed to frame.
+#[inline(always)]
+fn muted_sea(sea: [f32; 3]) -> [f32; 3] {
+    const SLATE: [f32; 3] = [74.0, 104.0, 130.0];
+    let mean = (sea[0] + sea[1] + sea[2]) / 3.0;
+    // Flatten first: the bathymetric shading is texture the political plate does not
+    // need, and it is what made the water look inked-in. What little survives keeps
+    // a shelf faintly visible without turning the ocean into a second map.
+    let flat = [
+        mean + (sea[0] - mean) * 0.35,
+        mean + (sea[1] - mean) * 0.35,
+        mean + (sea[2] - mean) * 0.35,
+    ];
+    blend_rgb(flat, SLATE, 0.65)
+}
+
 /// Linear blend of two float colours, `t = 0` keeping `base`.
 #[inline(always)]
 fn blend_rgb(base: [f32; 3], over: [f32; 3], t: f32) -> [f32; 3] {
@@ -512,9 +536,11 @@ fn civ_border_shade(
     };
 
     if frontier(right_id) || frontier(down_id) {
-        color = [color[0] * 0.50, color[1] * 0.50, color[2] * 0.50];
+        // Ink, not a darkened fill: a frontier drawn by multiplying a pastel gives a
+        // muddy grey line, and a frontier drawn in warm near-black reads as a border.
+        color = blend_rgb(color, CIV_INK, 0.45);
     } else if internal && (internal_edge(right_id) || internal_edge(down_id)) {
-        color = [color[0] * 0.84, color[1] * 0.84, color[2] * 0.84];
+        color = blend_rgb(color, CIV_INK, 0.18);
     }
     color
 }
@@ -1029,10 +1055,11 @@ impl MapViewer {
                 final_color = color;
             } else if civ_scope {
                 // ── Civilizations scope ────────────────────────────────
-                // The physical world wearing its history: ocean and ice exactly as
-                // the atlas paints them, unclaimed land muted to grey-green so the
-                // cradles are the only colour on the plate, and each realm in its
-                // own tint over subtle relief.
+                // The land is the subject, so the plate is built the way a political
+                // atlas is printed: a small ordered palette of flat fills, ink on the
+                // frontiers and the coast, the sea pushed back to a pale slate, and
+                // the relief carried *inside* each fill rather than mixed into it, so
+                // a realm keeps one hue from its coast to its mountains.
                 let lake = *is_lake.get(x as isize, y as isize);
                 let is_ocean = elev <= sea_level && !lake;
                 let is_waste = *is_wasteland.get(x as isize, y as isize)
@@ -1040,23 +1067,43 @@ impl MapViewer {
                 let owner = civilizations.owner_of(id);
                 let has_land_node = id != 0 && (id as usize) < hierarchy.provinces.len();
 
+                // Nobody's ground: a flat parchment, colder where the ice lies.
+                let parchment = |relief: f32| -> [f32; 3] {
+                    let phys = compute_physical_color();
+                    if display_temp < ICE_SHELF_TEMP {
+                        return blend_rgb(phys, [227.0, 236.0, 247.0], 0.55);
+                    }
+                    let grey = (phys[0] + phys[1] + phys[2]) / 3.0;
+                    [
+                        (grey * 0.45 + 214.0 * 0.55) * relief,
+                        (grey * 0.45 + 207.0 * 0.55) * relief,
+                        (grey * 0.45 + 188.0 * 0.55) * relief,
+                    ]
+                };
+
                 if is_ocean {
-                    final_color = compute_physical_color();
+                    final_color = muted_sea(compute_physical_color());
                 } else if lake {
-                    final_color = [42.0, 125.0, 185.0];
+                    final_color = [92.0, 150.0, 186.0];
                 } else if owner != 0 && has_land_node {
                     let civ_rgb = civilizations.color_of(owner);
-                    let phys = compute_physical_color();
-                    // Flat enough to read as one political patch, tinted enough to
-                    // keep the rivers, coasts and hills underneath legible.
-                    final_color = [
-                        civ_rgb[0] as f32 * 0.72 + phys[0] * 0.28,
-                        civ_rgb[1] as f32 * 0.72 + phys[1] * 0.28,
-                        civ_rgb[2] as f32 * 0.72 + phys[2] * 0.28,
+                    // Relief multiplies the fill instead of diluting it: the hue stays
+                    // exactly the realm's own across the whole of its country.
+                    let relief = (0.90 + 0.20 * (shade - 1.0)).clamp(0.82, 1.10);
+                    let mut color = [
+                        civ_rgb[0] as f32 * relief,
+                        civ_rgb[1] as f32 * relief,
+                        civ_rgb[2] as f32 * relief,
                     ];
+                    // Ice-capped country keeps its political colour under a thin
+                    // veneer rather than blanking the survey out.
+                    if display_temp < ICE_SHELF_TEMP {
+                        color = blend_rgb(color, [227.0, 236.0, 247.0], 0.45);
+                    }
+                    final_color = color;
 
-                    // The cradle itself: a small dark dot on the seat province,
-                    // the one spot on the map where this realm actually began.
+                    // The cradle itself: a small dark dot with a pale halo, so it
+                    // reads on a hunter-gatherer khaki as well as on an oxblood state.
                     if let Some(civ) = civilizations.civilization(owner) {
                         let dx = {
                             let mut d = (x as f32 - civ.seat_x).abs();
@@ -1068,20 +1115,38 @@ impl MapViewer {
                         };
                         let dy = (y as f32 - civ.seat_y).abs();
                         if dx.max(dy) <= 1.0 {
-                            final_color = blend_rgb(final_color, [28.0, 22.0, 18.0], 0.8);
+                            final_color = blend_rgb(final_color, [26.0, 20.0, 16.0], 0.85);
+                        } else if dx.max(dy) <= 2.0 {
+                            final_color = blend_rgb(final_color, [244.0, 240.0, 230.0], 0.30);
                         }
                     }
 
+                    // Rivers are a watermark here, not a subject: enough to tie the
+                    // political patches to the land, faint enough not to muddy them.
                     let flow = *flow_grid.get(x as isize, y as isize);
                     if flow >= min_river_flow {
                         let river_strength = ((flow - min_river_flow) / major_river_flow)
                             .sqrt()
                             .clamp(0.30, 1.0);
-                        let blend = (river_strength * 1.3).clamp(0.0, 1.0);
-                        final_color = blend_rgb(final_color, [20.0, 75.0, 155.0], blend);
+                        let blend = (river_strength * 0.55).clamp(0.0, 0.55);
+                        final_color = blend_rgb(final_color, [36.0, 92.0, 150.0], blend);
                     }
 
                     if show_borders {
+                        // Draw the shoreline itself: a plate whose polities run
+                        // straight into the sea reads as a diagram, not a map.
+                        let touching_sea = |nx: isize, ny: isize| {
+                            *heightmap.get(nx, ny) <= sea_level && !*is_lake.get(nx, ny)
+                        };
+                        if touching_sea(x as isize + 1, y as isize)
+                            || touching_sea(x as isize - 1, y as isize)
+                            || touching_sea(x as isize, y as isize + 1)
+                            || touching_sea(x as isize, y as isize - 1)
+                        {
+                            final_color = blend_rgb(final_color, CIV_INK, 0.32);
+                        }
+                        // Realm frontiers only: the subdivisions of the land
+                        // hierarchy are not the subject of this plate.
                         final_color = civ_border_shade(
                             final_color,
                             province_ids,
@@ -1092,32 +1157,18 @@ impl MapViewer {
                             y,
                             h,
                             tier,
-                            true,
+                            false,
                         );
                     }
-                } else if is_waste {
-                    let phys = compute_physical_color();
-                    final_color = [
-                        phys[0] * 0.78 + 35.0,
-                        phys[1] * 0.78 + 35.0,
-                        phys[2] * 0.78 + 40.0,
-                    ];
                 } else {
-                    // Unclaimed land: the same relief, drained of colour, so the
-                    // cradles are the only politics on the plate.
-                    let phys = compute_physical_color();
-                    let grey = (phys[0] + phys[1] + phys[2]) / 3.0;
-                    final_color = [
-                        (phys[0] * 0.30 + grey * 0.70) * 0.92,
-                        (phys[1] * 0.30 + grey * 0.70) * 0.92,
-                        (phys[2] * 0.30 + grey * 0.70) * 0.92,
-                    ];
+                    // Wilderness and wasteland: one parchment, so the ink of the
+                    // polities is the only thing that draws the eye.
+                    final_color = parchment((0.96 + 0.10 * (shade - 1.0)).clamp(0.90, 1.04));
 
-                    // A dark ring on the wilderness side of every frontier, so that
-                    // even a single-province realm reads as a place on a world map
-                    // instead of a smudge of colour.
-                    if show_borders {
-                        let wraps = |nid: u32| nid != 0 && civilizations.owner_of(nid) != 0;
+                    // A dark rim on the wilderness side of every frontier, so even a
+                    // single-province realm reads as a place rather than a smudge.
+                    if show_borders && !is_waste {
+                        let holds = |nid: u32| nid != 0 && civilizations.owner_of(nid) != 0;
                         let right = *province_ids
                             .get(province_ids.wrap_x(x as isize + 1) as isize, y as isize);
                         let down = if y + 1 < h {
@@ -1125,12 +1176,8 @@ impl MapViewer {
                         } else {
                             0
                         };
-                        if wraps(right) || wraps(down) {
-                            final_color = [
-                                final_color[0] * 0.55,
-                                final_color[1] * 0.55,
-                                final_color[2] * 0.55,
-                            ];
+                        if holds(right) || holds(down) {
+                            final_color = blend_rgb(final_color, CIV_INK, 0.42);
                         }
                     }
                 }
@@ -1233,7 +1280,7 @@ impl MapViewer {
                 let owner = civilizations.owner_of(id);
                 if !is_ocean && !lake && owner != 0 && id != 0 {
                     let civ_rgb = civilizations.color_of(owner);
-                    let weight = if land_political || water_political { 0.45 } else { 0.62 };
+                    let weight = if land_political || water_political { 0.40 } else { 0.62 };
                     final_color = blend_rgb(
                         final_color,
                         [civ_rgb[0] as f32, civ_rgb[1] as f32, civ_rgb[2] as f32],

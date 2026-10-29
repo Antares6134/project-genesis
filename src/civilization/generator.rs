@@ -59,7 +59,7 @@ use crate::core::{relief, Grid};
 use crate::geopolitics::{GeopoliticalHierarchy, ProvinceNode};
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
-use std::collections::{BTreeMap, BinaryHeap};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 
 /// Salt mixed into the world seed for the history stage, so the dawn draws from
 /// an independent random stream instead of replaying the province generator's.
@@ -681,7 +681,7 @@ pub fn generate_civilizations(
         config,
         config.independent_reach,
     );
-    let tiers = assign_tiers(
+    let mut tiers = assign_tiers(
         &owner,
         &influence,
         &independent,
@@ -690,12 +690,16 @@ pub fn generate_civilizations(
         config,
         &mut rng,
     );
+    // A belt of one kind of country should read as one belt. Single provinces whose
+    // tier the seeded wobble flipped would otherwise become their own one-province
+    // peoples — the confetti the map used to be covered in.
+    clean_tier_speckle(&mut tiers, &owner, &land, &stats, hierarchy);
 
     // ─── 6. ASSEMBLY ─────────────────────────────────────────────────────────
     // Contiguous provinces of one tier — and, for farming peoples, of one state's
     // hinterland — become named societies. Nothing is left over: after this every
     // inhabited province on the world belongs to somebody.
-    let (territories, society_tiers) = assemble_societies(
+    let (territories, society_tiers, merged) = assemble_societies(
         &tiers,
         &owner,
         &influence.nearest,
@@ -704,6 +708,18 @@ pub fn generate_civilizations(
         picked.len(),
         config,
     );
+    if merged > 0 {
+        let largest = territories
+            .iter()
+            .skip(picked.len())
+            .map(|t| t.len())
+            .max()
+            .unwrap_or(0);
+        println!(
+            "✓ Merged {merged} neighbour peoples · {} societies remain · largest people {largest} provinces",
+            territories.len(),
+        );
+    }
     owner = vec![0u16; n];
     for (rank, provinces) in territories.iter().enumerate() {
         let id = rank as u16 + 1;
@@ -1320,7 +1336,8 @@ pub fn generate_civilizations(
     // internal frame is converted exactly once, here: a realm's founding and the
     // map date both become years of the Common Era, negative for BCE. Nothing
     // above this point ever saw a CE year, and nothing below it sees anything else.
-    let colors = assign_colors(&skeletons);
+    let tiers_of: Vec<SocietyTier> = skeletons.iter().map(|skeleton| skeleton.tier).collect();
+    let colors = assign_colors(&tiers_of, &adjacency);
     let mut civilizations: Vec<Civilization> = Vec::with_capacity(skeletons.len());
     for rank in 0..skeletons.len() {
         let sk = &skeletons[rank];
@@ -1664,22 +1681,40 @@ fn frontier_adjacency(owner: &[u16], hierarchy: &GeopoliticalHierarchy) -> BTree
 
 /// Give every society its colour: the tier carries the hue, the society the shade.
 ///
-/// Graph colouring is hopeless here — a partitioned world carries hundreds of
-/// societies and no palette can give them all a distinct tone. What matters instead
-/// is that the map says at a glance *what kind of world this is*: the five tiers
-/// take five hues, and each society inside a tier steps its own shade so neighbours
-/// in one belt still read apart. Order-stable, so the same seed paints the same map.
-fn assign_colors(skeletons: &[Skeleton]) -> Vec<[u8; 3]> {
-    let mut seen = [0usize; 5];
-    skeletons
-        .iter()
-        .map(|sk| {
-            let slot = &mut seen[sk.tier.index() as usize];
-            let color = tier_shade(sk.tier, *slot);
-            *slot += 1;
-            color
-        })
-        .collect()
+/// This is a graph-colouring problem, and it is treated as one. The tier fixes the
+/// hue family; inside a family a society takes the first shade none of its *tier
+/// neighbours* is already wearing, so a frontier is never drawn between two patches
+/// of the same colour — which is what a rolling index used to produce, and why the
+/// old map's borders dissolved into the fill. Nine shades are more than the four a
+/// planar map needs, so the greedy walk always finds a free one. Order-stable, so the
+/// same seed paints the same map.
+fn assign_colors(tiers: &[SocietyTier], adjacency: &BTreeMap<u16, Vec<u16>>) -> Vec<[u8; 3]> {
+    let mut chosen = vec![usize::MAX; tiers.len()];
+    let mut colors = vec![[0u8; 3]; tiers.len()];
+    for (rank, &tier) in tiers.iter().enumerate() {
+        let mut taken = [false; SocietyTier::SHADES];
+        if let Some(neighbours) = adjacency.get(&(rank as u16 + 1)) {
+            for &neighbour in neighbours {
+                if neighbour == 0 {
+                    continue;
+                }
+                let other = neighbour as usize - 1;
+                if other == rank || other >= tiers.len() || tiers[other] != tier {
+                    continue;
+                }
+                let shade = chosen[other];
+                if shade < SocietyTier::SHADES {
+                    taken[shade] = true;
+                }
+            }
+        }
+        let pick = (0..SocietyTier::SHADES)
+            .find(|&shade| !taken[shade])
+            .unwrap_or(0);
+        chosen[rank] = pick;
+        colors[rank] = tier.shade(pick);
+    }
+    colors
 }
 
 /// Integrate every *state's* development from the first city to the atlas date.
@@ -2412,7 +2447,7 @@ fn assemble_societies(
     hierarchy: &GeopoliticalHierarchy,
     state_count: usize,
     config: &CivilizationConfig,
-) -> (Vec<Vec<u32>>, Vec<u8>) {
+) -> (Vec<Vec<u32>>, Vec<u8>, usize) {
     let n = tiers.len();
     let mut societies: Vec<Vec<u32>> = vec![Vec::new(); state_count];
     let mut society_tier: Vec<u8> = vec![SocietyTier::States.index(); state_count];
@@ -2469,32 +2504,325 @@ fn assemble_societies(
         society_tier.push(tier);
     }
 
-    (societies, society_tier)
+    let merged = merge_peoples(
+        &mut societies,
+        &mut society_tier,
+        state_count,
+        stats,
+        hierarchy,
+        config,
+    );
+
+    (societies, society_tier, merged)
 }
 
-/// A tier's base hue, stepped for the `index`-th society of that tier.
+/// How far apart two peoples' mean climates may sit and still be one people.
 ///
-/// Five hues cannot tell four hundred societies apart, so the tier carries the
-/// colour and the society carries the shade: neighbours inside one belt still read
-/// apart, and the map still says at a glance *what kind of world this is*. The walk
-/// alternates lighter and darker and drifts a little further with every step, so a
-/// belt of twelve farming peoples never repeats a shade next door.
-fn tier_shade(tier: SocietyTier, index: usize) -> [u8; 3] {
-    let base = tier.legend_color();
-    let sign = if index % 2 == 0 { 1.0 } else { -1.0 };
-    let step = (index / 2) as f32;
-    let shift = sign * (0.055 * step.min(3.0) + 0.025 * ((index / 8) % 3) as f32);
-    let mut out = [0u8; 3];
-    for channel in 0..3 {
-        let value = base[channel] as f32 / 255.0;
-        let value = if shift >= 0.0 {
-            value + (1.0 - value) * shift
-        } else {
-            value * (1.0 + shift)
-        };
-        out[channel] = (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+/// Wide, because a people is a *country* rather than a weather station: the same
+/// bands hunted the cold end of a forest and the warm end of it. What it still
+/// forbids is a tundra and a savanna being one people, which is not a merge but a
+/// category error.
+const MERGE_TEMP_SPAN: f64 = 15.0;
+/// How much their mean habitability may differ, as a ratio.
+const MERGE_SOIL_RATIO: f64 = 2.5;
+
+/// Remove one-province specks from the tier mosaic.
+///
+/// [`assign_tiers`] decides each province on its own, with a seeded wobble, so a
+/// belt of dry grass arrives speckled with single hunting provinces and a farming
+/// country with single herd provinces. Every one of those specks became its own
+/// one-province people downstream — the confetti the map used to be covered in. A
+/// province whose land neighbours overwhelmingly agree on another tier adopts it,
+/// provided its own country could plausibly be that way of life. States are never
+/// touched: a realm's ground is history, not weather.
+fn clean_tier_speckle(
+    tiers: &mut [u8],
+    owner: &[u16],
+    land: &[ProvinceLand],
+    stats: &[ProvinceStats],
+    hierarchy: &GeopoliticalHierarchy,
+) {
+    const PASSES: usize = 2;
+    for _ in 0..PASSES {
+        let snapshot = tiers.to_vec();
+        for i in 0..tiers.len() {
+            if !stats[i].present || owner[i] != 0 {
+                continue;
+            }
+            let mut counts = [0usize; 5];
+            let mut seen = 0usize;
+            for &(neighbour, _) in &hierarchy.provinces[i].neighbors {
+                let idx = neighbour as usize;
+                if idx >= snapshot.len() || !stats[idx].present {
+                    continue;
+                }
+                counts[snapshot[idx] as usize] += 1;
+                seen += 1;
+            }
+            if seen < 3 {
+                continue;
+            }
+            let (favourite, &votes) = counts
+                .iter()
+                .enumerate()
+                .max_by_key(|(index, votes)| (*votes, std::cmp::Reverse(*index)))
+                .unwrap();
+            // Three quarters of the frontier, so a genuine border province keeps its
+            // own tier: only specks are absorbed.
+            if favourite == snapshot[i] as usize || votes * 4 < seen * 3 {
+                continue;
+            }
+            let target = SocietyTier::from_index(favourite as u8);
+            if tier_fits_land(target, &land[i]) {
+                tiers[i] = target.index();
+            }
+        }
     }
-    out
+}
+
+/// Whether a province's own country could support a given way of life.
+///
+/// Mirrors the rule in [`assign_tiers`] exactly, so the cleanup can never invent a
+/// herd people on a floodplain or a plough on dry grass. Hunting is always
+/// admissible: any country can be hunted, however good it is for something else.
+fn tier_fits_land(tier: SocietyTier, land: &ProvinceLand) -> bool {
+    match tier {
+        SocietyTier::HunterGatherers => true,
+        SocietyTier::NomadicPastoralists => matches!(land.land_use, LandUse::Pastoralism),
+        SocietyTier::SimpleFarmers | SocietyTier::ComplexFarmers => {
+            matches!(land.land_use, LandUse::Farming { .. })
+        }
+        SocietyTier::States => false,
+    }
+}
+
+/// The ground, in km², that one people of this tier may span.
+fn merge_budget(tier: u8, config: &CivilizationConfig) -> f32 {
+    match SocietyTier::from_index(tier) {
+        SocietyTier::HunterGatherers => config.forager_merge_km2,
+        SocietyTier::NomadicPastoralists => config.pastoralist_merge_km2,
+        SocietyTier::SimpleFarmers => config.simple_farmer_merge_km2,
+        SocietyTier::ComplexFarmers => config.complex_farmer_merge_km2,
+        // States are never merged, so their budget is never consulted.
+        SocietyTier::States => 0.0,
+    }
+}
+
+/// Root of a union-find set, halving the path as it goes.
+fn uf_find(parent: &mut [usize], mut node: usize) -> usize {
+    while parent[node] != node {
+        parent[node] = parent[parent[node]];
+        node = parent[node];
+    }
+    node
+}
+
+/// Rejoin neighbouring peoples of one tier until each holds as much ground as its
+/// way of life allows.
+///
+/// A world can never be one people per ecological belt by accident: the flood in
+/// [`assemble_societies`] is cut by strips of another tier, by a state's hinterland,
+/// by mountains and by the cap on a single walk, so a steppe arrives as a dozen
+/// fragments and a state's rural fringe as a scatter of villages. This pass puts
+/// them back together — smallest peoples first, so little ones merge into each other
+/// rather than being swallowed by the largest — and stops where the ground budget or
+/// a change of country says a new people begins.
+///
+/// Two peoples are only ever joined when they are land-adjacent, hold the same tier,
+/// belong to the same cultural area, live in comparable climates and would together
+/// still fit inside the budget. Deterministic: the frontier is walked in a sorted
+/// order and every union keeps the lower rank as the root, so the same world always
+/// yields the same peoples.
+#[allow(clippy::too_many_arguments)]
+fn merge_peoples(
+    societies: &mut Vec<Vec<u32>>,
+    tiers: &mut Vec<u8>,
+    state_count: usize,
+    stats: &[ProvinceStats],
+    hierarchy: &GeopoliticalHierarchy,
+    config: &CivilizationConfig,
+) -> usize {
+    let n = societies.len();
+    if n <= state_count {
+        return 0;
+    }
+
+    // Which society holds each province, so a province edge becomes a society edge.
+    let mut holder = vec![u16::MAX; hierarchy.provinces.len()];
+    for (index, piece) in societies.iter().enumerate() {
+        for &province in piece {
+            if let Some(slot) = holder.get_mut(province as usize) {
+                *slot = index as u16;
+            }
+        }
+    }
+
+    // Each people's ground, mean climate and mean soil, kept up to date as sets are
+    // unioned: they are the terms of the compatibility test.
+    let mut ground = vec![0.0f32; n];
+    let mut warmth = vec![0.0f64; n];
+    let mut weight = vec![0.0f64; n];
+    let mut soil = vec![0.0f64; n];
+    let mut members = vec![0usize; n];
+    for (index, piece) in societies.iter().enumerate() {
+        for &province in piece {
+            let s = &stats[province as usize];
+            ground[index] += s.area_km2;
+            warmth[index] += s.temp_mean() as f64 * s.px as f64;
+            weight[index] += s.px as f64;
+            soil[index] += s.hab_mean() as f64;
+            members[index] += 1;
+        }
+    }
+
+    // Which peoples share a frontier, and could in principle be one people. Two
+    // peoples of one tier who meet are neighbours in the full sense of the word, even
+    // where the flood had put them in different cultural areas — a state's rural
+    // fringe and its neighbour's are the same countrymen, however the tribute runs.
+    let mut frontier: BTreeSet<(u16, u16)> = BTreeSet::new();
+    for index in state_count..n {
+        for &province in &societies[index] {
+            for &(neighbour, _) in &hierarchy.provinces[province as usize].neighbors {
+                let Some(&other) = holder.get(neighbour as usize) else {
+                    continue;
+                };
+                if other == u16::MAX {
+                    continue;
+                }
+                let other = other as usize;
+                if other == index || other < state_count || tiers[other] != tiers[index] {
+                    continue;
+                }
+                // One entry per pair, whichever way round the frontier was met.
+                frontier.insert(if index < other {
+                    (index as u16, other as u16)
+                } else {
+                    (other as u16, index as u16)
+                });
+            }
+        }
+    }
+    let (mut parent, merged) = merge_frontier(
+        &frontier,
+        &mut ground,
+        &mut warmth,
+        &mut weight,
+        &mut soil,
+        &mut members,
+        tiers,
+        config,
+    );
+
+    // Rebuild the list in rank order. States keep the ranks they were given, so a
+    // cradle's id never moves because a fjord's foragers changed their mind.
+    let mut slot = vec![usize::MAX; n];
+    let mut kept: Vec<usize> = Vec::with_capacity(n);
+    for index in 0..n {
+        let root = uf_find(&mut parent, index);
+        if index < state_count || root == index {
+            slot[root] = kept.len();
+            kept.push(root);
+        }
+    }
+    let mut rebuilt: Vec<Vec<u32>> = vec![Vec::new(); kept.len()];
+    let rebuilt_tiers: Vec<u8> = kept.iter().map(|&root| tiers[root]).collect();
+    for index in 0..n {
+        let root = uf_find(&mut parent, index);
+        let target = if index < state_count { slot[index] } else { slot[root] };
+        if let Some(piece) = rebuilt.get_mut(target) {
+            piece.extend_from_slice(&societies[index]);
+        }
+    }
+    for piece in &mut rebuilt {
+        piece.sort_unstable();
+    }
+
+    *societies = rebuilt;
+    *tiers = rebuilt_tiers;
+    merged
+}
+
+/// Union every frontier that is allowed to become one people, and report which
+/// society ended up in which set.
+///
+/// Split from [`merge_peoples`] so the walk over the frontier — the only part with
+/// an opinion about size, climate and soil — stays readable on its own.
+#[allow(clippy::too_many_arguments)]
+fn merge_frontier(
+    frontier: &BTreeSet<(u16, u16)>,
+    ground: &mut [f32],
+    warmth: &mut [f64],
+    weight: &mut [f64],
+    soil: &mut [f64],
+    members: &mut [usize],
+    tiers: &[u8],
+    config: &CivilizationConfig,
+) -> (Vec<usize>, usize) {
+    let n = ground.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    let mut merged = 0usize;
+    loop {
+        // Smallest unions first: little peoples pair off with each other instead of
+        // one giant absorbing every neighbour it touches.
+        let mut pending: Vec<(f32, u16, u16)> = frontier
+            .iter()
+            .filter_map(|&(a, b)| {
+                let root_a = uf_find(&mut parent, a as usize);
+                let root_b = uf_find(&mut parent, b as usize);
+                (root_a != root_b).then(|| (ground[root_a] + ground[root_b], a, b))
+            })
+            .collect();
+        if pending.is_empty() {
+            break;
+        }
+        pending.sort_by(|x, y| {
+            x.0.partial_cmp(&y.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(x.1.cmp(&y.1))
+                .then(x.2.cmp(&y.2))
+        });
+
+        let mut changed = false;
+        for (_, a, b) in pending {
+            let mut root_a = uf_find(&mut parent, a as usize);
+            let mut root_b = uf_find(&mut parent, b as usize);
+            if root_a == root_b || tiers[root_a] != tiers[root_b] {
+                continue;
+            }
+            if ground[root_a] + ground[root_b] > merge_budget(tiers[root_a], config) {
+                continue;
+            }
+            // The same kind of country, not merely the same kind of society: a taiga
+            // and a desert are two peoples however they both live.
+            if weight[root_a] > 0.0 && weight[root_b] > 0.0 {
+                let mean_a = warmth[root_a] / weight[root_a];
+                let mean_b = warmth[root_b] / weight[root_b];
+                if (mean_a - mean_b).abs() > MERGE_TEMP_SPAN {
+                    continue;
+                }
+            }
+            let hab_a = (soil[root_a] / members[root_a].max(1) as f64).max(1e-3);
+            let hab_b = (soil[root_b] / members[root_b].max(1) as f64).max(1e-3);
+            if (hab_a / hab_b).max(hab_b / hab_a) > MERGE_SOIL_RATIO {
+                continue;
+            }
+            if root_b < root_a {
+                std::mem::swap(&mut root_a, &mut root_b);
+            }
+            parent[root_b] = root_a;
+            ground[root_a] += ground[root_b];
+            warmth[root_a] += warmth[root_b];
+            weight[root_a] += weight[root_b];
+            soil[root_a] += soil[root_b];
+            members[root_a] += members[root_b];
+            merged += 1;
+            changed = true;
+        }
+        if !changed {
+            break;
+        }
+    }
+    (parent, merged)
 }
 
 /// How much a realm's development multiplies its provinces' carrying capacity.
@@ -3483,38 +3811,62 @@ mod tests {
         );
     }
 
-    /// The tier carries the hue and the society carries the shade: the first two
-    /// societies of a tier wear its base colour, no two consecutive societies of one
-    /// tier repeat a shade, and every shade stays inside its tier's hue family — so a
-    /// farming people never looks like a state.
+    /// A ring of `n` societies, each touching both of its neighbours: the worst case
+    /// for a greedy colouring walk.
+    fn ring(n: u16) -> BTreeMap<u16, Vec<u16>> {
+        let mut adjacency: BTreeMap<u16, Vec<u16>> = BTreeMap::new();
+        for rank in 0..n {
+            let next = (rank + 1) % n + 1;
+            let previous = (rank + n - 1) % n + 1;
+            adjacency.entry(rank + 1).or_default().push(next);
+            adjacency.entry(rank + 1).or_default().push(previous);
+        }
+        adjacency
+    }
+
+    /// No frontier is ever drawn between two patches of the same colour: a society
+    /// takes a shade none of its same-tier neighbours is wearing.
     #[test]
-    fn the_tier_carries_the_hue_and_the_society_the_shade() {
+    fn neighbouring_societies_never_share_a_colour() {
         for tier in SocietyTier::LADDER {
-            let base = tier.legend_color();
-            assert_eq!(tier_shade(tier, 0), base);
-            assert_eq!(tier_shade(tier, 1), base);
-            let mut previous = tier_shade(tier, 1);
-            for index in 2..48 {
-                let shade = tier_shade(tier, index);
-                assert_ne!(
-                    shade,
-                    previous,
-                    "{} repeated a shade at {index}",
-                    tier.label()
-                );
-                previous = shade;
+            let tiers = vec![tier; 9];
+            let adjacency = ring(9);
+            let colors = assign_colors(&tiers, &adjacency);
+            for rank in 0..9u16 {
+                for &neighbour in &adjacency[&(rank + 1)] {
+                    assert_ne!(
+                        colors[rank as usize],
+                        colors[neighbour as usize - 1],
+                        "{} repeated a shade across a frontier",
+                        tier.label()
+                    );
+                }
             }
-            let lead = (0..3).max_by_key(|&channel| base[channel]).unwrap();
-            for index in 0..48 {
-                let shade = tier_shade(tier, index);
-                assert_eq!(
-                    (0..3).max_by_key(|&channel| shade[channel]).unwrap(),
-                    lead,
-                    "{} left its hue family at {index}",
-                    tier.label()
-                );
+            // The same world always paints the same map.
+            assert_eq!(colors, assign_colors(&tiers, &adjacency));
+        }
+    }
+
+    /// Nine shades are more than a flat map needs, so even the impossible map where
+    /// every society touches every other still gets a distinct colour each — which
+    /// is the guarantee that the greedy walk never falls back on a repeat.
+    #[test]
+    fn a_shade_is_always_free() {
+        let n = SocietyTier::SHADES as u16;
+        let mut adjacency: BTreeMap<u16, Vec<u16>> = BTreeMap::new();
+        for rank in 0..n {
+            for other in 0..n {
+                if other != rank {
+                    adjacency.entry(rank + 1).or_default().push(other + 1);
+                }
             }
         }
+        let tiers = vec![SocietyTier::HunterGatherers; SocietyTier::SHADES];
+        let colors = assign_colors(&tiers, &adjacency);
+        let mut seen = colors.clone();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), SocietyTier::SHADES);
     }
 
     /// Every tier's development sits in the band of the government axis its own
@@ -3597,5 +3949,271 @@ mod tests {
         assert!(offsets.iter().copied().max().unwrap() > 1_500 / 4);
         // A world with one city founds nothing later.
         assert!(draw(7, Vec::new()).is_empty());
+    }
+
+    // ─── THE PEOPLES OF A BELT ───────────────────────────────────────────────
+
+    /// A row of provinces wired `0 — 1 — 2 …`, with countryside as alike as the
+    /// model ever sees.
+    fn chain(count: usize, area_km2: f32) -> (Vec<ProvinceStats>, GeopoliticalHierarchy) {
+        let mut stats = Vec::with_capacity(count);
+        let mut provinces = Vec::with_capacity(count);
+        for index in 0..count {
+            let mut s = ProvinceStats::default();
+            s.present = true;
+            s.px = 10;
+            s.area_km2 = area_km2;
+            s.temp_sum = 10.0 * 10.0;
+            s.hab_sum = 0.5 * 10.0;
+            s.continent_id = 1;
+            stats.push(s);
+            let mut neighbors = Vec::new();
+            if index > 0 {
+                neighbors.push((index as u32 - 1, 1));
+            }
+            if index + 1 < count {
+                neighbors.push((index as u32 + 1, 1));
+            }
+            provinces.push(node(index as u32 + 1, neighbors));
+        }
+        (stats, hierarchy_of(provinces))
+    }
+
+    /// A centre province with `arms` neighbours hanging off it.
+    fn star(arms: usize, area_km2: f32) -> (Vec<ProvinceStats>, GeopoliticalHierarchy) {
+        let count = arms + 1;
+        let mut stats = Vec::with_capacity(count);
+        let mut provinces = Vec::with_capacity(count);
+        for index in 0..count {
+            let mut s = ProvinceStats::default();
+            s.present = true;
+            s.px = 10;
+            s.area_km2 = area_km2;
+            s.temp_sum = 10.0 * 10.0;
+            s.hab_sum = 0.5 * 10.0;
+            s.continent_id = 1;
+            stats.push(s);
+            let neighbors = if index == 0 {
+                (1..count).map(|arm| (arm as u32, 1)).collect()
+            } else {
+                vec![(0u32, 1)]
+            };
+            provinces.push(node(index as u32 + 1, neighbors));
+        }
+        (stats, hierarchy_of(provinces))
+    }
+
+    fn node(id: u32, neighbors: Vec<(u32, u32)>) -> ProvinceNode {
+        ProvinceNode {
+            id,
+            center_x: id as f32,
+            center_y: 0.0,
+            pixel_count: 10,
+            neighbors,
+            area_id: 1,
+            region_id: 1,
+            superregion_id: 1,
+            continent_id: 1,
+            anchor_id: 1,
+        }
+    }
+
+    fn hierarchy_of(provinces: Vec<ProvinceNode>) -> GeopoliticalHierarchy {
+        GeopoliticalHierarchy {
+            total_provinces: provinces.len(),
+            total_areas: 1,
+            total_regions: 1,
+            total_superregions: 1,
+            total_continents: 1,
+            provinces,
+        }
+    }
+
+    /// One people per province, all of one tier — the fragmentation the merge pass
+    /// exists to undo.
+    fn singletons(count: usize, tier: SocietyTier) -> (Vec<Vec<u32>>, Vec<u8>) {
+        let societies: Vec<Vec<u32>> = (0..count).map(|p| vec![p as u32]).collect();
+        let tiers = vec![tier.index(); count];
+        (societies, tiers)
+    }
+
+    fn herd_land() -> ProvinceLand {
+        ProvinceLand {
+            environment: Environment::Steppe,
+            land_use: LandUse::Pastoralism,
+            farm: 0.0,
+            pasture: 0.9,
+        }
+    }
+
+    /// Neighbouring peoples of one tier become one people, in one pass, and the
+    /// result is a single contiguous territory rather than a scatter of ids.
+    #[test]
+    fn neighbouring_peoples_of_one_tier_become_one_people() {
+        let (stats, hierarchy) = chain(4, 1_000.0);
+        let (mut societies, mut tiers) = singletons(4, SocietyTier::HunterGatherers);
+        let merged = merge_peoples(
+            &mut societies,
+            &mut tiers,
+            0,
+            &stats,
+            &hierarchy,
+            &CivilizationConfig::default(),
+        );
+        assert_eq!(merged, 3);
+        assert_eq!(societies.len(), 1);
+        assert_eq!(societies[0], vec![0, 1, 2, 3]);
+        assert_eq!(tiers, vec![SocietyTier::HunterGatherers.index()]);
+    }
+
+    /// A state is history, not weather: it is never merged, never re-ranked, and
+    /// never grows by absorbing its neighbours' country.
+    #[test]
+    fn a_state_is_never_merged() {
+        let (stats, hierarchy) = chain(4, 1_000.0);
+        let (mut societies, mut tiers) = singletons(4, SocietyTier::HunterGatherers);
+        tiers[0] = SocietyTier::States.index();
+        let merged = merge_peoples(
+            &mut societies,
+            &mut tiers,
+            1,
+            &stats,
+            &hierarchy,
+            &CivilizationConfig::default(),
+        );
+        assert_eq!(merged, 2);
+        assert_eq!(societies.len(), 2);
+        assert_eq!(societies[0], vec![0]);
+        assert_eq!(societies[1], vec![1, 2, 3]);
+        assert_eq!(tiers[0], SocietyTier::States.index());
+    }
+
+    /// Two ways of life are two peoples, however close they stand.
+    #[test]
+    fn different_tiers_never_merge() {
+        let (stats, hierarchy) = chain(2, 1_000.0);
+        let (mut societies, mut tiers) = singletons(2, SocietyTier::HunterGatherers);
+        tiers[1] = SocietyTier::SimpleFarmers.index();
+        let merged = merge_peoples(
+            &mut societies,
+            &mut tiers,
+            0,
+            &stats,
+            &hierarchy,
+            &CivilizationConfig::default(),
+        );
+        assert_eq!(merged, 0);
+        assert_eq!(societies.len(), 2);
+    }
+
+    /// The ground budget is the real ceiling: a belt is split where one people could
+    /// not plausibly have walked it.
+    #[test]
+    fn the_ground_budget_stops_the_merge() {
+        let (stats, hierarchy) = chain(2, 10_000.0);
+        let (mut societies, mut tiers) = singletons(2, SocietyTier::ComplexFarmers);
+        let mut config = CivilizationConfig::default();
+        config.complex_farmer_merge_km2 = 15_000.0;
+        let merged = merge_peoples(
+            &mut societies,
+            &mut tiers,
+            0,
+            &stats,
+            &hierarchy,
+            &config,
+        );
+        assert_eq!(merged, 0);
+        assert_eq!(societies.len(), 2);
+    }
+
+    /// A frontier between two climates is a frontier between two peoples, even when
+    /// there is ground to spare.
+    #[test]
+    fn a_climate_gap_keeps_two_peoples_apart() {
+        let (mut stats, hierarchy) = chain(2, 1_000.0);
+        stats[1].temp_sum = -20.0 * 10.0;
+        let (mut societies, mut tiers) = singletons(2, SocietyTier::HunterGatherers);
+        let merged = merge_peoples(
+            &mut societies,
+            &mut tiers,
+            0,
+            &stats,
+            &hierarchy,
+            &CivilizationConfig::default(),
+        );
+        assert_eq!(merged, 0);
+        assert_eq!(societies.len(), 2);
+    }
+
+    /// The same world always divides into the same peoples.
+    #[test]
+    fn merging_is_deterministic() {
+        let (stats, hierarchy) = chain(6, 1_000.0);
+        let run = || {
+            let (mut societies, mut tiers) = singletons(6, SocietyTier::HunterGatherers);
+            merge_peoples(
+                &mut societies,
+                &mut tiers,
+                0,
+                    &stats,
+                &hierarchy,
+                &CivilizationConfig::default(),
+            );
+            societies
+        };
+        assert_eq!(run(), run());
+    }
+
+    /// A one-province speck of the wrong tier is absorbed by the belt around it…
+    /// unless that province is a state's own ground.
+    #[test]
+    fn the_cleanup_absorbs_a_speck_but_never_a_state() {
+        let (stats, hierarchy) = star(4, 1_000.0);
+        let land: Vec<ProvinceLand> = (0..5).map(|_| herd_land()).collect();
+        let speck_and_belt = || {
+            vec![
+                SocietyTier::HunterGatherers.index(),
+                SocietyTier::NomadicPastoralists.index(),
+                SocietyTier::NomadicPastoralists.index(),
+                SocietyTier::NomadicPastoralists.index(),
+                SocietyTier::NomadicPastoralists.index(),
+            ]
+        };
+
+        let mut tiers = speck_and_belt();
+        let owner = vec![0u16; 5];
+        clean_tier_speckle(&mut tiers, &owner, &land, &stats, &hierarchy);
+        assert_eq!(tiers[0], SocietyTier::NomadicPastoralists.index());
+
+        // The same province, held by a state, keeps its tier.
+        let mut tiers = speck_and_belt();
+        let mut owner = vec![0u16; 5];
+        owner[0] = 1;
+        clean_tier_speckle(&mut tiers, &owner, &land, &stats, &hierarchy);
+        assert_eq!(tiers[0], SocietyTier::HunterGatherers.index());
+    }
+
+    /// The cleanup never turns a forest into a herd country: it only relabels land
+    /// that could support the way of life it adopts.
+    #[test]
+    fn the_cleanup_respects_what_the_land_can_feed() {
+        let (stats, hierarchy) = star(4, 1_000.0);
+        let mut land: Vec<ProvinceLand> = (0..5).map(|_| herd_land()).collect();
+        land[0] = ProvinceLand {
+            environment: Environment::Woodland,
+            land_use: LandUse::Foraging,
+            farm: 0.0,
+            pasture: 0.1,
+        };
+        let mut tiers = vec![
+            SocietyTier::HunterGatherers.index(),
+            SocietyTier::NomadicPastoralists.index(),
+            SocietyTier::NomadicPastoralists.index(),
+            SocietyTier::NomadicPastoralists.index(),
+            SocietyTier::NomadicPastoralists.index(),
+        ];
+        let owner = vec![0u16; 5];
+        clean_tier_speckle(&mut tiers, &owner, &land, &stats, &hierarchy);
+        assert_eq!(tiers[0], SocietyTier::HunterGatherers.index());
     }
 }

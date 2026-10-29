@@ -330,6 +330,56 @@ pub enum SocietyTier {
     States,
 }
 
+/// Hue, saturation and value of an 8-bit colour: hue in degrees, the other two in
+/// `0..=1`.
+///
+/// The atlas's palettes are written as RGB because that is what the painter and the
+/// legend both want; a colour *family* is easier to walk in HSV, where a step is a
+/// step in hue or in value rather than an arbitrary mix of the three channels.
+fn rgb_to_hsv(rgb: [u8; 3]) -> (f32, f32, f32) {
+    let r = rgb[0] as f32 / 255.0;
+    let g = rgb[1] as f32 / 255.0;
+    let b = rgb[2] as f32 / 255.0;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let chroma = max - min;
+    let hue = if chroma <= f32::EPSILON {
+        0.0
+    } else if max == r {
+        60.0 * ((g - b) / chroma).rem_euclid(6.0)
+    } else if max == g {
+        60.0 * ((b - r) / chroma + 2.0)
+    } else {
+        60.0 * ((r - g) / chroma + 4.0)
+    };
+    let saturation = if max <= f32::EPSILON { 0.0 } else { chroma / max };
+    (hue, saturation, max)
+}
+
+/// The inverse of [`rgb_to_hsv`], with the hue wrapping and the rest clamped.
+fn hsv_to_rgb(hue: f32, saturation: f32, value: f32) -> [u8; 3] {
+    let hue = hue.rem_euclid(360.0);
+    let saturation = saturation.clamp(0.0, 1.0);
+    let value = value.clamp(0.0, 1.0);
+    let chroma = value * saturation;
+    let sector = hue / 60.0;
+    let x = chroma * (1.0 - (sector.rem_euclid(2.0) - 1.0).abs());
+    let (r, g, b) = match sector as u32 {
+        0 => (chroma, x, 0.0),
+        1 => (x, chroma, 0.0),
+        2 => (0.0, chroma, x),
+        3 => (0.0, x, chroma),
+        4 => (x, 0.0, chroma),
+        _ => (chroma, 0.0, x),
+    };
+    let m = value - chroma;
+    [
+        ((r + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+        ((g + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+        ((b + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+    ]
+}
+
 impl SocietyTier {
     /// Every tier, least organised first — the atlas legend's order.
     pub const LADDER: [SocietyTier; 5] = [
@@ -385,19 +435,48 @@ impl SocietyTier {
         }
     }
 
+    /// The number of shades one tier's colour family carries.
+    ///
+    /// Nine is what a *planar* map needs: a tier's provinces form a flat graph, so
+    /// four shades would in principle suffice; nine leaves room for the greedy walk
+    /// to be order-blind and still never repeat a shade next door.
+    pub const SHADES: usize = 9;
+
     /// The base colour of this tier on the Civilizations map mode.
     ///
-    /// Five mutually distinguishable hues in the atlas's own muted register; every
-    /// society inside a tier takes a lightness step off its tier's base, so
-    /// neighbours still read apart without the map becoming confetti.
+    /// Five hues, read as a ladder rather than as a set: the palette darkens and
+    /// deepens from the bands that hold most of the world to the states that hold
+    /// least of it, so the map answers "where are the states?" before the reader has
+    /// found the key. Every hue is deliberately far from water — the old state blue
+    /// sat within a perceptual step of the shelf colour, which made every realm on a
+    /// coast vanish into the sea — and the hunter-gatherers keep enough chroma to
+    /// read as country rather than as blank paper, because they own two thirds of
+    /// most worlds.
     pub fn legend_color(self) -> [u8; 3] {
         match self {
-            SocietyTier::HunterGatherers => [232, 199, 61],
-            SocietyTier::NomadicPastoralists => [150, 113, 168],
-            SocietyTier::SimpleFarmers => [124, 156, 62],
-            SocietyTier::ComplexFarmers => [224, 133, 48],
-            SocietyTier::States => [58, 118, 186],
+            SocietyTier::HunterGatherers => [198, 195, 154],
+            SocietyTier::NomadicPastoralists => [198, 158, 92],
+            SocietyTier::SimpleFarmers => [120, 157, 80],
+            SocietyTier::ComplexFarmers => [168, 80, 58],
+            SocietyTier::States => [96, 42, 60],
         }
+    }
+
+    /// The `index`-th shade of this tier's colour family.
+    ///
+    /// The family is a real neighbourhood, not a lightness ramp: each step drifts
+    /// the hue, the chroma and the value together, so two peoples of one tier read
+    /// as two peoples while still belonging to the same hue. Index wraps, and the
+    /// walk is deterministic, so the same seed paints the same map.
+    pub fn shade(self, index: usize) -> [u8; 3] {
+        let (hue, saturation, value) = rgb_to_hsv(self.legend_color());
+        let half = (Self::SHADES - 1) as f32 * 0.5;
+        let t = (index % Self::SHADES) as f32 / half - 1.0;
+        hsv_to_rgb(
+            hue + t * 10.0,
+            saturation * (1.0 - 0.10 * t),
+            value * (1.0 + 0.06 * t),
+        )
     }
 
     /// True for the tiers with a centralised apparatus behind them.
@@ -1100,6 +1179,152 @@ impl CivilizationWorld {
             0.0
         } else {
             self.total_population as f32 / self.civilized_area_km2
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CIE L\*a\*b\* of an 8-bit sRGB colour, so contrast can be asserted in
+    /// perceptual units rather than in channel differences.
+    fn lab(colour: [u8; 3]) -> [f32; 3] {
+        let linear = |channel: u8| {
+            let value = channel as f32 / 255.0;
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let (r, g, b) = (
+            linear(colour[0]),
+            linear(colour[1]),
+            linear(colour[2]),
+        );
+        let x = r * 0.4124 + g * 0.3576 + b * 0.1805;
+        let y = r * 0.2126 + g * 0.7152 + b * 0.0722;
+        let z = r * 0.0193 + g * 0.1192 + b * 0.9505;
+        let f = |t: f32| {
+            if t > 0.008_856 {
+                t.cbrt()
+            } else {
+                7.787 * t + 16.0 / 116.0
+            }
+        };
+        let (fx, fy, fz) = (f(x / 0.950_47), f(y), f(z / 1.088_83));
+        [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)]
+    }
+
+    /// ΔE\*ab — about 2.3 is a just-noticeable difference, 20 is a clear one.
+    fn delta_e(a: [u8; 3], b: [u8; 3]) -> f32 {
+        let (a, b) = (lab(a), lab(b));
+        ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+    }
+
+    /// The painter's own water colours, which no political fill may resemble: this
+    /// is the bug the palette rework exists to fix.
+    const SEA: [u8; 3] = [16, 48, 88];
+    const SHELF: [u8; 3] = [45, 125, 185];
+    const LAKE: [u8; 3] = [42, 125, 185];
+    const ICE: [u8; 3] = [227, 236, 247];
+
+    /// Five tiers, five clearly different hues — a reader must be able to tell a
+    /// chiefdom from a herd people without consulting the key.
+    #[test]
+    fn tiers_are_pairwise_distinguishable() {
+        for a in 0..SocietyTier::LADDER.len() {
+            for b in a + 1..SocietyTier::LADDER.len() {
+                let one = SocietyTier::LADDER[a];
+                let other = SocietyTier::LADDER[b];
+                let distance = delta_e(one.legend_color(), other.legend_color());
+                assert!(
+                    distance > 24.0,
+                    "{} and {} are only {distance:.1} apart",
+                    one.label(),
+                    other.label()
+                );
+            }
+        }
+    }
+
+    /// No shade of any tier can be mistaken for the sea, a shelf, a lake or ice —
+    /// the old state blue sat one perceptual step from the shelf colour, so every
+    /// coastal realm disappeared into the water.
+    #[test]
+    fn no_tier_is_confusable_with_water() {
+        for tier in SocietyTier::LADDER {
+            for shade in 0..SocietyTier::SHADES {
+                let colour = tier.shade(shade);
+                for (name, water) in [("sea", SEA), ("shelf", SHELF), ("lake", LAKE)] {
+                    let distance = delta_e(colour, water);
+                    assert!(
+                        distance > 25.0,
+                        "{} shade {shade} is {distance:.1} from the {name}",
+                        tier.label()
+                    );
+                }
+                let distance = delta_e(colour, ICE);
+                assert!(
+                    distance > 15.0,
+                    "{} shade {shade} is {distance:.1} from polar ice",
+                    tier.label()
+                );
+            }
+        }
+    }
+
+    /// The ladder darkens with organisation, so the map ranks its own societies: the
+    /// states are the strongest ink and the bands recede into the ground.
+    #[test]
+    fn the_ladder_darkens_with_organisation() {
+        let mut previous = f32::MAX;
+        for tier in SocietyTier::LADDER {
+            let lightness = lab(tier.legend_color())[0];
+            assert!(
+                lightness < previous,
+                "{} is not darker than the tier below it",
+                tier.label()
+            );
+            previous = lightness;
+        }
+    }
+
+    /// Every shade stays inside its tier's family — a farming people never looks
+    /// like a state — while differing enough from its siblings to read as a people.
+    #[test]
+    fn shades_stay_in_their_tier_family() {
+        for tier in SocietyTier::LADDER {
+            let base = tier.legend_color();
+            let (hue, _, value) = rgb_to_hsv(base);
+            let mut distinct = Vec::new();
+            for shade in 0..SocietyTier::SHADES {
+                let colour = tier.shade(shade);
+                let (shade_hue, _, shade_value) = rgb_to_hsv(colour);
+                let drift = (shade_hue - hue).abs();
+                let drift = drift.min(360.0 - drift);
+                assert!(
+                    drift <= 12.0,
+                    "{} shade {shade} left its hue family by {drift:.1}°",
+                    tier.label()
+                );
+                let value_drift = (shade_value - value).abs();
+                assert!(
+                    value_drift <= 0.08,
+                    "{} shade {shade} left its value family by {value_drift:.3}",
+                    tier.label()
+                );
+                if !distinct.contains(&colour) {
+                    distinct.push(colour);
+                }
+            }
+            assert_eq!(
+                distinct.len(),
+                SocietyTier::SHADES,
+                "{} repeated a shade",
+                tier.label()
+            );
         }
     }
 }

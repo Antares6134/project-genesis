@@ -159,6 +159,9 @@ pub struct CivilizationConfig {
     /// Most provinces one hunter-gatherer people may span before the belt is split
     /// into another named people. Deliberately large: a taiga or a rainforest is
     /// one country, and the map should say so.
+    ///
+    /// Only a guard on the flood that assembles the peoples: the real ceiling is
+    /// the ground budget below, and the two are set to agree.
     pub forager_max_provinces: usize,
     /// Most provinces one herd people may span.
     pub pastoralist_max_provinces: usize,
@@ -166,6 +169,29 @@ pub struct CivilizationConfig {
     pub simple_farmer_max_provinces: usize,
     /// Most provinces one chiefdom people may span.
     pub complex_farmer_max_provinces: usize,
+
+    // ── How large one people may grow ────────────────────────────────────────
+    //
+    // The province caps above only stop a single breadth-first flood from running
+    // away; they are a guard on the walk, not a statement about the world. What
+    // actually decides how many peoples a map carries is *ground*: a belt is one
+    // people until it covers more country than one people plausibly held, and the
+    // neighbouring pieces are then rejoined until the budget is spent. Measured in
+    // km², so a world of small provinces and a world of large ones both come out
+    // looking like a world rather than like a partition count.
+    /// Ground, in km², that one hunter-gatherer people may span.
+    ///
+    /// Bands are thin on the ground — a whole taiga or a whole desert is a handful
+    /// of peoples, not a confetti of them — so this is the largest budget in the
+    /// table.
+    pub forager_merge_km2: f32,
+    /// Ground, in km², that one herd people may span. A steppe is one or two
+    /// peoples, because a horse and a herd can cross it in a season.
+    pub pastoralist_merge_km2: f32,
+    /// Ground, in km², that one simple-farming people may span.
+    pub simple_farmer_merge_km2: f32,
+    /// Ground, in km², that one chiefdom people may span.
+    pub complex_farmer_merge_km2: f32,
     /// How many neighbours a society's dossier may list. A partitioned world has
     /// hundreds of societies, so an uncapped list is unusable.
     pub contact_limit: usize,
@@ -221,10 +247,15 @@ impl Default for CivilizationConfig {
             far_cost: 1_500.0,
             rise_floor: 0.45,
             independent_reach: 260.0,
-            forager_max_provinces: 120,
-            pastoralist_max_provinces: 200,
-            simple_farmer_max_provinces: 60,
-            complex_farmer_max_provinces: 30,
+            forager_max_provinces: 600,
+            pastoralist_max_provinces: 900,
+            simple_farmer_max_provinces: 200,
+            complex_farmer_max_provinces: 100,
+
+            forager_merge_km2: 5.0e6,
+            pastoralist_merge_km2: 7.0e6,
+            simple_farmer_merge_km2: 1.6e6,
+            complex_farmer_merge_km2: 8.0e5,
             contact_limit: 8,
             kin_limit: 6,
 
