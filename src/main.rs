@@ -6,29 +6,14 @@ mod hydrology;
 mod terrain;
 mod geopolitics;
 mod civilization;
+mod pipeline;
 mod viewer;
 
-use climate::{simulate_moisture, simulate_temperature, simulate_winds, ClimateConfig};
-use crate::civilization::{
-    generate_civilizations, report_civilizations, report_civilizations_all, CivilizationConfig,
-    CivilizationWorld,
-};
-use geopolitics::{
-    build_geopolitical_hierarchy, build_ocean_hierarchy, extract_ocean_graph, extract_province_graph,
-};
-use core::{polar, relief, Grid, WorldCache};
-use geography::{generate_ocean_provinces, generate_provinces, GeographyConfig, OceanConfig};
-use hydrology::{
-    calculate_flow, extract_rivers_and_basins, fill_depressions_and_find_lakes, HydrologyConfig,
-};
-use rand::RngExt;
+use crate::civilization::{report_civilizations, report_civilizations_all};
+use crate::core::relief;
+use pipeline::{Genesis, LoadError, Stage};
 use std::env;
-use std::path::Path;
 use std::time::Instant;
-use terrain::{
-    apply_fractal_detail, simulate_hydraulic_erosion, simulate_tectonics, simulate_thermal_erosion,
-    WorldConfig,
-};
 
 fn main() {
     println!("=======================================================");
@@ -55,182 +40,36 @@ fn main() {
         else if let Ok(parsed_seed) = arg.parse::<u64>() { seed = parsed_seed; }
     }
 
-    let world_config = WorldConfig {
-        width: 8192,
-        height: 4096,
+    println!(
+        "Active Seed: {} | Canvas: {}x{}",
         seed,
-        num_plates: 32,
-        ocean_ratio: 0.65,
-        erosion_droplets: 3_500_000,
-        ..Default::default()
-    };
-    let climate_config = ClimateConfig { seed, ..Default::default() };
-    let hydro_config = HydrologyConfig { min_lake_depth: 0.015, min_river_flow: 1800.0, major_river_flow: 15000.0, ..Default::default() };
-    let geo_config = GeographyConfig::default();
-    let ocean_config = OceanConfig::default();
-    let civ_config = CivilizationConfig::default();
-
-    println!("Active Seed: {} | Canvas: 8192x4096", seed);
-    let cache_path = format!("./saved_seeds/world_{}.bin", seed);
+        pipeline::WORLD_WIDTH,
+        pipeline::WORLD_HEIGHT
+    );
 
     let total_start = Instant::now();
 
-    // --- CACHE ARCHITECTURE: STAGES 1 TO 3 ---
-    let mut cache = if load_cache && Path::new(&cache_path).exists() {
-        let load_start = Instant::now();
-        println!("Loading world from cache '{}'...", cache_path);
-        let loaded = WorldCache::load(&cache_path);
-        println!("✓ Loaded cached world data in:             {:.2?}", load_start.elapsed());
-        loaded
-    } else {
-        let t_start = Instant::now();
-        let mut result = simulate_tectonics(&world_config);
-        apply_fractal_detail(&mut result.heightmap, &world_config);
-        simulate_hydraulic_erosion(&mut result.heightmap, &world_config);
-        simulate_thermal_erosion(&mut result.heightmap, &world_config);
-        println!("✓ [1/3] Geology & Erosion completed:       {:.2?}", t_start.elapsed());
-
-        let c_start = Instant::now();
-        let temp_grid = simulate_temperature(&result.heightmap, relief::SEA_LEVEL, &climate_config);
-        let winds = simulate_winds(world_config.width, world_config.height, &climate_config);
-        let moisture = simulate_moisture(&result.heightmap, &temp_grid, &winds, relief::SEA_LEVEL, &climate_config);
-        println!("✓ [2/3] Atmospheric Climate completed:     {:.2?}", c_start.elapsed());
-
-        let h_start = Instant::now();
-        let pit_res = fill_depressions_and_find_lakes(&result.heightmap, relief::SEA_LEVEL, &hydro_config);
-        let flow_res = calculate_flow(&pit_res.filled_heightmap, &moisture.precipitation, relief::SEA_LEVEL, &hydro_config);
-        // Rivers extracted here if needed later
-        println!("✓ [3/3] Hydrology & River routing done:    {:.2?}", h_start.elapsed());
-
-        let new_cache = WorldCache {
-            width: world_config.width,
-            height: world_config.height,
-            heightmap: result.heightmap,
-            temp_grid,
-            precip_grid: moisture.precipitation,
-            flow_grid: flow_res.accumulated_flow,
-            is_lake: pit_res.is_lake,
-        };
-
-        if save_cache {
-            println!("Saving world state to cache '{}'...", cache_path);
-            new_cache.save(&cache_path);
-        }
-        new_cache
-    };
-
-    // --- POLAR ICE: the belt is permanent arctic waste ----------------------
-    // The polar belt — and every landmass cut off from a pole — is permanent ice:
-    // no province may settle there and no tundra may grow at its shore. Pinning
-    // its surface temperature into the ice band is what lets every downstream
-    // pass — the province generator, the atlas painter and the hover telemetry —
-    // read it as the same arctic waste. It runs after the cache is built so
-    // worlds saved under the old rules still come out right.
-    let polar_ice =
-        polar::permanent_polar_ice(&cache.heightmap, &cache.is_lake, relief::SEA_LEVEL, seed);
-    polar::freeze_polar_ice(&mut cache.temp_grid, &polar_ice);
-
-    // --- RELIEF REPORT: the finished world's hypsometric profile, in metres ---
-    report_relief(&cache.heightmap);
-
-    // --- STAGE 4: POLITICAL GEOGRAPHY (PROVINCES) ---
-    let p_start = Instant::now();
-    let prov_res = generate_provinces(
-        &cache.heightmap,
-        &cache.temp_grid,
-        &cache.precip_grid,
-        &cache.flow_grid,
-        &cache.is_lake,
-        &polar_ice,
-        relief::SEA_LEVEL, // The planet's own vertical datum (the old 0.11 threshold is only the *noise* water line)
-        hydro_config.min_river_flow,
-        &geo_config,
-        seed,
-    );
-    println!("✓ [4/7] Geography & Provinces done:        {:.2?}", p_start.elapsed());
-
-    // --- STAGE 5: GEOPOLITICAL HIERARCHY (AREAS, REGIONS, CONTINENTS) ---
-    let g_start = Instant::now();
-    let extracted = extract_province_graph(&prov_res.province_ids, &cache.heightmap, &cache.is_lake, relief::SEA_LEVEL);
-    let hierarchy = build_geopolitical_hierarchy(extracted.provinces, seed, cache.width as f32);
-    println!("✓ [5/7] Geopolitical Hierarchy completed:   {:.2?}", g_start.elapsed());
-
-    // --- STAGE 6: HYDRO-POLITICAL HIERARCHY (THE WORLD OCEAN) ---
-    let o_start = Instant::now();
-    let ocean_res = generate_ocean_provinces(
-        &cache.heightmap,
-        &cache.is_lake,
-        relief::SEA_LEVEL,
-        &ocean_config,
-        seed,
-    );
-    let ocean_extracted = extract_ocean_graph(&ocean_res.ocean_province_ids);
-    let ocean_hierarchy = build_ocean_hierarchy(
-        ocean_extracted.provinces,
-        seed,
-        cache.width as f32,
-        &ocean_config,
-    );
-    println!(
-        "✓ [6/7] Hydro-Political Hierarchy completed:{:.2?}",
-        o_start.elapsed()
-    );
-    println!(
-        "         Ocean: {} provinces → {} basins → {} superregions → {} regions → {} areas.",
-        ocean_res.num_provinces,
-        ocean_hierarchy.total_continents,
-        ocean_hierarchy.total_superregions,
-        ocean_hierarchy.total_regions,
-        ocean_hierarchy.total_areas,
-    );
-
-    // --- STAGE 7: THE DAWN OF HISTORY (CIVILIZATIONS) ---
-    // Where people stop being a landscape and start being a story. The stage is
-    // only run when it is wanted (`--civs`, `--viewer` or `--plates`), because a
-    // world without a history is still a finished world.
-    let want_civilizations = run_civilizations || run_viewer || run_plates;
-    let civ_start = Instant::now();
-    let civilizations = if want_civilizations {
-        let world = generate_civilizations(
-            &cache.heightmap,
-            &cache.temp_grid,
-            &cache.precip_grid,
-            &cache.flow_grid,
-            &cache.is_lake,
-            &prov_res.habitability,
-            &prov_res.province_ids,
-            &hierarchy,
-            relief::SEA_LEVEL,
-            hydro_config.min_river_flow,
-            climate_config.mode,
-            &civ_config,
-            seed,
-        );
-        println!(
-            "✓ [7/7] Dawn of Civilization completed:     {:.2?}",
-            civ_start.elapsed()
-        );
-        if run_civilizations {
-            println!();
-            if report_all_societies {
-                report_civilizations_all(&world);
-            } else {
-                report_civilizations(&world);
+    // ── THE ATLAS: THE WINDOW COMES FIRST, THE WORLD SECOND ───────────────────
+    //
+    // Every act of creation is now run from the viewer's own panel, one press at
+    // a time, and watched while it runs. The command line therefore no longer
+    // decides *what* gets generated before the window opens — only where the
+    // panel starts: a seed to begin from, whether act three should write the
+    // world cache (`--save`), and whether to adopt the world already on disk
+    // (`--load`) instead of growing one.
+    if run_viewer {
+        let mut genesis = Genesis::new(seed);
+        genesis.set_autosave(save_cache);
+        if load_cache {
+            // `--load --viewer` opens a world that is already physical: acts one
+            // to three are adopted from disk, and the panel offers act four on.
+            // This is the old "instant atlas" experience, and it is still instant:
+            // no stage is re-run, only the cache is read.
+            if let Err(why) = genesis.load_cache() {
+                report_load_failure(&why);
             }
         }
-        world
-    } else {
-        println!("· [7/7] Dawn of Civilization skipped (pass --civs to wake the world up).");
-        CivilizationWorld::empty(seed)
-    };
 
-
-    println!("-------------------------------------------------------");
-    println!("Total Generation Time:                     {:.2?}", total_start.elapsed());
-    println!("-------------------------------------------------------");
-
-    // --- STAGE 8: LAUNCH INTERACTIVE MAP VIEWER ---
-    if run_viewer {
         println!("Launching Interactive 2D Viewer...");
         // An atlas is a window application, not a pop-up: open at a proper size
         // for a modern desktop and start maximised, while keeping a sane
@@ -242,30 +81,73 @@ fn main() {
                 .with_maximized(true),
             ..Default::default()
         };
-        
+
         eframe::run_native(
             "Project Genesis - Atlas Viewer",
             options,
-            Box::new(|_cc| Ok(Box::new(viewer::MapViewer::new(
-                cache.clone(),
-                hierarchy.clone(),
-                ocean_hierarchy.clone(),
-                prov_res.clone(),
-                ocean_res.clone(),
-                civilizations.clone(),
-            )))),
-        ).unwrap();
+            Box::new(|_cc| Ok(Box::new(viewer::MapViewer::new(genesis)))),
+        )
+        .unwrap();
+        return;
     }
+
+    // ── HEADLESS: GROW THE WORLD, PRINT ITS FIGURES, WRITE ITS PLATES ─────────
+    //
+    // `--save`, `--civs` and `--plates` are for scripts and for regenerating the
+    // README, so they want exactly what they always wanted: a finished world, a
+    // terminal full of figures, and PNGs on disk. They run the same pipeline the
+    // atlas does, silently.
+    let mut genesis = Genesis::new(seed);
+    genesis.set_autosave(save_cache);
+    if load_cache {
+        if let Err(why) = genesis.load_cache() {
+            report_load_failure(&why);
+        }
+    }
+
+    let want_civilizations = run_civilizations || run_plates;
+    genesis.run_through(Stage::HydroPolitics, None);
+
+    // --- STAGE 7: THE DAWN OF HISTORY (CIVILIZATIONS) ---
+    // Where people stop being a landscape and start being a story. The stage is
+    // only run when it is wanted (`--civs` or `--plates`), because a world
+    // without a history is still a finished world.
+    if want_civilizations {
+        genesis.run_stage(Stage::Civilization, None);
+        if run_civilizations {
+            println!();
+            let world = genesis.atlas().expect("act seven just finished").civilizations;
+            if report_all_societies {
+                report_civilizations_all(&world);
+            } else {
+                report_civilizations(&world);
+            }
+        }
+    } else {
+        println!("· [7/7] Dawn of Civilization skipped (pass --civs to wake the world up).");
+    }
+
+    println!("-------------------------------------------------------");
+    println!("Total Generation Time:                     {:.2?}", total_start.elapsed());
+    println!("-------------------------------------------------------");
+
+    let world = genesis.atlas().expect("a finished world");
+    let hydro_config = genesis.hydro_config();
+    let temperature = world.temperature.clone().expect("act two");
+    let precipitation = world.precipitation.clone().expect("act two");
+    let flow = world.flow.clone().expect("act three");
+    let is_lake = world.is_lake.clone().expect("act three");
+    let provinces = world.provinces.clone().expect("act four");
 
     let exp_start = Instant::now();
     export::save_hierarchical_political_map(
-        &cache.heightmap,
-        &cache.temp_grid,
-        &cache.precip_grid,
-        &cache.flow_grid,
-        &cache.is_lake,
-        &hierarchy,
-        &prov_res.province_ids,
+        &world.heightmap,
+        &temperature,
+        &precipitation,
+        &flow,
+        &is_lake,
+        &world.hierarchy,
+        &provinces.province_ids,
         relief::SEA_LEVEL,
         hydro_config.min_river_flow,
         hydro_config.major_river_flow,
@@ -276,11 +158,11 @@ fn main() {
 
     let phys_start = Instant::now();
     export::save_physical_map(
-        &cache.heightmap,
-        &cache.temp_grid,
-        &cache.precip_grid,
-        &cache.flow_grid,
-        &cache.is_lake,
+        &world.heightmap,
+        &temperature,
+        &precipitation,
+        &flow,
+        &is_lake,
         relief::SEA_LEVEL,
         hydro_config.min_river_flow,
         hydro_config.major_river_flow,
@@ -291,10 +173,10 @@ fn main() {
 
     let topo_start = Instant::now();
     export::save_topographic_map(
-        &cache.heightmap,
-        &cache.temp_grid,
-        &cache.flow_grid,
-        &cache.is_lake,
+        &world.heightmap,
+        &temperature,
+        &flow,
+        &is_lake,
         relief::SEA_LEVEL,
         hydro_config.min_river_flow,
         hydro_config.major_river_flow,
@@ -306,16 +188,9 @@ fn main() {
     // --- STAGE 9: CIVILIZATIONS MAP (optional) ---
     // The very same painter the viewer's Civilizations scope uses, exported at
     // full 8K so it sits alongside the other `world_*.png` plates.
-    if want_civilizations && !civilizations.is_empty() {
+    if want_civilizations && !world.civilizations.is_empty() {
         let civ_start = Instant::now();
-        let mut civ_viewer = viewer::MapViewer::new(
-            cache.clone(),
-            hierarchy.clone(),
-            ocean_hierarchy.clone(),
-            prov_res.clone(),
-            ocean_res.clone(),
-            civilizations.clone(),
-        );
+        let mut civ_viewer = viewer::MapViewer::from_world(world.clone());
         civ_viewer.set_view(viewer::MapScope::Civilizations, viewer::MapTier::Regions, true);
         civ_viewer
             .save_png("world_civilizations_map.png", 1.0)
@@ -352,14 +227,7 @@ fn main() {
             ("./exports/atlas_everywhere_regions.png",  viewer::MapScope::Everywhere,    viewer::MapTier::Regions),
         ];
 
-        let mut plate_viewer = viewer::MapViewer::new(
-            cache.clone(),
-            hierarchy.clone(),
-            ocean_hierarchy.clone(),
-            prov_res.clone(),
-            ocean_res.clone(),
-            civilizations.clone(),
-        );
+        let mut plate_viewer = viewer::MapViewer::from_world(world.clone());
         for (path, scope, tier) in plates {
             plate_viewer.set_view(scope, tier, true);
             plate_viewer
@@ -373,81 +241,18 @@ fn main() {
     println!("=======================================================");
 }
 
-/// Print the finished world's hypsometric profile in metres.
-///
-/// This is the quickest sanity check that the vertical datum came out sane —
-/// how much of the surface ended up as ocean, where the median shore and sea
-/// floor sit, how much shelf there is, and what the extremes are. It is printed
-/// for cached worlds too, so a world generated under an older datum announces
-/// itself instead of quietly reporting a 400 m-deep ocean.
-fn report_relief(heightmap: &Grid<f32>) {
-    const BIN_M: f32 = 100.0;
-    const BINS: usize = 200; // the datum spans -11 000 m … +9 000 m
-
-    let mut bins = vec![0u64; BINS];
-    let (mut land, mut ocean) = (0u64, 0u64);
-    let (mut peak, mut trench) = (f32::MIN, f32::MAX);
-
-    for &elev in heightmap.raw_slice() {
-        let metres = relief::to_metres(elev);
-        if metres > 0.0 {
-            land += 1;
-            peak = peak.max(metres);
-        } else {
-            ocean += 1;
-            trench = trench.min(metres);
-        }
-        let bin = (((metres + relief::DEEPEST_TRENCH_M) / BIN_M) as isize)
-            .clamp(0, BINS as isize - 1) as usize;
-        bins[bin] += 1;
+/// Say why a world could not be adopted from disk, in one sentence a reader can
+/// act on — and carry on growing a fresh world instead of falling over.
+fn report_load_failure(why: &LoadError) {
+    match why {
+        LoadError::Missing(path) => println!(
+            "· No cached world at '{}' — nothing to load. Grow one, and save it as it is made.",
+            path.display()
+        ),
+        LoadError::Unreadable(path, reason) => println!(
+            "· Cached world '{}' could not be read ({reason}) — nothing to load.",
+            path.display()
+        ),
     }
-
-    let surface = (land + ocean).max(1) as f64;
-    let (land_seen, ocean_seen) = (land.max(1) as f64, ocean.max(1) as f64);
-    let (mut deep, mut high) = (0f64, 0f64);
-    let (mut shelf, mut median_depth) = (0u64, 0f32);
-    let (mut median_altitude, mut altitude_90) = (0f32, 0f32);
-    let (mut have_depth, mut have_alt, mut have_alt90) = (false, false, false);
-
-    for bin in 0..BINS {
-        let metres = bin as f32 * BIN_M - relief::DEEPEST_TRENCH_M + BIN_M * 0.5;
-        let count = bins[bin] as f64;
-        if metres <= 0.0 {
-            deep += count;
-            if metres >= -200.0 {
-                shelf += bins[bin];
-            }
-            if !have_depth && deep >= ocean_seen * 0.5 {
-                median_depth = metres;
-                have_depth = true;
-            }
-        } else {
-            high += count;
-            if !have_alt && high >= land_seen * 0.5 {
-                median_altitude = metres;
-                have_alt = true;
-            }
-            if !have_alt90 && high >= land_seen * 0.9 {
-                altitude_90 = metres;
-                have_alt90 = true;
-            }
-        }
-    }
-
-    println!("── Planetary relief (vertical datum applied) ──────────");
-    println!(
-        "   Surface : {:.1}% land / {:.1}% ocean",
-        100.0 * land as f64 / surface,
-        100.0 * ocean as f64 / surface
-    );
-    println!(
-        "   Land    : median +{:.0} m | 90% below +{:.0} m | highest peak +{:.0} m",
-        median_altitude, altitude_90, peak
-    );
-    println!(
-        "   Ocean   : median {:.0} m | {:.1}% continental shelf (<= -200 m) | deepest trench {:.0} m",
-        median_depth,
-        100.0 * shelf as f64 / ocean_seen,
-        trench
-    );
 }
+

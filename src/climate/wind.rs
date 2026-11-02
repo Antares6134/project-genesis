@@ -1,5 +1,9 @@
+use crate::core::progress::Progress;
 use crate::core::Grid;
 use crate::climate::config::{ClimateConfig, PlanetaryMode};
+
+/// Rows of latitude between two progress checkpoints.
+const ROWS_PER_CHECKPOINT: usize = 256;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WindVector {
@@ -8,10 +12,24 @@ pub struct WindVector {
 }
 
 /// Generates the global atmospheric circulation wind field.
-pub fn simulate_winds(width: usize, height: usize, config: &ClimateConfig) -> Grid<WindVector> {
+///
+/// A wind field is a vector per pixel, which the atlas has no scope to paint, so
+/// this sub-step reports its progress but never a picture: a bar, not a plate.
+pub fn simulate_winds(
+    width: usize,
+    height: usize,
+    config: &ClimateConfig,
+    progress: &Progress,
+) -> Grid<WindVector> {
     let mut wind_grid = Grid::filled_with(width, height, WindVector { dx: 1.0, dy: 0.0 });
 
+    progress.sub_step("Trade winds & westerlies", height as u64);
+
     for y in 0..height {
+        if y % ROWS_PER_CHECKPOINT == 0 {
+            progress.tick(y as u64);
+        }
+
         let v = y as f32 / (height as f32 - 1.0); // 0.0 (North Pole) to 1.0 (South Pole)
         let lat_deg = (0.5 - v) * 180.0;          // +90 (North) to -90 (South)
 

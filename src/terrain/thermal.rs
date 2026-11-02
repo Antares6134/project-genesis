@@ -1,12 +1,20 @@
+use crate::core::progress::Progress;
 use crate::core::Grid;
+use crate::export::live;
 use crate::terrain::config::WorldConfig;
 
 /// Simulates thermal weathering and talus slope relaxation.
 /// Whenever the slope between neighboring cells exceeds the critical angle of repose,
 /// rock material slumps downhill to form natural scree slopes.
-pub fn simulate_thermal_erosion(heightmap: &mut Grid<f32>, config: &WorldConfig) {
+pub fn simulate_thermal_erosion(
+    heightmap: &mut Grid<f32>,
+    config: &WorldConfig,
+    progress: &Progress,
+) {
     let w = config.width;
     let h = config.height;
+
+    progress.sub_step("Scree slopes", config.thermal_iterations as u64);
 
     // 8-directional neighbor offsets (dx, dy)
     let neighbors: [(isize, isize, f32); 8] = [
@@ -20,7 +28,14 @@ pub fn simulate_thermal_erosion(heightmap: &mut Grid<f32>, config: &WorldConfig)
         (1, 1, std::f32::consts::SQRT_2),
     ];
 
-    for _ in 0..config.thermal_iterations {
+    for iteration in 0..config.thermal_iterations {
+        // One checkpoint per pass: the passes are sequential, so this is the
+        // only place a preview can be taken without racing the relaxation.
+        progress.tick(iteration as u64);
+        progress.preview_map("Scree slopes", (w, h), |x, y| {
+            live::relief_at(heightmap, x, y)
+        });
+
         let mut delta_grid = Grid::filled_with(w, h, 0.0f32);
 
         for y in 1..(h as isize - 1) {

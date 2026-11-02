@@ -1,3 +1,4 @@
+use crate::core::progress::Progress;
 use crate::geography::config::OceanConfig;
 use crate::geopolitics::hierarchy::{GeopoliticalHierarchy, ProvinceNode};
 use rand::prelude::*;
@@ -227,6 +228,20 @@ fn cluster_group(
 }
 
 /// Cluster provinces into a single tier.
+/// Show the atlas a clustering pass's work so far.
+///
+/// A clustering pass never sees a pixel — it works on province *nodes* — so the
+/// picture is painted through the pixel grids the stage registered on its
+/// [`Progress`] handle. The land and the ocean hierarchies are both built this
+/// way, and each has its own registered grid of provinces.
+fn preview_tier_of(progress: &Progress, label: &'static str, assignment: &[u32], ocean: bool) {
+    if ocean {
+        progress.preview_ocean_tier(label, assignment);
+    } else {
+        progress.preview_tier(label, assignment);
+    }
+}
+
 fn cluster_tier(
     provinces:               &[ProvinceNode],
     parent_ids:              &[u32],
@@ -234,6 +249,9 @@ fn cluster_tier(
     max_clusters_per_parent: usize,
     seed:                    u64,
     map_width:               f32,
+    progress:                &Progress,
+    label:                   &'static str,
+    ocean:                   bool,
 ) -> (Vec<u32>, usize) {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let n = provinces.len();
@@ -248,9 +266,15 @@ fn cluster_tier(
         parent_groups.entry(parent).or_default().push(p.id);
     }
 
+    // One checkpoint per parent group: the tier is built kingdom by kingdom, so
+    // the atlas can watch the world fill in rather than wait for the whole tier.
+    progress.sub_step(label, parent_groups.len() as u64);
+
     let mut next_cid = 1u32;
 
-    for (_parent, mut members) in parent_groups {
+    for (group, (_parent, mut members)) in parent_groups.into_iter().enumerate() {
+        progress.tick(group as u64);
+        preview_tier_of(progress, label, &assignments, ocean);
         let count = members.len();
         if count == 0 { continue; }
 
@@ -283,10 +307,22 @@ fn absorb_small_clusters(
     parent_ids:  &[u32],
     min_size:    usize,
     map_width:   f32,
+    progress:    &Progress,
+    label:       &'static str,
+    ocean:       bool,
 ) -> usize {
     let n = provinces.len();
 
+    // The absorber runs until nothing is left below the floor, so its length is
+    // not known in advance: a count, and a picture per sweep.
+    progress.sub_step(label, 0);
+    let mut sweeps = 0u64;
+
     loop {
+        progress.tick(sweeps);
+        preview_tier_of(progress, label, cluster_ids, ocean);
+        sweeps += 1;
+
         let mut cluster_sizes: BTreeMap<u32, usize> = BTreeMap::new();
         let mut cluster_parent: BTreeMap<u32, u32> = BTreeMap::new();
         let mut parent_cluster_count: BTreeMap<u32, usize> = BTreeMap::new();
@@ -415,10 +451,12 @@ pub fn build_geopolitical_hierarchy(
     mut provinces: Vec<ProvinceNode>,
     seed:          u64,
     map_width:     f32,
+    progress:      &Progress,
 ) -> GeopoliticalHierarchy {
     let n = provinces.len();
 
     // ── 1. Continents ─────────────────────────────────────────────────────────
+    progress.sub_step("Anchoring the continents", 0);
     let continent_ids: Vec<u32> = provinces.iter().map(|p| p.continent_id).collect();
     let continent_count = continent_ids.iter().filter(|&&c| c != 0).copied()
         .collect::<HashSet<_>>().len();
@@ -433,6 +471,9 @@ pub fn build_geopolitical_hierarchy(
         50,    // At most 50 superregions per large continent
         seed.wrapping_add(3),
         map_width,
+        progress,
+        "Clustering superregions",
+        false,
     );
 
     // COASTAL ISLAND ANCHORING: Every island strictly inherits its superregion from its anchor coast!
@@ -453,6 +494,9 @@ pub fn build_geopolitical_hierarchy(
         &continent_ids,
         95,
         map_width,
+        progress,
+        "Absorbing small superregions",
+        false,
     );
 
     for i in 1..n {
@@ -469,6 +513,9 @@ pub fn build_geopolitical_hierarchy(
         25,    // Up to 25 regions per superregion
         seed.wrapping_add(2),
         map_width,
+        progress,
+        "Clustering regions",
+        false,
     );
 
     // For islands with < 25 provinces, strictly inherit Region from anchor coast
@@ -491,6 +538,9 @@ pub fn build_geopolitical_hierarchy(
         &super_ids,
         16,
         map_width,
+        progress,
+        "Absorbing small regions",
+        false,
     );
 
     for i in 1..n {
@@ -507,6 +557,9 @@ pub fn build_geopolitical_hierarchy(
         6,    // 6 max provinces per area
         seed.wrapping_add(1),
         map_width,
+        progress,
+        "Clustering areas",
+        false,
     );
 
     // Small 1-2 province coastal rocks merge directly into their anchor coast's Area
@@ -524,6 +577,9 @@ pub fn build_geopolitical_hierarchy(
         &region_ids,
         3,
         map_width,
+        progress,
+        "Absorbing small areas",
+        false,
     );
 
     for i in 1..n {
@@ -554,6 +610,7 @@ pub fn build_ocean_hierarchy(
     seed:      u64,
     map_width: f32,
     config:    &OceanConfig,
+    progress:  &Progress,
 ) -> GeopoliticalHierarchy {
     let n = provinces.len();
     if n <= 1 {
@@ -577,6 +634,9 @@ pub fn build_ocean_hierarchy(
         8, // at most 8 ocean basins
         seed.wrapping_add(4),
         map_width,
+        progress,
+        "Clustering ocean basins",
+        true,
     );
     for i in 1..n {
         provinces[i].continent_id = continent_ids[i];
@@ -591,6 +651,9 @@ pub fn build_ocean_hierarchy(
         50,
         seed.wrapping_add(3),
         map_width,
+        progress,
+        "Clustering oceanic superregions",
+        true,
     );
     // Undersized superregions are absorbed so no tiny sliver survives between
     // two large ocean realms.
@@ -600,6 +663,9 @@ pub fn build_ocean_hierarchy(
         &continent_ids,
         (config.superregion_target / 5).max(6),
         map_width,
+        progress,
+        "Absorbing small ocean superregions",
+        true,
     );
     for i in 1..n {
         provinces[i].superregion_id = super_ids[i];
@@ -614,6 +680,9 @@ pub fn build_ocean_hierarchy(
         40,
         seed.wrapping_add(2),
         map_width,
+        progress,
+        "Clustering oceanic regions",
+        true,
     );
     let total_regions = absorb_small_clusters(
         &provinces,
@@ -621,6 +690,9 @@ pub fn build_ocean_hierarchy(
         &super_ids,
         (config.region_target / 5).max(4),
         map_width,
+        progress,
+        "Absorbing small ocean regions",
+        true,
     );
     for i in 1..n {
         provinces[i].region_id = region_ids[i];
@@ -635,6 +707,9 @@ pub fn build_ocean_hierarchy(
         25,
         seed.wrapping_add(1),
         map_width,
+        progress,
+        "Clustering oceanic areas",
+        true,
     );
     let total_areas = absorb_small_clusters(
         &provinces,
@@ -642,6 +717,9 @@ pub fn build_ocean_hierarchy(
         &region_ids,
         2,
         map_width,
+        progress,
+        "Absorbing small ocean areas",
+        true,
     );
     for i in 1..n {
         provinces[i].area_id = area_ids[i];

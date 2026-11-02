@@ -1,7 +1,18 @@
+use crate::core::progress::Progress;
 use crate::core::Grid;
+use crate::export::live;
 use crate::terrain::config::WorldConfig;
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
+
+/// How many droplets fall between two progress checkpoints.
+///
+/// The droplet loop is the one place in the engine where the world visibly
+/// *changes shape* while it runs — every droplet carves a gully or deposits a
+/// fan — so it reports often. Ticks are coalesced by the sink anyway; this only
+/// bounds how much arithmetic the reporting itself adds, and one checkpoint per
+/// 0.5 % of the droplets is nothing next to the droplets.
+const DROPLETS_PER_CHECKPOINT: usize = 17_500;
 
 /// Distributes an erosion/deposition delta across the 4 neighboring grid vertices
 /// using bilinear weights so terrain changes are smooth and crack-free.
@@ -31,12 +42,29 @@ fn distribute_delta(heightmap: &mut Grid<f32>, fx: f32, fy: f32, delta: f32) {
     heightmap.set(x1, y1, h11 + delta * w11);
 }
 
-pub fn simulate_hydraulic_erosion(heightmap: &mut Grid<f32>, config: &WorldConfig) {
+pub fn simulate_hydraulic_erosion(
+    heightmap: &mut Grid<f32>,
+    config: &WorldConfig,
+    progress: &Progress,
+) {
     let mut rng = ChaCha8Rng::seed_from_u64(config.seed.wrapping_add(9999));
     let w = config.width as f32;
     let h = config.height as f32;
+    let (grid_w, grid_h) = (config.width, config.height);
 
-    for _ in 0..config.erosion_droplets {
+    progress.sub_step("Valley carving", config.erosion_droplets as u64);
+
+    for droplet in 0..config.erosion_droplets {
+        // Every so often, let the atlas see the world the droplets have made so
+        // far. Sequential by construction: the droplet loop is single-threaded,
+        // and the preview borrows the heightmap only for the length of the call.
+        if droplet % DROPLETS_PER_CHECKPOINT == 0 {
+            progress.tick(droplet as u64);
+            progress.preview_map("Valley carving", (grid_w, grid_h), |x, y| {
+                live::relief_at(heightmap, x, y)
+            });
+        }
+
         // Spawn droplet randomly across the world
         let mut px = rng.random_range(0.0..w);
         let mut py = rng.random_range(1.0..h - 2.0);

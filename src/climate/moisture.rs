@@ -1,7 +1,15 @@
+use crate::core::progress::Progress;
 use crate::core::Grid;
 use crate::climate::config::ClimateConfig;
 use crate::climate::wind::WindVector;
+use crate::export::live;
 use noise::{NoiseFn, OpenSimplex};
+
+/// Rows of latitude between two progress checkpoints.
+const ROWS_PER_CHECKPOINT: usize = 64;
+
+/// How many relaxation passes the distance-to-ocean field gets.
+const OCEAN_DISTANCE_PASSES: usize = 4;
 
 pub struct MoistureResult {
     pub precipitation: Grid<f32>,
@@ -13,6 +21,7 @@ pub fn simulate_moisture(
     winds: &Grid<WindVector>,
     sea_level: f32,
     config: &ClimateConfig,
+    progress: &Progress,
 ) -> MoistureResult {
     let w = heightmap.width;
     let h = heightmap.height;
@@ -22,6 +31,7 @@ pub fn simulate_moisture(
     let detail_noise = OpenSimplex::new(config.seed as u32 + 888);
 
     // 1. Calculate approximate distance to ocean (Continentality)
+    progress.sub_step("Distance from the sea", OCEAN_DISTANCE_PASSES as u64);
     let mut ocean_dist = Grid::filled_with(w, h, 25.0f32);
     for y in 0..h {
         for x in 0..w {
@@ -31,7 +41,8 @@ pub fn simulate_moisture(
         }
     }
 
-    for _ in 0..4 {
+    for pass in 0..OCEAN_DISTANCE_PASSES {
+        progress.tick(pass as u64);
         for y in 1..(h as isize - 1) {
             for x in 0..(w as isize) {
                 let current = *ocean_dist.get(x, y);
@@ -47,7 +58,15 @@ pub fn simulate_moisture(
     }
 
     // 2. Synthesize physically authentic planetary precipitation
+    progress.sub_step("Rainfall synthesis", h as u64);
     for y in 0..h {
+        if y % ROWS_PER_CHECKPOINT == 0 {
+            progress.tick(y as u64);
+            progress.preview_map("Rainfall synthesis", (w, h), |x, y| {
+                live::precipitation_at(&precip_grid, x, y)
+            });
+        }
+
         let v = y as f32 / (h as f32 - 1.0);
         let base_lat = ((0.5 - v) * 180.0).abs();
 
@@ -105,8 +124,15 @@ pub fn simulate_moisture(
     }
 
     // 3. Smooth blur pass
+    progress.sub_step("Rainfall smoothing", h as u64);
     let mut smoothed = precip_grid.clone();
     for y in 1..(h as isize - 1) {
+        if (y as usize) % ROWS_PER_CHECKPOINT == 0 {
+            progress.tick(y as u64);
+            progress.preview_map("Rainfall smoothing", (w, h), |x, y| {
+                live::precipitation_at(&smoothed, x, y)
+            });
+        }
         for x in 0..(w as isize) {
             let mut sum = *precip_grid.get(x, y) * 4.0;
             sum += *precip_grid.get(x - 1, y) * 2.0; sum += *precip_grid.get(x + 1, y) * 2.0;

@@ -24,3 +24,23 @@ pub struct GeopoliticalHierarchy {
     pub total_continents: usize,
     pub provinces: Vec<ProvinceNode>,
 }
+
+impl GeopoliticalHierarchy {
+    /// A hierarchy of nothing: what the atlas holds before its act has run.
+    ///
+    /// The hierarchy tiers do not exist until a clustering pass has built them,
+    /// and the atlas has to be able to paint a world that is younger than that.
+    /// This is what such a world's hierarchy is — empty, and honestly so: a
+    /// civilisations scope still waiting for act five has no provinces to look
+    /// up, and every read of this one is guarded by a province count of zero.
+    pub fn empty() -> Self {
+        Self {
+            total_provinces: 0,
+            total_areas: 0,
+            total_regions: 0,
+            total_superregions: 0,
+            total_continents: 0,
+            provinces: Vec::new(),
+        }
+    }
+}

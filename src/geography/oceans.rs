@@ -12,11 +12,18 @@
 //! tiers are assembled from these by the same graph-clustering machinery the
 //! land hierarchy uses (`geopolitics::build_ocean_hierarchy`).
 
+use crate::core::progress::Progress;
 use crate::core::Grid;
+use crate::export::live;
 use crate::geography::config::OceanConfig;
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 use std::collections::BinaryHeap;
+
+/// Rows of latitude between two progress checkpoints on the survey passes.
+const PREVIEW_ROWS: usize = 32;
+/// How many steps of the marine flood fill may pass between two checkpoints.
+const EXPANSION_STEPS_PER_CHECKPOINT: usize = 250_000;
 
 /// The base tier of the ocean hierarchy: a grid of marine province IDs.
 ///
@@ -108,6 +115,7 @@ fn flood_fill(
     heightmap: &Grid<f32>,
     is_lake: &Grid<bool>,
     sea_level: f32,
+    progress: &Progress,
 ) -> Grid<u32> {
     let w = heightmap.width;
     let h = heightmap.height;
@@ -129,7 +137,16 @@ fn flood_fill(
         (-1,  1, 14), (0,  1, 10), (1,  1, 14),
     ];
 
+    let mut claimed = 0usize;
     while let Some(state) = heap.pop() {
+        claimed += 1;
+        if claimed % EXPANSION_STEPS_PER_CHECKPOINT == 0 {
+            progress.tick(claimed as u64);
+            progress.preview_map("Claiming the ocean", (w, h), |x, y| {
+                live::province_at(heightmap, &ids, x, y)
+            });
+        }
+
         let cur_elev = *heightmap.get(state.x, state.y);
         for &(dx, dy, dist_cost) in &dirs {
             let nx = ids.wrap_x(state.x + dx) as isize;
@@ -166,14 +183,19 @@ pub fn generate_ocean_provinces(
     sea_level: f32,
     config: &OceanConfig,
     seed: u64,
+    progress: &Progress,
 ) -> OceanResult {
     let w = heightmap.width;
     let h = heightmap.height;
     let mut rng = ChaCha8Rng::seed_from_u64(seed ^ 0x0CEA_0CEA_0CEA_0CEA);
 
     // ── 1. Count the world ocean ─────────────────────────────────────────────
+    progress.sub_step("Surveying the world ocean", 0);
     let mut ocean_px = 0usize;
     for y in 0..h {
+        if y % (PREVIEW_ROWS * 4) == 0 {
+            progress.tick(y as u64);
+        }
         for x in 0..w {
             if is_ocean(heightmap, is_lake, x as isize, y as isize, sea_level) {
                 ocean_px += 1;
@@ -190,6 +212,7 @@ pub fn generate_ocean_provinces(
     }
 
     // ── 2. Poisson-disc style seed scatter ───────────────────────────────────
+    progress.sub_step("Scattering marine seeds", 0);
     let area_per_prov = ocean_px as f32 / config.num_provinces as f32;
     let stride = (area_per_prov.sqrt().max(2.0)).round() as usize;
     let min_dist = area_per_prov.sqrt() * 0.6;
@@ -197,6 +220,9 @@ pub fn generate_ocean_provinces(
 
     let mut candidates: Vec<(isize, isize)> = Vec::new();
     for by in (0..h).step_by(stride) {
+        if by % (stride * PREVIEW_ROWS) == 0 {
+            progress.tick(by as u64);
+        }
         for bx in (0..w).step_by(stride) {
             let jx = bx as isize + rng.random_range(0..stride) as isize;
             let jy = by as isize + rng.random_range(0..stride) as isize;
@@ -245,7 +271,8 @@ pub fn generate_ocean_provinces(
     let num_seeds = seeds.len();
 
     // ── 3. Two-pass relaxed flood fill (Dijkstra + Lloyd relaxation) ─────────
-    let mut ids = flood_fill(&seeds, heightmap, is_lake, sea_level);
+    progress.sub_step("Claiming the ocean", 0);
+    let mut ids = flood_fill(&seeds, heightmap, is_lake, sea_level, progress);
 
     let mut sum_cos = vec![0.0f64; num_seeds + 1];
     let mut sum_sin = vec![0.0f64; num_seeds + 1];
@@ -283,7 +310,8 @@ pub fn generate_ocean_provinces(
         relaxed.push((id, fx, fy));
     }
 
-    ids = flood_fill(&relaxed, heightmap, is_lake, sea_level);
+    progress.sub_step("Claiming the ocean (settled)", 0);
+    ids = flood_fill(&relaxed, heightmap, is_lake, sea_level, progress);
 
     let mut used = 0u32;
     for &id in ids.raw_slice() {

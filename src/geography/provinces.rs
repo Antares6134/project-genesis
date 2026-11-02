@@ -1,9 +1,20 @@
+use crate::core::progress::Progress;
 use crate::core::Grid;
+use crate::export::live;
 use crate::geography::config::GeographyConfig;
 use noise::{NoiseFn, OpenSimplex};
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 use std::collections::{BinaryHeap, VecDeque};
+
+/// Rows of latitude between two progress checkpoints on the survey passes.
+const PREVIEW_ROWS: usize = 32;
+/// How many steps of a flood fill may pass between two progress checkpoints.
+///
+/// The expansions are the slowest single-threaded work in the whole engine —
+/// tens of millions of heap pops — so this is deliberately frequent enough that
+/// the bar moves smoothly, and every checkpoint also offers a picture.
+const EXPANSION_STEPS_PER_CHECKPOINT: usize = 250_000;
 
 #[derive(Clone)]
 pub struct ProvinceResult {
@@ -46,6 +57,7 @@ pub fn generate_provinces(
     min_river_flow: f32,
     config: &GeographyConfig,
     seed: u64,
+    progress: &Progress,
 ) -> ProvinceResult {
     let w = heightmap.width;
     let h = heightmap.height;
@@ -56,6 +68,7 @@ pub fn generate_provinces(
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
     // ─── 0. FAST DISTANCE-TO-WATER TRANSFORM (CHAMFER PASS) ───────────────────
+    progress.sub_step("Surveying the land", 0);
     let mut dist_to_water = Grid::filled_with(w, h, 255u8);
     {
         let dist_slice = dist_to_water.raw_slice_mut();
@@ -350,6 +363,7 @@ pub fn generate_provinces(
         &dist_to_water,
         sea_level,
         (MAX_CORRIDOR_SPANS * corridor_span).round() as usize,
+        progress,
     );
 
     // Every province has to be able to follow settled land to the sea — not
@@ -412,10 +426,14 @@ pub fn generate_provinces(
     );
 
     // ─── 2. SEED CANDIDATE SELECTION ─────────────────────────────────────────
+    progress.sub_step("Seeding provinces", 0);
     let stride = 4usize;
     let mut seed_candidates: Vec<(f32, isize, isize)> = Vec::new();
 
     for y in (0..h).step_by(stride) {
+        if y % (stride * PREVIEW_ROWS) == 0 {
+            progress.tick(y as u64);
+        }
         for x in (0..w).step_by(stride) {
             if *is_wasteland.get(x as isize, y as isize) {
                 continue; // Wastelands can never host province settlements
@@ -483,8 +501,16 @@ pub fn generate_provinces(
     ];
 
     // ─── 4. TWO-PASS RELAXED FLOOD FILL ──────────────────────────────────────
+    //    This is the picture the atlas has been waiting for since the seed: the
+    //    provinces themselves, spreading outward from their centres until they
+    //    meet. Pass one is relaxed to its centroid and run again, so the reader
+    //    sees the map settle rather than merely appear.
     for pass in 0..2usize {
         let is_last = pass == 1;
+        progress.sub_step(
+            if is_last { "Claiming the land (settled)" } else { "Claiming the land" },
+            0,
+        );
         province_ids = Grid::filled_with(w, h, 0u32);
         let mut heap: BinaryHeap<ExpandState> = BinaryHeap::new();
 
@@ -494,7 +520,16 @@ pub fn generate_provinces(
             heap.push(ExpandState { cost: 0, x: sx, y: sy, id: pid });
         }
 
+        let mut claimed = 0usize;
         while let Some(state) = heap.pop() {
+            claimed += 1;
+            if claimed % EXPANSION_STEPS_PER_CHECKPOINT == 0 {
+                progress.tick(claimed as u64);
+                progress.preview_map("Claiming the land", (w, h), |x, y| {
+                    live::province_at(heightmap, &province_ids, x, y)
+                });
+            }
+
             if *province_ids.get(state.x, state.y) != state.id { continue; }
 
             let current_elev = *heightmap.get(state.x, state.y);
@@ -859,10 +894,13 @@ fn carve_habitable_corridors(
     dist_to_water: &Grid<u8>,
     sea_level: f32,
     max_corridor: usize,
+    progress: &Progress,
 ) {
     let w = heightmap.width;
     let h = heightmap.height;
     let dirs: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+
+    progress.sub_step("Carving corridors", 0);
 
     let mut hab_comp = Grid::filled_with(w, h, 0u32);
     let mut comp_size = vec![0usize];
@@ -1003,7 +1041,16 @@ fn carve_habitable_corridors(
 
     let mut dsu = CompDsu::new(&comp_touches_sea);
 
+    let mut carved = 0usize;
     while let Some(state) = heap.pop() {
+        carved += 1;
+        if carved % EXPANSION_STEPS_PER_CHECKPOINT == 0 {
+            progress.tick(carved as u64);
+            progress.preview_map("Opening corridors", (w, h), |x, y| {
+                live::wilderness_at(heightmap, is_wasteland, x, y)
+            });
+        }
+
         let cur_owner = *owner.get(state.x, state.y);
         if cur_owner == 0 { continue; }
 
@@ -1495,6 +1542,7 @@ mod tests {
                 &self.dist_to_water,
                 SEA_LEVEL,
                 max_corridor,
+                &Progress::silent(),
             );
             revert_stranded_habitation(
                 &self.heightmap,

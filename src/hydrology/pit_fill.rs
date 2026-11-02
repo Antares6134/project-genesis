@@ -1,7 +1,12 @@
+use crate::core::progress::Progress;
 use crate::core::Grid;
+use crate::export::live;
 use crate::hydrology::config::HydrologyConfig;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
+
+/// How many cells the flood may drain between two progress checkpoints.
+const CELLS_PER_CHECKPOINT: usize = 200_000;
 
 #[derive(Copy, Clone, PartialEq)]
 struct QueueItem {
@@ -40,6 +45,7 @@ pub fn fill_depressions_and_find_lakes(
     heightmap: &Grid<f32>,
     sea_level: f32,
     config: &HydrologyConfig,
+    progress: &Progress,
 ) -> PitFillResult {
     let w = heightmap.width;
     let h = heightmap.height;
@@ -71,7 +77,20 @@ pub fn fill_depressions_and_find_lakes(
     ];
 
     // 2. Priority flood across terrain
+    //    The flood's own size is not known in advance — it pops until the heap
+    //    is empty — so this sub-step reports a count and an indeterminate bar,
+    //    and shows the lakes filling as the water finds them.
+    progress.sub_step("Filling depressions", 0);
+    let mut drained = 0usize;
     while let Some(current) = heap.pop() {
+        drained += 1;
+        if drained % CELLS_PER_CHECKPOINT == 0 {
+            progress.tick(drained as u64);
+            progress.preview_map("Lakes filling", (w, h), |x, y| {
+                live::water_at(&filled, Some(&is_lake), None, 0.0, x, y)
+            });
+        }
+
         for &(dx, dy) in &neighbors {
             let ny = current.y + dy;
             if ny < 0 || ny >= h as isize {

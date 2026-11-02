@@ -54,6 +54,7 @@ use crate::civilization::{
 };
 use crate::climate::PlanetaryMode;
 use crate::core::fmt::{thousands, thousands_u64};
+use crate::core::progress::Progress;
 use crate::core::sphere;
 use crate::core::{relief, Grid};
 use crate::geopolitics::{GeopoliticalHierarchy, ProvinceNode};
@@ -64,6 +65,9 @@ use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 /// Salt mixed into the world seed for the history stage, so the dawn draws from
 /// an independent random stream instead of replaying the province generator's.
 const DAWN_SALT: u64 = 0x0DA7_0F1F_0000_0007;
+
+/// How many province steps a diffusion pass may take between two checkpoints.
+const DEVELOPMENT_STEPS_PER_CHECKPOINT: usize = 20_000;
 
 // ─── THE DEVELOPMENT AXIS ────────────────────────────────────────────────────
 //
@@ -180,6 +184,7 @@ pub fn generate_civilizations(
     planetary_mode: PlanetaryMode,
     config: &CivilizationConfig,
     seed: u64,
+    progress: &Progress,
 ) -> CivilizationWorld {
     let w = heightmap.width;
     let h = heightmap.height;
@@ -187,6 +192,7 @@ pub fn generate_civilizations(
     let mut rng = ChaCha8Rng::seed_from_u64(seed ^ DAWN_SALT);
 
     // ─── 1. PROVINCE CENSUS ──────────────────────────────────────────────────
+    progress.sub_step("Taking the province census", 0);
     // One pass over the canvas, accumulating everything any later decision needs.
     // Area is integrated over latitude through the planetary geometry, so a
     // province on the 60th parallel is not credited with the ground of one on the
@@ -269,6 +275,7 @@ pub fn generate_civilizations(
     // richest superregions — several cradles in a region that can carry them, a
     // few loners on far continents — so the map carries both rivals and isolated
     // rises rather than one evenly-spaced realm per landmass.
+    progress.sub_step("Choosing the cradles", 0);
     let mut cradles: Vec<Cradle> = Vec::new();
     for i in 1..n {
         let s = &stats[i];
@@ -570,6 +577,7 @@ pub fn generate_civilizations(
     }
 
     // ─── 3. LAND USE ─────────────────────────────────────────────────────────
+    progress.sub_step("Reading the land", 0);
     // What every province's own country can feed, before anybody has decided
     // anything: a field, a herd, or nothing but what can be hunted and gathered.
     // This is the environmental half of the model, and it is the reason a world
@@ -634,7 +642,10 @@ pub fn generate_civilizations(
         .collect();
 
     let mut owner: Vec<u16> = vec![0; n];
-    let (influence, _) = grow_states(&seats, &targets, &mut owner, hierarchy, &stats, w, config);
+    progress.sub_step("The reach of each realm", 0);
+    let (influence, _) = grow_states(
+        &seats, &targets, &mut owner, hierarchy, &stats, w, config, progress,
+    );
 
     // Tuning diagnostic: what share of the inhabited world falls inside a given
     // influence cost, so the two thresholds can be set from the numbers rather than
@@ -659,6 +670,7 @@ pub fn generate_civilizations(
     }
 
     // ─── 5. TIERS ────────────────────────────────────────────────────────────
+    progress.sub_step("Independent neolithics & tiers", 0);
     // The independent neolithics: a fertile country nobody reached, where farming
     // was worked out locally rather than brought in — the Amazon, New Guinea, West
     // Africa. Seeded on the best ground beyond any state's reach, and spread only
@@ -680,6 +692,7 @@ pub fn generate_civilizations(
         w,
         config,
         config.independent_reach,
+        progress,
     );
     let mut tiers = assign_tiers(
         &owner,
@@ -696,6 +709,7 @@ pub fn generate_civilizations(
     clean_tier_speckle(&mut tiers, &owner, &land, &stats, hierarchy);
 
     // ─── 6. ASSEMBLY ─────────────────────────────────────────────────────────
+    progress.sub_step("Assembling the peoples", 0);
     // Contiguous provinces of one tier — and, for farming peoples, of one state's
     // hinterland — become named societies. Nothing is left over: after this every
     // inhabited province on the world belongs to somebody.
@@ -951,6 +965,7 @@ pub fn generate_civilizations(
     };
 
     // ─── 5. DEEP-TIME DEVELOPMENT ────────────────────────────────────────────
+    progress.sub_step("Deep-time development", 0);
     // How developed every realm is at the atlas date is not a function of how old
     // it is: it grows from its own surplus, learns from the neighbours it touches,
     // and starts part-way up if an older stock already held the country. The
@@ -2214,6 +2229,7 @@ fn grow_states(
     stats: &[ProvinceStats],
     width: usize,
     config: &CivilizationConfig,
+    progress: &Progress,
 ) -> (InfluenceField, Vec<Vec<u32>>) {
     let n = owner.len();
     let mut field = InfluenceField {
@@ -2234,7 +2250,14 @@ fn grow_states(
         });
     }
 
+    let mut steps = 0usize;
     while let Some(Step { cost, prov, civ }) = heap.pop() {
+        steps += 1;
+        if steps % DEVELOPMENT_STEPS_PER_CHECKPOINT == 0 {
+            progress.tick(steps as u64);
+            progress.preview_owners("The reach of each realm", owner);
+        }
+
         if cost > field.cost[prov as usize] + 1e-3 {
             continue; // a stale heap entry
         }
@@ -2291,6 +2314,7 @@ fn diffuse_field(
     width: usize,
     config: &CivilizationConfig,
     budget: f32,
+    progress: &Progress,
 ) -> Vec<f32> {
     let n = hierarchy.provinces.len();
     let mut cost = vec![f32::MAX; n];
@@ -2306,7 +2330,12 @@ fn diffuse_field(
             civ: 1,
         });
     }
+    let mut steps = 0usize;
     while let Some(Step { cost: c, prov, .. }) = heap.pop() {
+        steps += 1;
+        if steps % DEVELOPMENT_STEPS_PER_CHECKPOINT == 0 {
+            progress.tick(steps as u64);
+        }
         if c > cost[prov as usize] + 1e-3 || c > budget {
             continue;
         }

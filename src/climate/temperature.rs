@@ -1,18 +1,36 @@
+use crate::core::progress::Progress;
 use crate::core::{relief, Grid};
 use crate::climate::config::{ClimateConfig, PlanetaryMode};
+use crate::export::live;
 use noise::{NoiseFn, OpenSimplex};
+
+/// Rows of latitude between two progress checkpoints.
+const ROWS_PER_CHECKPOINT: usize = 64;
 
 pub fn simulate_temperature(
     heightmap: &Grid<f32>,
     sea_level: f32,
     config: &ClimateConfig,
+    progress: &Progress,
 ) -> Grid<f32> {
     let w = heightmap.width;
     let h = heightmap.height;
     let mut temp_grid = Grid::new(w, h);
     let noise = OpenSimplex::new(config.seed as u32);
-    
+
+    progress.sub_step("Temperature belts", h as u64);
+
     for y in 0..h {
+        // The belts sweep equatorward band by band, so the atlas can watch the
+        // world's climate arrive. Rows are independent, and the preview only
+        // borrows the grid for the length of the call.
+        if y % ROWS_PER_CHECKPOINT == 0 {
+            progress.tick(y as u64);
+            progress.preview_map("Temperature belts", (w, h), |x, y| {
+                live::temperature_at(&temp_grid, x, y)
+            });
+        }
+
         let fy = y as f32;
         let v = fy / (h as f32 - 1.0); // 0.0 (North Pole) to 1.0 (South Pole)
 

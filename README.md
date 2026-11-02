@@ -34,25 +34,64 @@ attached to the [GitHub releases](https://github.com/Antares6134/Project-Genesis
 
 ```bash
 cargo build --release                                          # build
-cargo run --release -- 3286592765982 --save                    # generate a world + cache
-cargo run --release -- 3286592765982 --load --viewer           # open the interactive atlas
+cargo run --release -- --viewer                                # open the atlas and grow a world in it
+cargo run --release -- 3286592765982 --save                    # generate a world headlessly + cache
 cargo run --release -- 3286592765982 --load --civs             # print the dossier + export it
 cargo run --release -- 3286592765982 --load --plates           # re-render every README plate
 ```
 
+The atlas opens **before** any world exists. Give it a seed (or draw one), and the seven acts of
+creation are buttons in its genesis panel — each one runs on a worker thread, in order, with a
+live low-resolution plate of the world appearing on the canvas as it is made.
+
 | Flag | Effect |
 | :--- | :--- |
 | `<seed>` | Any unsigned integer; the same seed always produces the same planet. |
-| `--save` | Write the generated world to `world_<seed>.bin`. |
-| `--load` | Reuse `world_<seed>.bin` instead of regenerating (much faster). |
+| `--save` | Write the generated world to `saved_seeds/world_<seed>.bin`. |
+| `--load` | Reuse `saved_seeds/world_<seed>.bin` instead of regenerating (much faster). |
 | `--viewer` | Launch the interactive desktop atlas. |
 | `--civs` | Run the history stage, print the dossier, export its 8K plate. |
 | `--civs-all` | The same, with a full dossier for every society — hundreds of them. |
 | `--plates` | Export the 17 `./exports/atlas_*.png` scope and tier plates used below. |
 
 Every headless run also exports `world_physical_map.png`, `world_topographic_map.png` (a
-contoured elevation survey) and `world_political_map.png` (the land hierarchy). The history
-stage runs automatically with `--viewer` and `--plates`, so the atlas always has a dawn to show.
+contoured elevation survey) and `world_political_map.png` (the land hierarchy). `--civs` and
+`--plates` run the history stage too, since a world plate wants a dawn on it.
+
+### Growing a world in the atlas
+
+`--viewer` opens the window first and grows nothing until it is asked. The genesis panel on the
+left is the whole pipeline:
+
+| Step | What it does |
+| :--- | :--- |
+| **Seed** | Type a whole number, or press 🎲 to draw one. A new seed clears the world at once. |
+| **World data** | 💾 **Save** writes `saved_seeds/world_<seed>.bin` the moment act 3 lands — the land, the climate and the water, which is exactly what `--save` writes. 📂 **Load** adopts that file and picks the panel up at act 4. Loading a seed that has no cache says so, and says what would put one there. |
+| **The seven acts** | Only the next act is pressable; the ones behind it are ✔ and the ones ahead are greyed out. |
+| **▶▶ Run all remaining** | Grows the rest of the world without stopping (⏹ stops it after the act in flight). |
+| **↺ Reset world** | Throws the world away and starts over on the same seed. |
+
+| Act | What it makes |
+| :--- | :--- |
+| 1. Geology & Erosion | Tectonic plates, fractal detail, hydraulic + thermal erosion |
+| 2. Atmospheric Climate | Temperature, winds, rainfall |
+| 3. Hydrology & Rivers | Lakes and flow accumulation — **the world cache is writable from here** |
+| 4. Geography & Provinces | The land cut into provinces, its wilderness mapped |
+| 5. Geopolitical Hierarchy | Provinces → areas → regions → superregions → continents |
+| 6. Hydro-Political Hierarchy | The world ocean, same five tiers |
+| 7. Dawn of Civilization | Realms, societies, populations, an era |
+
+Each act runs on a worker thread, so the window stays alive while the world is grown, and the
+map scopes are offered exactly when their subject exists: the survey sheet from act 1, the
+physical atlas and both climate scopes from act 2, the political map from act 4, the ocean and
+the dawn from acts 6 and 7. While an act runs, the canvas shows a **live plate** — a
+low-resolution picture painted from the very grid the act is working on, a few frames a second:
+continents assembling, valleys carving, lakes filling, rivers reaching the sea, provinces
+spreading outward, realms claiming their hinterlands. When the act lands, its full 8K plate
+replaces it in place.
+
+Nothing else changed: the same seed still grows exactly the same planet, and a world adopted
+from a cache is identical to one grown from scratch.
 
 ## Atlas gallery
 
@@ -107,12 +146,12 @@ scaled up because it is one connected, far larger domain.
 | :--- | :--- |
 | Surface | **39.4 % land / 60.6 % ocean** |
 | Land hierarchy | **10 864 provinces · 1 349 areas · 246 regions · 36 superregions · 7 continents** |
-| Ocean hierarchy | **1 974 provinces · 135 areas · 36 regions · 11 superregions · 4 basins** |
+| Ocean hierarchy | **1 776 provinces · 135 areas · 36 regions · 11 superregions · 4 basins** |
 | Highest peak / deepest trench | **+7 019 m / −10 725 m** |
 | Median land elevation | **+750 m** (90 % of land below +2 050 m) |
 | Median ocean depth | **−3 950 m** |
 | Continental shelf (≤ −200 m) | **9.3 % of the ocean** |
-| Civilizations at 4 190 CE | **24 realms · 790 provinces · 46 201 249 people** |
+| Civilizations at 2 160 BCE | **24 states · 21 474 884 world population · 0.23 people/km²** |
 
 ## How it works
 

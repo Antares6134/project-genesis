@@ -1,9 +1,18 @@
 use crate::core::polar;
+use crate::core::progress::Progress;
 use crate::core::relief::{self, SEA_LEVEL};
 use crate::core::Grid;
+use crate::export::live;
 use crate::terrain::config::WorldConfig;
 use noise::{NoiseFn, OpenSimplex};
 use rayon::prelude::*; // Required for High-Definition speed
+
+/// How many bands of latitude the tectonic pass is cut into for the atlas.
+///
+/// The pass is embarrassingly parallel per pixel, so the only reason to cut it
+/// at all is to be able to *show* it: eight pictures of the continents
+/// assembling, at roughly one every half-second on an 8K canvas.
+const TECTONIC_BANDS: usize = 8;
 
 pub struct TectonicsResult {
     pub heightmap: Grid<f32>,
@@ -89,7 +98,7 @@ fn sample_3d_fbm(noise: &OpenSimplex, x: f64, y: f64, z: f64, octaves: usize, la
     (total / max_val) as f32
 }
 
-pub fn simulate_tectonics(config: &WorldConfig) -> TectonicsResult {
+pub fn simulate_tectonics(config: &WorldConfig, progress: &Progress) -> TectonicsResult {
     let w = config.width;
     let h = config.height;
 
@@ -103,8 +112,19 @@ pub fn simulate_tectonics(config: &WorldConfig) -> TectonicsResult {
 
     let mut heightmap = Grid::new(w, h);
 
-    // PARALLELIZE THE ENTIRE GLOBE ACROSS ALL CPU CORES
-    heightmap.raw_slice_mut().par_chunks_exact_mut(w).enumerate().for_each(|(y, row)| {
+    progress.sub_step("Continents rising", h as u64);
+
+    // PARALLELIZE THE ENTIRE GLOBE ACROSS ALL CPU CORES — a band of latitudes at
+    // a time, so that the atlas can be shown the continents assembling rather
+    // than only the finished world. Every pixel is computed from the noise field
+    // alone and reads no neighbour, so cutting the pass into bands moves not one
+    // value by a single bit: a watched world is the same world.
+    let rows_per_band = (h / TECTONIC_BANDS).max(1);
+    for band in (0..h).step_by(rows_per_band) {
+        let end = (band + rows_per_band).min(h);
+        let rows = &mut heightmap.raw_slice_mut()[band * w..end * w];
+        rows.par_chunks_exact_mut(w).enumerate().for_each(|(offset, row)| {
+        let y = band + offset;
         let fy = y as f32;
         let v = fy / (h - 1) as f32;
         let lat = (0.5 - v) * std::f32::consts::PI;
@@ -197,6 +217,12 @@ pub fn simulate_tectonics(config: &WorldConfig) -> TectonicsResult {
             row[x] = elev.clamp(0.0, 1.0);
         }
     });
+
+        progress.tick(end as u64);
+        progress.preview_map("Continents rising", (w, h), |x, y| {
+            live::relief_at(&heightmap, x, y)
+        });
+    }
 
     TectonicsResult { heightmap }
 }
