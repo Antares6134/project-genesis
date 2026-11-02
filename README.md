@@ -65,7 +65,7 @@ left is the whole pipeline:
 
 | Step | What it does |
 | :--- | :--- |
-| **Seed** | Type a whole number, or press 🎲 to draw one. A new seed clears the world at once. |
+| **Seed** | Type a whole number, or press 🎲 to draw one. A seed is read by each act as it runs, so changing it between acts keeps the acts already grown and re-points only the acts still to come; before act 1 it simply starts a fresh world. |
 | **World data** | 💾 **Save** writes `saved_seeds/world_<seed>.bin` the moment act 3 lands — the land, the climate and the water, which is exactly what `--save` writes. 📂 **Load** adopts that file and picks the panel up at act 4. Loading a seed that has no cache says so, and says what would put one there. |
 | **The seven acts** | Only the next act is pressable; the ones behind it are ✔ and the ones ahead are greyed out. |
 | **▶▶ Run all remaining** | Grows the rest of the world without stopping (⏹ stops it after the act in flight). |
@@ -90,7 +90,8 @@ continents assembling, valleys carving, lakes filling, rivers reaching the sea, 
 spreading outward, realms claiming their hinterlands. When the act lands, its full 8K plate
 replaces it in place.
 
-Nothing else changed: the same seed still grows exactly the same planet, and a world adopted
+Nothing else changed: a world grown from one seed throughout still grows exactly the same planet
+(change the seed part-way and the acts still to come grow from the new one), and a world adopted
 from a cache is identical to one grown from scratch.
 
 ## Atlas gallery

@@ -1036,7 +1036,13 @@ impl MapViewer {
 
     // ─── THE WORLD'S SEED, AND ITS CACHE ─────────────────────────────────────
 
-    /// Adopt the seed the reader typed, and forget the world it replaces.
+    /// Adopt the seed the reader typed.
+    ///
+    /// A seed is read by each act as it runs, so it is not part of an act already
+    /// grown: changing it keeps the world that is on the canvas — its acts, its
+    /// zoom, its scope and its log — and re-points only the acts still to come.
+    /// Before act one there is nothing to keep, so a fresh seed simply starts a
+    /// fresh world.
     fn apply_seed(&mut self) {
         let Ok(seed) = self.seed_text.trim().parse::<u64>() else {
             return;
@@ -1045,13 +1051,26 @@ impl MapViewer {
             return;
         }
         self.genesis.set_seed(seed);
-        self.world = self.genesis.atlas();
-        self.forget_world_view();
-        self.log.clear();
-        self.log.insert(
-            0,
-            format!("🌱 A new world: seed {seed}. Press “1. Geology & Erosion” to grow it."),
-        );
+        if self.world.is_none() {
+            // Nothing grown yet: the plate is already blank, so a clean slate
+            // costs nothing and is exactly what "a new world" means.
+            self.world = self.genesis.atlas();
+            self.forget_world_view();
+            self.log.clear();
+            self.log.insert(
+                0,
+                format!("🌱 A new world: seed {seed}. Press “1. Geology & Erosion” to grow it."),
+            );
+        } else {
+            // The acts already grown stay exactly as they are; only the acts ahead
+            // will grow from the new seed.
+            self.log.insert(
+                0,
+                format!(
+                    "🔀 Seed is now {seed} — the acts already grown stay; the next act grows from {seed}."
+                ),
+            );
+        }
     }
 
     /// Draw a seed the world has never heard of.
@@ -3402,6 +3421,37 @@ mod tests {
         assert!(
             !viewer.genesis.autosave(),
             "a reset world keeps the cache choice it was grown under"
+        );
+    }
+
+    /// Changing the seed mid-way does not throw the world away: the acts already
+    /// grown stay on the canvas, and the seed re-points only the acts still to run.
+    #[test]
+    fn changing_the_seed_keeps_the_world_that_is_already_grown() {
+        let mut viewer = MapViewer::new(Genesis::for_test(1_980, Stage::Geology));
+        assert!(viewer.world.is_some(), "the atlas opens on the world act one grew");
+        viewer.log.insert(0, "✔ 1. Geology & Erosion — 8.0s".to_string());
+
+        viewer.seed_text = "4242".to_string();
+        viewer.apply_seed();
+
+        assert_eq!(viewer.genesis.seed(), 4_242, "the new seed is adopted");
+        assert!(
+            viewer.world.is_some(),
+            "the world is still on the canvas, not thrown away"
+        );
+        assert_eq!(
+            viewer.genesis.ready(),
+            Some(Stage::Climate),
+            "only the acts still to run follow the new seed"
+        );
+        assert!(
+            viewer.log.iter().any(|line| line.contains("Geology")),
+            "the log of what has been grown survives the change"
+        );
+        assert!(
+            viewer.log.iter().any(|line| line.contains("4242")),
+            "and the panel says the seed changed"
         );
     }
 

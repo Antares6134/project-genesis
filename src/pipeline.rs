@@ -31,7 +31,10 @@
 //!   and no way for the atlas to see a half-written world.
 //! - **The order and the numbers are unchanged.** The same seed still grows the
 //!   same planet as it did before the pipeline existed — the only difference is
-//!   *when* each act runs, never *what* it computes.
+//!   *when* each act runs, never *what* it computes. The seed is read by each act
+//!   as it runs, so it may be re-pointed between acts without disturbing the acts
+//!   already grown; a world grown from one seed throughout is still exactly that
+//!   seed's planet.
 
 use crate::civilization::{
     generate_civilizations, CivilizationConfig, CivilizationWorld,
@@ -294,14 +297,16 @@ impl Genesis {
         self.seed
     }
 
-    /// Start over on a new seed, forgetting everything the old one grew.
+    /// Re-point the acts still to run at a new seed, keeping every act already grown.
+    ///
+    /// The seed is not part of a finished act: it is read *when* an act runs —
+    /// `world_config`, `climate_config`, the hierarchy clustering and the
+    /// civilization call all take it — so changing it leaves the acts behind the
+    /// change exactly as they are, and only the acts ahead grow from the new seed.
+    /// A world grown from one seed without changing it in between is still exactly
+    /// that seed's planet.
     pub fn set_seed(&mut self, seed: u64) {
-        if seed == self.seed {
-            return;
-        }
-        let autosave = self.autosave;
-        *self = Self::new(seed);
-        self.autosave = autosave;
+        self.seed = seed;
     }
 
     /// Whether act three writes the world cache when it finishes.
@@ -1056,6 +1061,32 @@ mod tests {
         assert!(world.temperature.is_some() && world.is_lake.is_some());
         assert!(world.provinces.is_none(), "act four has not run");
         assert_eq!(world.hierarchy.total_provinces, 0, "and neither has act five");
+    }
+
+    /// A seed is read by each act as it runs, so changing it keeps every act
+    /// already grown and re-points only the acts still to come.
+    #[test]
+    fn changing_the_seed_keeps_the_acts_already_grown() {
+        let mut genesis = Genesis::for_test(1_980, Stage::Geology);
+        assert_eq!(genesis.ready(), Some(Stage::Climate), "one act is grown");
+
+        genesis.set_seed(4_242);
+
+        assert_eq!(genesis.seed(), 4_242, "the world now grows from the new seed");
+        assert_eq!(
+            genesis.ready(),
+            Some(Stage::Climate),
+            "the act that was waiting is still the act that waits"
+        );
+        assert_eq!(
+            genesis.state(Stage::Geology),
+            StageState::Done { secs: 0.0 },
+            "and the act already grown is untouched"
+        );
+        assert!(
+            genesis.atlas().is_some(),
+            "the heightmap act one grew is still there to paint"
+        );
     }
 }
 
