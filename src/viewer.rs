@@ -683,9 +683,13 @@ fn civ_border_shade(
     if frontier(right_id) || frontier(down_id) {
         // Ink, not a darkened fill: a frontier drawn by multiplying a pastel gives a
         // muddy grey line, and a frontier drawn in warm near-black reads as a border.
-        color = blend_rgb(color, CIV_INK, 0.45);
+        // Two realms of one tier wear near-identical pastels, so the line has to be
+        // dark enough to be read *between* them, not merely against the parchment.
+        color = blend_rgb(color, CIV_INK, 0.75);
     } else if internal && (internal_edge(right_id) || internal_edge(down_id)) {
-        color = blend_rgb(color, CIV_INK, 0.18);
+        // The subdivisions inside a realm stay faint: they are structure, not a
+        // frontier, and the tier selector is what asks for them.
+        color = blend_rgb(color, CIV_INK, 0.30);
     }
     color
 }
@@ -1545,15 +1549,17 @@ impl MapViewer {
     /// This is what the **Fit** button does — and what the viewer does once, on
     /// its first frame, so the atlas opens showing the entire planet whatever
     /// size the window happens to be.
-    fn fit_to(&mut self, rect: egui::Rect) {
+    ///
+    /// The world's pixel size is handed in rather than read from `self.world`:
+    /// the frame borrows the world *out* of `self` (`frame_ui` takes it, so the
+    /// painter can hold `&self` and `&AtlasWorld` at once), so `self.world` is
+    /// `None` for the very frame in which a fit is applied.
+    fn fit_to(&mut self, rect: egui::Rect, map_w: f32, map_h: f32) {
         let available = rect.size();
         if available.x < 64.0 || available.y < 64.0 {
             return; // the panel layout has not settled yet; try next frame
         }
-        let Some(world) = &self.world else { return };
         let margin = 12.0;
-        let map_w = world.width as f32;
-        let map_h = world.height as f32;
         let zoom_x = (available.x - margin * 2.0) / map_w;
         let zoom_y = (available.y - margin * 2.0) / map_h;
         self.zoom = zoom_x.min(zoom_y).clamp(MIN_ZOOM, MAX_ZOOM);
@@ -1989,8 +1995,10 @@ impl MapViewer {
                         {
                             final_color = blend_rgb(final_color, CIV_INK, 0.32);
                         }
-                        // Realm frontiers only: the subdivisions of the land
-                        // hierarchy are not the subject of this plate.
+                        // Realm frontiers, and the subdivisions *inside* a realm at
+                        // the tier the selector names — drawn as line-work only. The
+                        // fill stays the realm's own colour, so a country never
+                        // shatters into a patchwork of shades.
                         final_color = civ_border_shade(
                             final_color,
                             province_ids,
@@ -2001,7 +2009,7 @@ impl MapViewer {
                             y,
                             h,
                             tier,
-                            false,
+                            true,
                         );
                     }
                 } else {
@@ -2269,10 +2277,11 @@ impl MapViewer {
                             scope.min_stage().blurb()
                         ));
                     } else if response.clicked() {
+                        // Repaint in the new scope, but keep the reader's zoom and
+                        // pan: a map mode is a change of what is shown, not of where
+                        // the reader is looking. **Fit** is there when the whole
+                        // world is wanted again.
                         visual_changed = true;
-                        // Every scope carries its own legend (and so its own canvas
-                        // width), so switching opens the new map whole.
-                        fit_request = true;
                     }
                 }
             });
@@ -2734,7 +2743,7 @@ impl MapViewer {
         // click happened.
         if fit_request || self.pending_fit {
             if rect.width() >= 64.0 && rect.height() >= 64.0 {
-                self.fit_to(rect);
+                self.fit_to(rect, world.width as f32, world.height as f32);
                 self.pending_fit = false;
             }
         }

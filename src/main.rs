@@ -213,7 +213,7 @@ fn main() {
             ("./exports/atlas_climate.png",             viewer::MapScope::Climate,       viewer::MapTier::Provinces),
             ("./exports/atlas_temperature.png",         viewer::MapScope::Temperature,   viewer::MapTier::Provinces),
             ("./exports/atlas_terrain.png",             viewer::MapScope::Terrain,       viewer::MapTier::Provinces),
-            ("./exports/atlas_civilizations.png",       viewer::MapScope::Civilizations, viewer::MapTier::Continents),
+            ("./exports/atlas_civilizations.png",       viewer::MapScope::Civilizations, viewer::MapTier::Provinces),
             ("./exports/atlas_land_provinces.png",      viewer::MapScope::Land,          viewer::MapTier::Provinces),
             ("./exports/atlas_land_areas.png",          viewer::MapScope::Land,          viewer::MapTier::Areas),
             ("./exports/atlas_land_regions.png",        viewer::MapScope::Land,          viewer::MapTier::Regions),
