@@ -40,19 +40,29 @@ cargo run --release -- 3286592765982 --load --civs             # print the dossi
 cargo run --release -- 3286592765982 --load --plates           # re-render every README plate
 ```
 
-The atlas opens **before** any world exists. Give it a seed (or draw one), and the seven acts of
+The atlas opens **before** any world exists. Give it a seed (or draw one), and the eight acts of
 creation are buttons in its genesis panel — each one runs on a worker thread, in order, with a
 live low-resolution plate of the world appearing on the canvas as it is made.
 
 | Flag | Effect |
 | :--- | :--- |
 | `<seed>` | Any unsigned integer; the same seed always produces the same planet. |
-| `--save` | Write the generated world to `saved_seeds/world_<seed>.bin`. |
-| `--load` | Reuse `saved_seeds/world_<seed>.bin` instead of regenerating (much faster). |
+| `--save` | Write the world as it grows (acts 1–3, then 1–6) to `saved_seeds/world_<seed>.bin`, zstd-compressed on disk. |
+| `--load` | Adopt the saved world for the seed instead of regenerating (much faster): the acts the file carries are taken as done, and the act after them is offered next. |
 | `--viewer` | Launch the interactive desktop atlas. |
 | `--civs` | Run the history stage, print the dossier, export its 8K plate. |
 | `--civs-all` | The same, with a full dossier for every society — hundreds of them. |
+| `--langs` | Run Act 8, print the language families and their lexicons, and export the Languages map. |
 | `--plates` | Export the 17 `./exports/atlas_*.png` scope and tier plates used below. |
+
+The world cache is a single file, `saved_seeds/world_<seed>.bin`, holding whichever acts the world
+had grown when it was written — every save overwrites the last, so it always holds the deepest one.
+It is written as a zstd frame — a `PGZ2` magic, one byte naming the deepest act held, then the same
+bincode payload an uncompressed cache holds — so a save is a good deal smaller than its raw bytes.
+The one-byte header lets the atlas say how far a save was grown without decoding it, and is a hint
+only: a load still reads the acts off the payload. Compression is lossless, so a reloaded world is
+bit-for-bit the world that was saved, and a cache written by an older build (`PGZ1`, or bare bincode
+with no magic) still loads.
 
 Every headless run also exports `world_physical_map.png`, `world_topographic_map.png` (a
 contoured elevation survey) and `world_political_map.png` (the land hierarchy). `--civs` and
@@ -66,8 +76,8 @@ left is the whole pipeline:
 | Step | What it does |
 | :--- | :--- |
 | **Seed** | Type a whole number, or press 🎲 to draw one. A seed is read by each act as it runs, so changing it between acts keeps the acts already grown and re-points only the acts still to come; before act 1 it simply starts a fresh world. |
-| **World data** | 💾 **Save** writes `saved_seeds/world_<seed>.bin` the moment act 3 lands — the land, the climate and the water, which is exactly what `--save` writes. 📂 **Load** adopts that file and picks the panel up at act 4. Loading a seed that has no cache says so, and says what would put one there. |
-| **The seven acts** | Only the next act is pressable; the ones behind it are ✔ and the ones ahead are greyed out. |
+| **World data** | 📂 **Load** and 💾 **Save** are the two commands for the seed above. **Save** writes the world as it stands to `saved_seeds/world_<seed>.bin`, from act 1 up to act 6 — the land, the climate, the water and as far up the hierarchies as the world has climbed; acts 7 and 8 are never written. Every save overwrites the last, so the file always holds the deepest checkpoint. **Load** adopts it in one press and picks the panel up at the act after the one it holds. 💾 **Save automatically when act 3 and act 6 land** is the setting behind them: while it is ticked, act 3 writes the cache and act 6 writes it again, overwriting the earlier save. The expandable **📂 Saved worlds** list under it shows every cache on disk, newest first, with its age and size, and each row names the acts that save holds — `acts 1–6` — read from the file's one-byte header (a save from an older build, which has no header, says only that a world is there); click a world to load it. A seed with no cache says so, and says what would put one there. |
+| **The eight acts** | Only the next act is pressable; the ones behind it are ✔ and the ones ahead are greyed out. Every ✔ act also carries a small **↺** button that un-does that act and everything after it, so the whole tail may be grown again — optionally from a new seed typed above. |
 | **▶▶ Run all remaining** | Grows the rest of the world without stopping (⏹ stops it after the act in flight). |
 | **↺ Reset world** | Throws the world away and starts over on the same seed. |
 
@@ -75,11 +85,12 @@ left is the whole pipeline:
 | :--- | :--- |
 | 1. Geology & Erosion | Tectonic plates, fractal detail, hydraulic + thermal erosion |
 | 2. Atmospheric Climate | Temperature, winds, rainfall |
-| 3. Hydrology & Rivers | Lakes and flow accumulation — **the world cache is writable from here** |
+| 3. Hydrology & Rivers | Lakes and flow accumulation — **the world cache is written here, and again at act 6** |
 | 4. Geography & Provinces | The land cut into provinces, its wilderness mapped |
 | 5. Geopolitical Hierarchy | Provinces → areas → regions → superregions → continents |
-| 6. Hydro-Political Hierarchy | The world ocean, same five tiers |
+| 6. Hydro-Political Hierarchy | The world ocean, same five tiers — **the full pre-history checkpoint (acts 1–6) is writable from here** |
 | 7. Dawn of Civilization | Realms, societies, populations, an era |
+| 8. Languages & Phonetics | Phonologies, proto-lexicons, Urheimats, native names |
 
 Each act runs on a worker thread, so the window stays alive while the world is grown, and the
 map scopes are offered exactly when their subject exists: the survey sheet from act 1, the
@@ -96,7 +107,7 @@ from a cache is identical to one grown from scratch.
 
 ## Atlas gallery
 
-Nine map scopes, each with its own legend; the **Civilizations overlay** checkbox tints the
+Ten map scopes, each with its own legend; the **Civilizations overlay** checkbox tints the
 provinces each society holds on top of *any* scope.
 
 | Scope | What it portrays |
@@ -107,6 +118,7 @@ provinces each society holds on top of *any* scope.
 | **🌡 Temperature** | Thermal belts, from deep violet cold to red-hot tropics, with a thin line on every 5 °C isotherm. |
 | **🪨 Terrain** | Landform and bathymetry classes: abyssal plain, shelf, coastal lowland, hill country, upland, mountain and high mountain. |
 | **🏺 Civilizations** | The dawn of history: the physical world with the realms that rose on it, each in its own colour, with a dot on the cradle province where it began. |
+| **🗣 Languages** | The world's language families: one colour per family, one shade per language, with an Urheimat and a native autonym for every tongue. |
 | **🏛 Land** | Political subdivision of the landmasses only; the ocean stays plain water. |
 | **🌊 Water** | The hydro-political subdivision of the world ocean only; the continents are muted. |
 | **🌍 Everywhere** | Both hierarchies portrayed at once. |
@@ -122,6 +134,30 @@ provinces each society holds on top of *any* scope.
 | 🏛 Land | 🌊 Water | 🌍 Everywhere |
 | :---: | :---: | :---: |
 | [![Land](./exports/atlas_land_regions.png)](./exports/atlas_land_regions.png) | [![Water](./exports/atlas_water_regions.png)](./exports/atlas_water_regions.png) | [![Everywhere](./exports/atlas_everywhere_regions.png)](./exports/atlas_everywhere_regions.png) |
+
+### Languages & Phonetics
+
+Act 8 gives the world a voice. Ten to eighteen ancestral families are placed at
+*Urheimats* — river basins, coasts, lakeshores, temperate woodlands and isolated
+high valleys — and each draws a **phonology DNA** from its country: a consonant
+and vowel inventory, syllable templates (`CV`, `CVC`, `CCVC`…), sonority-based
+phonotactic rules, and marked articulations such as glottal stops (`'`). Every
+family then names the same forty core meanings in its own sounds, and compounds
+those roots into language names, autonyms, realms, capitals and homelands.
+
+The families spread across the province graph by a friction-weighted flood fill:
+rivers and open plains are cheap, hills cost more, mountain spines and deep
+wilderness cost most, and open ocean is a wall until the world can sail. Dense
+urban cradles split into local daughter languages and isolates, while pastoral and
+wilderness zones form sweeping macro-family blobs. Stage 8 republishes the
+civilizations with native names, so the Civilizations legend and hover cards pick
+them up without a special case.
+
+The Languages map mode paints every province by the tongue it speaks, the legend
+lists each family's autonym, archetype, Urheimat and languages, and hovering a
+province or realm shows its family, language, native name and homeland. Languages
+are cheap to generate — a fraction of a second — so they are not cached: a loaded
+world grows its tongues afresh rather than reading them back.
 
 ### Land tiers
 
@@ -237,15 +273,26 @@ city is a separate, far larger quantity biased by how kind the planet turned out
 
 Everything is drawn from the seed through a `ChaCha8Rng` with fixed per-stage salts, and every
 collection the RNG walks is sorted, so a seed always yields the same planet, civilizations,
-dates and populations. `--save` caches the physical layers (heightmap, temperature,
-precipitation, flow, lakes) in `world_<seed>.bin`; `--load` reuses it and reruns only the
-political and history stages.
+dates and populations.
+
+There is one cache, `world_<seed>.bin`, holding every act the world has grown up to act 6 — the
+heightmap, temperature, precipitation, flow and lakes, then the land provinces, the ocean provinces
+and both hierarchies as far as the world has climbed. It is written automatically the moment act 3
+lands and again the moment act 6 lands, each overwriting the last, and it can be written by hand at
+any time from the atlas's **💾 Save** button. Acts 7 and 8 are never written, so a save always
+resumes at the dawn or before it. `--load` adopts the file and never re-runs the acts it covers — a
+save made at act 3 resumes at act 4, one made at act 6 at act 7. Languages are cheap enough to
+regenerate every time, so they have no cache.
+
+Each save also carries a one-byte header naming the deepest act it holds, so the atlas's **📂 Saved
+worlds** list can say `acts 1–6` for a cache without decoding a gigabyte to find out; a save from an
+older build has no such header and is still listed, but without the acts.
 
 ## Project layout
 
 | Path | Contents |
 | :--- | :--- |
-| [`src/core/`](src/core/) | Grid, spherical geometry, the vertical datum, polar ice, the binary world cache. |
+| [`src/core/`](src/core/) | Grid, spherical geometry, the vertical datum, polar ice, the binary world caches. |
 | [`src/terrain/`](src/terrain/) | Tectonics, fractal detail, hydraulic and thermal erosion. |
 | [`src/climate/`](src/climate/) | Wind cells, temperature and moisture. |
 | [`src/hydrology/`](src/hydrology/) | Depression fill, lake finding, water flow and rivers. |

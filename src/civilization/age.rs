@@ -34,7 +34,9 @@
 ///
 /// Ordered from oldest to newest, so `Age::min(Age::HORIZON)` caps a world at the
 /// deepest age this build models.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub enum Age {
     // ── The Agrarian age ─────────────────────────────────────────────────────
     /// The first fields: people plant and stay, but build no towns.

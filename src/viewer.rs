@@ -1,27 +1,31 @@
 mod themes;
 
+use crate::civilization::SocietyTier;
+use crate::civilization::{Civilization, CivilizationWorld};
+use crate::core::fmt::{thousands, thousands_u64};
+use crate::core::polar::{ICE_SHELF_TEMP, PACK_ICE_TEMP, frozen_sea_name, is_frozen_sea};
+use crate::core::progress::{ProgressEvent, Sink};
+use crate::core::{Grid, relief};
+use crate::export::image::{
+    HYPSOMETRIC_COLORS, HYPSOMETRIC_NAMES, get_atlas_biome_color, get_biome_name, hypsometric_band,
+    hypsometric_color, hypsometric_range_label, id_to_territory_color,
+};
+use crate::geopolitics::GeopoliticalHierarchy;
+use crate::language::LanguagesWorld;
+use crate::pipeline::{
+    AtlasWorld, CachedWorld, Genesis, LoadError, Stage, StageReport, StageState, cache_path,
+    cached_world, cached_worlds,
+};
 use eframe::egui::{
     self, Align2, Color32, ColorImage, FontFamily, FontId, Stroke, TextStyle, TextureHandle,
     TextureOptions,
 };
 use noise::{NoiseFn, OpenSimplex};
-use rayon::prelude::*;
-use crate::civilization::SocietyTier;
-use crate::civilization::{Civilization, CivilizationWorld};
-use crate::core::fmt::{thousands, thousands_u64};
-use crate::core::polar::{frozen_sea_name, is_frozen_sea, ICE_SHELF_TEMP, PACK_ICE_TEMP};
-use crate::core::progress::{ProgressEvent, Sink};
-use crate::core::{relief, Grid};
-use crate::geopolitics::GeopoliticalHierarchy;
-use crate::export::image::{
-    get_atlas_biome_color, get_biome_name, hypsometric_band, hypsometric_color,
-    hypsometric_range_label, id_to_territory_color, HYPSOMETRIC_COLORS, HYPSOMETRIC_NAMES,
-};
-use crate::pipeline::{AtlasWorld, Genesis, LoadError, Stage, StageReport, StageState};
 use rand::RngExt;
+use rayon::prelude::*;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::time::Instant;
-use themes::{ClimateZone, TerrainClass, TEMPERATURE_LEGEND_ROWS};
+use std::time::{Instant, SystemTime};
+use themes::{ClimateZone, TEMPERATURE_LEGEND_ROWS, TerrainClass};
 
 /// How far the atlas can be zoomed out and in.
 const MIN_ZOOM: f32 = 0.03;
@@ -159,6 +163,8 @@ pub enum MapScope {
     Terrain,
     /// The dawn of history: the physical world with the civilizations on it.
     Civilizations,
+    /// The world's language families and their languages.
+    Languages,
     /// Political subdivision of the landmasses only.
     Land,
     /// Hydro-political subdivision of the world ocean only.
@@ -171,12 +177,20 @@ impl MapScope {
     /// True for the scopes that portray a political hierarchy, which are the only
     /// ones the tier selector and the border toggle apply to.
     fn is_political(self) -> bool {
-        matches!(self, MapScope::Land | MapScope::Water | MapScope::Everywhere)
+        matches!(
+            self,
+            MapScope::Land | MapScope::Water | MapScope::Everywhere
+        )
     }
 
     /// True for the scope whose subject *is* the dawn civilizations.
     fn is_civilizations(self) -> bool {
         matches!(self, MapScope::Civilizations)
+    }
+
+    /// True for the scope whose subject is the world's languages.
+    fn is_languages(self) -> bool {
+        matches!(self, MapScope::Languages)
     }
 
     /// The act a scope needs before it has anything to portray.
@@ -196,6 +210,7 @@ impl MapScope {
             MapScope::Land => Stage::Provinces,
             MapScope::Water | MapScope::Everywhere => Stage::HydroPolitics,
             MapScope::Civilizations => Stage::Civilization,
+            MapScope::Languages => Stage::Languages,
         }
     }
 
@@ -226,12 +241,18 @@ pub struct MapViewer {
     world: Option<AtlasWorld>,
     /// The act running on its own thread, if one is.
     job: Option<StageJob>,
+    /// The save running on its own thread, if one is.
+    save_job: Option<SaveJob>,
     /// The seed as the reader typed it, which is not always a valid world.
     seed_text: String,
-    /// Whether this seed's world cache is to be written or adopted.
-    cache_mode: CacheMode,
     /// A sentence about the last cache attempt, when there is one worth saying.
     cache_notice: Option<String>,
+    /// Every world cache on disk as of the last scan.
+    cached: Vec<CachedWorld>,
+    /// True once the cache directory has been read at least once.
+    cached_scanned: bool,
+    /// Set when an act may have written a cache, so the list is read again.
+    cached_dirty: bool,
     /// What each finished act produced, newest first.
     log: Vec<String>,
     /// Keep running the acts, one after another, until the world is finished.
@@ -263,6 +284,8 @@ pub struct MapViewer {
     marker: Option<(f32, f32)>,
     /// The realm whose entry in the legend was last clicked.
     selected_civ: Option<u32>,
+    /// The language family whose entry in the legend was last clicked.
+    selected_family: Option<u16>,
     /// Whether the atlas's type scale has been installed on this frame's style.
     /// A style change makes egui rebuild its font atlas, so it is done once.
     style_installed: bool,
@@ -283,7 +306,6 @@ const GENESIS_PANEL_WIDTH: f32 = 372.0;
 /// keeps the rest of the window.
 const GENESIS_PANEL_MAX: f32 = 520.0;
 
-
 /// What a running act is doing, in the few words a caption has room for.
 ///
 /// One spelling of it, used by the genesis panel, by the strip over the live
@@ -303,6 +325,50 @@ fn stage_progress(job: Option<&StageJob>) -> String {
     }
 }
 
+/// A cache's size in the unit a reader thinks in.
+///
+/// A world cache is hundreds of megabytes, so bytes would be a row of digits
+/// that says less than "544 MB" does.
+fn cache_size(bytes: u64) -> String {
+    const MB: f64 = 1024.0 * 1024.0;
+    let megabytes = bytes as f64 / MB;
+    if megabytes >= 1024.0 {
+        format!("{:.1} GB", megabytes / 1024.0)
+    } else {
+        format!("{megabytes:.0} MB")
+    }
+}
+
+/// How long ago a cache was written, in the few words a row has room for.
+fn cache_age(modified: Option<SystemTime>) -> String {
+    let Some(modified) = modified else {
+        return "at an unknown time".to_string();
+    };
+    let Ok(elapsed) = SystemTime::now().duration_since(modified) else {
+        // A clock that disagrees with the file's timestamp is not worth a wrong
+        // age: say only that it is there.
+        return "just now".to_string();
+    };
+    let secs = elapsed.as_secs();
+    match secs {
+        0..=59 => "just now".to_string(),
+        60..=3_599 => format!("{} min ago", secs / 60),
+        3_600..=86_399 => format!("{} h ago", secs / 3_600),
+        86_400..=2_591_999 => format!("{} d ago", secs / 86_400),
+        _ => format!("{} mo ago", secs / 2_592_000),
+    }
+}
+
+/// Which acts a save holds, in the few words a row has room for: `acts 1–5`, or
+/// `a saved world` when the file predates the header that names them — the acts
+/// are then knowable only by decoding the payload, which the list does not do.
+fn acts_saved(acts: Option<u8>) -> String {
+    match acts {
+        Some(acts) => format!("acts 1–{acts}"),
+        None => "a saved world".to_string(),
+    }
+}
+
 /// The scope the atlas opens on for a world of a given age.
 ///
 /// A world is only ever shown as what it currently *is*. One act old, it is
@@ -316,20 +382,16 @@ fn default_scope(stage: Stage) -> MapScope {
     let provinces = MapScope::Land;
     match stage {
         Stage::Geology | Stage::Climate | Stage::Hydrology => {
-            if stage.available(Stage::Climate) { physical } else { land }
+            if stage.available(Stage::Climate) {
+                physical
+            } else {
+                land
+            }
         }
         Stage::Provinces | Stage::Geopolitics | Stage::HydroPolitics => provinces,
         Stage::Civilization => MapScope::Civilizations,
+        Stage::Languages => MapScope::Languages,
     }
-}
-
-/// Whether a seed's world cache is written, or adopted from disk.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum CacheMode {
-    /// Write `world_<seed>.bin` as soon as act three lands.
-    Save,
-    /// Read `world_<seed>.bin`, so the world starts at act four.
-    Load,
 }
 
 /// An act running on its own thread, and everything the panel needs to show it.
@@ -354,6 +416,10 @@ struct StageJob {
     done: u64,
     total: u64,
 }
+
+/// A save running on its own thread: the seed and act count it was taken at, and
+/// where it wrote or why it could not.
+type SaveJob = Receiver<(u64, usize, Result<std::path::PathBuf, LoadError>)>;
 
 /// The world's relief extremes, in metres, together with where they are.
 #[derive(Clone, Copy, Debug)]
@@ -426,9 +492,17 @@ fn measure_relief(heightmap: &Grid<f32>) -> ReliefExtremes {
                 let m = relief::to_metres(e);
                 ReliefScan {
                     peak_metres: acc.peak_metres.max(m),
-                    peak_index: if m > acc.peak_metres { index } else { acc.peak_index },
+                    peak_index: if m > acc.peak_metres {
+                        index
+                    } else {
+                        acc.peak_index
+                    },
                     trench_metres: acc.trench_metres.min(m),
-                    trench_index: if m < acc.trench_metres { index } else { acc.trench_index },
+                    trench_index: if m < acc.trench_metres {
+                        index
+                    } else {
+                        acc.trench_index
+                    },
                     ocean_px: acc.ocean_px + usize::from(e <= relief::SEA_LEVEL),
                 }
             },
@@ -501,9 +575,16 @@ fn blend_rgb(base: [f32; 3], over: [f32; 3], t: f32) -> [f32; 3] {
     ]
 }
 
-
 #[inline(always)]
-fn sample_3d_fbm(noise: &OpenSimplex, x: f64, y: f64, z: f64, octaves: usize, lacunarity: f64, persistence: f64) -> f32 {
+fn sample_3d_fbm(
+    noise: &OpenSimplex,
+    x: f64,
+    y: f64,
+    z: f64,
+    octaves: usize,
+    lacunarity: f64,
+    persistence: f64,
+) -> f32 {
     let mut total = 0.0f64;
     let mut amplitude = 1.0f64;
     let mut frequency = 1.0f64;
@@ -667,9 +748,7 @@ fn civ_border_shade(
     };
 
     // Coast or wilderness always counts as the edge of the realm.
-    let frontier = |nid: u32| -> bool {
-        nid == 0 || civilizations.owner_of(nid) != owner
-    };
+    let frontier = |nid: u32| -> bool { nid == 0 || civilizations.owner_of(nid) != owner };
     let internal_edge = |nid: u32| -> bool {
         if nid == 0 || nid == id || civilizations.owner_of(nid) != owner {
             return false;
@@ -694,6 +773,77 @@ fn civ_border_shade(
     color
 }
 
+/// Darken a pixel on a language or family frontier.
+///
+/// Two weights, because the two lines mean different things: a family frontier is
+/// the hard edge between two unrelated tongues, while a language inside one family
+/// is a softer dialect boundary. The coast is drawn lightly, so an island's speech
+/// still reads as its own without a heavy outline around every shore.
+#[inline]
+fn language_border_shade(
+    mut color: [f32; 3],
+    province_ids: Option<&Grid<u32>>,
+    languages: &LanguagesWorld,
+    id: u32,
+    x: usize,
+    y: usize,
+    h: usize,
+) -> [f32; 3] {
+    let Some(province_ids) = province_ids else {
+        return color;
+    };
+    let right_id = *province_ids.get(province_ids.wrap_x(x as isize + 1) as isize, y as isize);
+    let down_id = if y + 1 < h {
+        *province_ids.get(x as isize, y as isize + 1)
+    } else {
+        id
+    };
+    let language = languages
+        .province_language
+        .get(id as usize)
+        .copied()
+        .unwrap_or(0);
+    let family = languages
+        .province_family
+        .get(id as usize)
+        .copied()
+        .unwrap_or(0);
+
+    let mut hard = false;
+    let mut soft = false;
+    for other in [right_id, down_id] {
+        if other == id {
+            continue;
+        }
+        if other == 0 {
+            soft = true;
+            continue;
+        }
+        let other_family = languages
+            .province_family
+            .get(other as usize)
+            .copied()
+            .unwrap_or(0);
+        let other_language = languages
+            .province_language
+            .get(other as usize)
+            .copied()
+            .unwrap_or(0);
+        if other_family != family {
+            hard = true;
+        } else if other_language != language {
+            soft = true;
+        }
+    }
+
+    if hard {
+        color = blend_rgb(color, CIV_INK, 0.72);
+    } else if soft {
+        color = blend_rgb(color, CIV_INK, 0.28);
+    }
+    color
+}
+
 /// A partitioned world carries hundreds of societies, and building a widget for
 /// every one of them every frame would cost more than the map it describes: the
 /// legend lists the first few of each tier, in the order the atlas assembled them,
@@ -704,7 +854,13 @@ const LISTED_PER_TIER: usize = 24;
 /// on hover: where it rose and why, how it lives, what it believes, and how many
 /// people it holds. Deliberately a card, not a monograph — the full measurements
 /// stay in the console report (`--civs`), where they belong.
-fn civilization_dossier(ui: &mut egui::Ui, civ: &Civilization, world: &CivilizationWorld) {
+fn civilization_dossier(
+    ui: &mut egui::Ui,
+    civ_id: u32,
+    civ: &Civilization,
+    world: &CivilizationWorld,
+    languages: &LanguagesWorld,
+) {
     // A hover card has to stay a card: at 430 px it never swallows the map.
     ui.set_max_width(CARD_WIDTH);
 
@@ -753,6 +909,30 @@ fn civilization_dossier(ui: &mut egui::Ui, civ: &Civilization, world: &Civilizat
     ui.add_space(4.0);
     ui.label(egui::RichText::new(civ.faith.kind.label()).strong());
     caption(ui, civ.faith.kind.creed());
+
+    if let (Some(language), Some(family)) = (
+        languages.language_of_civ(civ_id),
+        languages.family_of_civ(civ_id),
+    ) {
+        ui.separator();
+        ui.horizontal(|ui| {
+            themes::swatch(ui, family.color);
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} · {}",
+                    family.name,
+                    family.urheimat.archetype.label()
+                ))
+                .strong(),
+            );
+        });
+        ui.label(format!("Language: {}", language.name));
+        ui.label(format!("Autonym: {}", language.autonym));
+        caption(
+            ui,
+            format!("Urheimat: {}", languages.urheimat_label(family.id)),
+        );
+    }
 
     ui.separator();
     ui.label(format!(
@@ -846,9 +1026,9 @@ impl MapViewer {
     fn with_world(mut genesis: Genesis, world: Option<AtlasWorld>) -> Self {
         let relief = world.as_ref().map(|world| measure_relief(&world.heightmap));
         let seed_text = genesis.seed().to_string();
-        // The panel opens on Save, and the pipeline is told so at once: what the
-        // panel says it will do and what the pipeline would do are the same fact,
-        // never two that happen to agree until someone touches a radio.
+        // The panel opens ready to save, and the pipeline is told so at once: what
+        // the checkbox says will happen and what act 3 will do are the same fact,
+        // never two that happen to agree until someone touches the checkbox.
         genesis.set_autosave(true);
         // The first scope a world of this age is old enough to portray: relief
         // while the land is all there is, the physical atlas once the atmosphere
@@ -858,9 +1038,12 @@ impl MapViewer {
             genesis,
             world,
             job: None,
+            save_job: None,
             seed_text,
-            cache_mode: CacheMode::Save,
             cache_notice: None,
+            cached: Vec::new(),
+            cached_scanned: false,
+            cached_dirty: true,
             log: Vec::new(),
             run_queue: false,
             live: None,
@@ -881,6 +1064,7 @@ impl MapViewer {
             pending_focus: None,
             marker: None,
             selected_civ: None,
+            selected_family: None,
             style_installed: false,
         }
     }
@@ -901,8 +1085,13 @@ impl MapViewer {
         // The pipeline moves to the worker. The atlas keeps its own `Arc` clones
         // of the world as it stands, which is what lets it go on painting a world
         // whose own copy is being mutated on another thread.
+        let autosave = self.genesis.autosave();
         let mut genesis = Genesis::new(self.genesis.seed());
         std::mem::swap(&mut genesis, &mut self.genesis);
+        // The pipeline left behind is a placeholder, but the panel still asks it
+        // what it would do: without this the Save choice would flicker off for the
+        // length of every act.
+        self.genesis.set_autosave(autosave);
         let fallback = genesis.clone();
 
         let (progress_tx, progress_rx) = mpsc::channel::<ProgressEvent>();
@@ -941,7 +1130,10 @@ impl MapViewer {
     /// Drain whatever the running act has reported since the last frame, and
     /// adopt it the moment it is finished.
     fn poll_worker(&mut self, ctx: &egui::Context) {
-        let Some(mut job) = self.job.take() else { return };
+        self.poll_save();
+        let Some(mut job) = self.job.take() else {
+            return;
+        };
 
         loop {
             match job.progress.try_recv() {
@@ -954,12 +1146,20 @@ impl MapViewer {
                     job.done = done;
                     job.total = total;
                 }
-                Ok(ProgressEvent::Preview { label, width, height, rgba }) => {
+                Ok(ProgressEvent::Preview {
+                    label,
+                    width,
+                    height,
+                    rgba,
+                }) => {
                     // A preview is a few hundred kilobytes, so it costs one
                     // texture upload — not one per pixel of an 8K world.
                     let image = ColorImage::from_rgba_unmultiplied([width, height], &rgba);
                     let texture = ctx.load_texture("live_preview", image, TextureOptions::NEAREST);
-                    self.live = Some(LivePlate { label: label.to_string(), texture });
+                    self.live = Some(LivePlate {
+                        label: label.to_string(),
+                        texture,
+                    });
                 }
                 Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
             }
@@ -1008,6 +1208,11 @@ impl MapViewer {
     /// Adopt a finished act: its world, its figures, and the next act's turn.
     fn finish_stage(&mut self, report: &StageReport) {
         self.world = self.genesis.atlas();
+        // Act three and act six may have written the world cache, so the list of
+        // saved worlds can have changed, and the panel reads it again next frame.
+        if self.genesis.autosave() {
+            self.cached_dirty = true;
+        }
         self.relief = self
             .world
             .as_ref()
@@ -1015,6 +1220,7 @@ impl MapViewer {
         self.texture = None;
         self.live = None;
         self.selected_civ = None;
+        self.selected_family = None;
         self.log.insert(
             0,
             format!(
@@ -1055,6 +1261,8 @@ impl MapViewer {
             return;
         }
         self.genesis.set_seed(seed);
+        // A notice about the last seed's cache says nothing about this one.
+        self.cache_notice = None;
         if self.world.is_none() {
             // Nothing grown yet: the plate is already blank, so a clean slate
             // costs nothing and is exactly what "a new world" means.
@@ -1084,11 +1292,11 @@ impl MapViewer {
         self.apply_seed();
     }
 
-    /// Adopt the acts one to three that are already on disk for this seed.
+    /// Adopt the acts already saved for this seed.
     ///
     /// A load that finds nothing is not an error the reader can do anything about
-    /// except be told: the panel says so, in a sentence that names both the file
-    /// and the one thing that would put one there.
+    /// except be told: the panel says so, in a sentence that names the file and
+    /// the one thing that would put one there.
     fn load_world(&mut self) {
         match self.genesis.load_cache() {
             Ok(()) => {
@@ -1097,24 +1305,29 @@ impl MapViewer {
                     .world
                     .as_ref()
                     .map(|world| measure_relief(&world.heightmap));
-                // A loaded world is past act three, so the atlas opens on it
-                // rather than on a blank plate.
+                // A loaded world is past whichever act it was saved at, so the
+                // atlas opens on it rather than on a blank plate.
                 self.forget_world_view();
-                self.scope = default_scope(Stage::Hydrology);
+                let stage = self.genesis.stage().unwrap_or(Stage::Geology);
+                self.scope = default_scope(stage);
                 self.cache_notice = None;
                 self.log.clear();
+                // The save that was on disk is the one just adopted, and it says
+                // how much of the world is already done.
+                let (acts, next) = (stage.index(), stage.index() + 1);
                 self.log.insert(
                     0,
                     format!(
-                        "✔ Adopted the cached world for seed {} — acts 1–3 are already done",
+                        "✔ Adopted the cached world for seed {} — acts 1–{acts} are already done; \
+                         act {next} is next",
                         self.genesis.seed()
                     ),
                 );
             }
             Err(LoadError::Missing(path)) => {
                 self.cache_notice = Some(format!(
-                    "No saved world for seed {} — '{}' is not there. Choose Save, or press \
-                     “1. Geology & Erosion” to grow a new one.",
+                    "No saved world for seed {} — '{}' is not there. Press Save below, \
+                     or pick a world from Saved worlds below.",
                     self.genesis.seed(),
                     path.display()
                 ));
@@ -1126,6 +1339,74 @@ impl MapViewer {
                 ));
             }
         }
+    }
+
+    /// Write the world as it stands, up to act six, without freezing the atlas.
+    ///
+    /// The pipeline is moved onto a worker — every grid is behind an `Arc`, so the
+    /// clone copies no pixels — and the result is polled back on a later frame.
+    /// Acts seven and eight are never written: a save taken after them still holds
+    /// acts one to six.
+    fn save_world(&mut self) {
+        if self.save_job.is_some() {
+            return;
+        }
+        let seed = self.genesis.seed();
+        let acts = self.genesis.stage().map_or(0, |stage| stage.index());
+        let genesis = self.genesis.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send((seed, acts, genesis.save_cache()));
+        });
+        self.save_job = Some(rx);
+    }
+
+    /// Adopt a finished save: say what was written, or why it could not be.
+    fn poll_save(&mut self) {
+        let Some(rx) = self.save_job.as_ref() else {
+            return;
+        };
+        let (seed, acts, outcome) = match rx.try_recv() {
+            Ok(outcome) => outcome,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => {
+                self.save_job = None;
+                return;
+            }
+        };
+        self.save_job = None;
+        match outcome {
+            Ok(path) => {
+                self.cache_notice = None;
+                self.log.insert(
+                    0,
+                    format!("✔ Saved acts 1–{acts} for seed {seed} to '{}'", path.display()),
+                );
+                self.cached_dirty = true;
+            }
+            Err(why) => {
+                self.cache_notice = Some(format!("The world could not be saved ({why:?})."));
+            }
+        }
+    }
+
+    /// Re-read the cache directory, so the panel lists what is on disk now.
+    fn refresh_cached(&mut self) {
+        self.cached = cached_worlds();
+        self.cached_scanned = true;
+        self.cached_dirty = false;
+    }
+
+    /// Adopt a world the reader picked from the saved list.
+    ///
+    /// Picking *is* loading: the seed becomes the picked one and its cache is
+    /// adopted at once, so there is no second press to discover. A file that
+    /// vanished or cannot be read between the scan and the click still leaves
+    /// the panel saying why.
+    fn pick_cached_world(&mut self, seed: u64) {
+        self.seed_text = seed.to_string();
+        self.genesis.set_seed(seed);
+        self.load_world();
     }
 
     /// Throw the world away and start again on the same seed.
@@ -1146,13 +1427,45 @@ impl MapViewer {
         );
     }
 
+    /// Un-do an act and every act after it, so they may be grown again.
+    ///
+    /// The world is thrown back to the act before `stage`, which becomes the next
+    /// one the panel offers. Nothing is regenerated here: the act is simply
+    /// dropped, and pressing it again — optionally after typing a new seed into
+    /// the field above — grows it afresh, along with everything that had followed
+    /// it. The acts before it, and their artefacts, are left exactly as they were.
+    fn rewind_world(&mut self, stage: Stage) {
+        self.genesis.rewind_to(stage);
+        self.world = self.genesis.atlas();
+        self.relief = self
+            .world
+            .as_ref()
+            .map(|world| measure_relief(&world.heightmap));
+        self.forget_world_view();
+        self.cache_notice = None;
+        self.log.insert(
+            0,
+            format!(
+                "↺ Un-done act {} and everything after it — press “{}. {}” to grow it again.",
+                stage.index(),
+                stage.index(),
+                stage.title()
+            ),
+        );
+    }
+
     /// Forget everything that belonged to the world just replaced.
     fn forget_world_view(&mut self) {
         self.texture = None;
         self.live = None;
         self.selected_civ = None;
+        self.selected_family = None;
         self.marker = None;
-        self.scope = default_scope(self.world.as_ref().map_or(Stage::Geology, |world| world.stage));
+        self.scope = default_scope(
+            self.world
+                .as_ref()
+                .map_or(Stage::Geology, |world| world.stage),
+        );
         self.pending_fit = true;
         self.run_queue = false;
         if self.world.is_none() {
@@ -1232,12 +1545,12 @@ impl MapViewer {
     // ─── THE GENESIS PANEL ───────────────────────────────────────────────────
     //
     // Every act of creation is a button here, in the only order they can be run,
-    // and the world is grown in front of the reader: a seed, then a save or a
-    // load, then seven presses. Nothing is generated before it is asked for, and
+    // and the world is grown in front of the reader: a seed, then a load or a
+    // save, then seven presses. Nothing is generated before it is asked for, and
     // nothing waits to be looked at.
 
     fn genesis_panel(&mut self, ui: &mut egui::Ui, frame: &egui::Frame) {
-        let busy = self.job.is_some();
+        let busy = self.job.is_some() || self.save_job.is_some();
         egui::Panel::left("genesis")
             .frame(frame.clone())
             .resizable(true)
@@ -1245,22 +1558,29 @@ impl MapViewer {
             .min_size(320.0)
             .max_size(GENESIS_PANEL_MAX)
             .show(ui, |ui| {
-                panel_title(ui, "🧬 Genesis");
-                caption(
-                    ui,
-                    "A world is grown one act at a time. Watch each one as it happens.",
-                );
-                ui.separator();
-                self.seed_row(ui, busy);
-                ui.add_space(4.0);
-                self.world_data_rows(ui, busy);
-                ui.add_space(4.0);
-                ui.separator();
-                self.act_rows(ui, busy);
-                ui.separator();
-                self.act_controls(ui, busy);
-                ui.add_space(4.0);
-                self.notebook(ui);
+                // The panel can hold a seed, three cache controls, eight acts and
+                // the notebook; on a short window it has to scroll rather than
+                // hide the last act behind the bottom edge.
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        panel_title(ui, "🧬 Genesis");
+                        caption(
+                            ui,
+                            "A world is grown one act at a time. Watch each one as it happens.",
+                        );
+                        ui.separator();
+                        self.seed_row(ui, busy);
+                        ui.add_space(4.0);
+                        self.world_data_rows(ui, busy);
+                        ui.add_space(4.0);
+                        ui.separator();
+                        self.act_rows(ui, busy);
+                        ui.separator();
+                        self.act_controls(ui, busy);
+                        ui.add_space(4.0);
+                        self.notebook(ui);
+                    });
             });
     }
 
@@ -1304,47 +1624,100 @@ impl MapViewer {
         );
     }
 
-    /// Save or load the world cache, and the one sentence that matters when
-    /// there is nothing on disk to load.
+    /// World data: loading and saving are commands, auto-save is a setting, and
+    /// the list is what is actually on disk.
+    ///
+    /// Load and Save are buttons that do their one thing at once — Load adopts
+    /// the seed's saved world, Save writes the world as it stands. The checkbox
+    /// below them arms the automatic saves at act 3 and act 6, and every cache on
+    /// disk is listed at the bottom.
     fn world_data_rows(&mut self, ui: &mut egui::Ui, busy: bool) {
         caption(ui, "World data");
+
+        // Read the directory once, and again whenever an act may have written
+        // to it: one `read_dir` per act, not one per frame.
+        if self.cached_dirty || !self.cached_scanned {
+            self.refresh_cached();
+        }
+
+        self.load_row(ui, busy);
+        ui.add_space(6.0);
+        self.save_row(ui, busy);
+        ui.add_space(4.0);
+        self.saved_worlds_list(ui, busy);
+    }
+
+    /// The load and save commands: adopt the cache belonging to the seed above, or
+    /// write the world as it stands now.
+    fn load_row(&mut self, ui: &mut egui::Ui, busy: bool) {
+        // The field is the truth here, not the last seed the pipeline accepted:
+        // an empty or half-typed seed must not look loadable.
+        let typed = self.seed_text.trim().parse::<u64>().ok();
+        let cache = typed.and_then(cached_world);
+        let load_hint = if busy {
+            "Wait for the act in flight to finish"
+        } else if typed.is_none() {
+            "A seed is a whole number — Load needs one"
+        } else {
+            "There is no cache for this seed yet"
+        };
+
+        // A save holds every act grown so far, capped at six, so it is offered
+        // from act one to act six and withdrawn once the dawn is on the world.
+        let stage = self.genesis.stage();
+        let saveable = stage.is_some_and(|stage| stage.index() <= Stage::HydroPolitics.index());
+        let save_hint = if busy {
+            "Wait for the act in flight to finish"
+        } else {
+            "Grow the world first — there is nothing to save yet"
+        };
+
         ui.horizontal(|ui| {
-            ui.add_enabled_ui(!busy, |ui| {
-                // Choosing Save arms the write: the first three acts — the land,
-                // the climate and the water — are written the moment they are all
-                // there, which is the same moment `--save` has always written them.
-                if ui
-                    .radio_value(&mut self.cache_mode, CacheMode::Save, "💾 Save")
-                    .on_hover_text("Write world_<seed>.bin when act 3 lands")
-                    .clicked()
-                {
-                    self.genesis.set_autosave(true);
-                    self.cache_notice = None;
-                }
-                // Choosing Load adopts what is on disk: acts one to three are
-                // already done, and the panel picks up at act four. Nothing on
-                // disk is not a crash — it is a sentence.
-                if ui
-                    .radio_value(&mut self.cache_mode, CacheMode::Load, "📂 Load")
-                    .on_hover_text("Adopt world_<seed>.bin, and pick up at act 4")
-                    .clicked()
-                {
-                    self.genesis.set_autosave(false);
-                    self.load_world();
-                }
-            });
+            let load = ui
+                .add_enabled(cache.is_some() && !busy, egui::Button::new("📂 Load"))
+                .on_hover_text(match &cache {
+                    Some(cache) => format!(
+                        "Read {} and pick the panel up where it left off",
+                        cache_path(cache.seed).display()
+                    ),
+                    None => "Read this seed's saved world".to_string(),
+                })
+                .on_disabled_hover_text(load_hint);
+            if load.clicked()
+                && let Some(seed) = typed
+            {
+                self.genesis.set_seed(seed);
+                self.load_world();
+            }
+
+            let save = ui
+                .add_enabled(saveable && !busy, egui::Button::new("💾 Save"))
+                .on_hover_text(
+                    "Write every act grown so far, up to act 6, to \
+                     saved_seeds/world_<seed>.bin",
+                )
+                .on_disabled_hover_text(save_hint);
+            if save.clicked() {
+                self.save_world();
+            }
         });
 
-        let path = self.genesis.cache_path();
-        let saved = path.exists();
-        caption(
-            ui,
-            if saved {
-                format!("{} is on disk", path.display())
-            } else {
-                format!("{} — not on disk", path.display())
-            },
-        );
+        match (&cache, typed) {
+            (Some(cache), _) => caption(
+                ui,
+                format!(
+                    "seed {} · {} · saved {} · Load picks up where it left off",
+                    cache.seed,
+                    cache_size(cache.bytes),
+                    cache_age(cache.modified)
+                ),
+            ),
+            (None, Some(seed)) => caption(
+                ui,
+                format!("No saved world for seed {seed} yet — press Save and grow one."),
+            ),
+            (None, None) => caption(ui, "A seed is a whole number — Load needs one."),
+        }
 
         if let Some(notice) = &self.cache_notice {
             ui.add_space(2.0);
@@ -1353,23 +1726,135 @@ impl MapViewer {
                     .size(TEXT_SMALL)
                     .color(Color32::from_rgb(224, 156, 96)),
             );
-        } else if self.cache_mode == CacheMode::Load && !saved {
-            // A load that would find nothing says so before it is attempted,
-            // exactly as it says so after.
-            caption(
-                ui,
-                "No saved world for this seed yet. Save one as it is made, or grow a new one.",
-            );
-        } else if self.cache_mode == CacheMode::Save {
-            caption(ui, "Written when act 3 lands — the physical half of the world.");
         }
     }
 
-    /// The seven acts, in order: the one that can be run next is the only button
+    /// The save setting: whether act 3 and act 6 write the world cache.
+    fn save_row(&mut self, ui: &mut egui::Ui, busy: bool) {
+        let mut autosave = self.genesis.autosave();
+        if ui
+            .add_enabled(
+                !busy,
+                egui::Checkbox::new(
+                    &mut autosave,
+                    "💾 Save automatically when act 3 and act 6 land",
+                ),
+            )
+            .on_hover_text(
+                "Write every act grown so far — up to act 6 — to saved_seeds/world_<seed>.bin",
+            )
+            .changed()
+        {
+            self.genesis.set_autosave(autosave);
+            self.cache_notice = None;
+        }
+
+        if !autosave {
+            caption(ui, "Auto-save — off: the world is written only when you press Save.");
+        } else {
+            caption(
+                ui,
+                "Auto-save — on: written the moment act 3 lands, and again at act 6, \
+                 overwriting the earlier save.",
+            );
+        }
+    }
+
+    /// Every world cache on disk, newest first, as a list to pick from.
+    ///
+    /// A click is a load: the seed field follows the pick and the cache is
+    /// adopted at once. The list refreshes by itself after any act that may
+    /// have written a cache, and on demand with **⟳ Rescan**.
+    fn saved_worlds_list(&mut self, ui: &mut egui::Ui, busy: bool) {
+        let mut refresh = false;
+        let mut picked = None;
+        let current = self.genesis.seed();
+
+        let response =
+            egui::CollapsingHeader::new(format!("📂 Saved worlds ({})", self.cached.len()))
+                // The count is in the label, so the id must not be: otherwise a
+                // newly saved world would change the id and snap the list shut.
+                .id_salt("saved_worlds")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .small_button("⟳ Rescan")
+                            .on_hover_text("Read saved_seeds again")
+                            .clicked()
+                        {
+                            refresh = true;
+                        }
+                        caption(ui, "Click a world to load it");
+                    });
+
+                    if self.cached.is_empty() {
+                        caption(
+                            ui,
+                            "Nothing saved yet. Tick Save above and grow a world, and it will \
+                             appear here.",
+                        );
+                        return;
+                    }
+
+                    egui::ScrollArea::vertical()
+                        .max_height(220.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            for cache in &self.cached {
+                                // A save holds whichever acts the world had grown
+                                // when it was written, and its header names the
+                                // deepest of them, so the row says `acts 1–5`.
+                                let acts = acts_saved(cache.acts);
+                                let line = format!(
+                                    "{}   {} · {}  · {}",
+                                    cache.seed,
+                                    cache_size(cache.bytes),
+                                    cache_age(cache.modified),
+                                    acts
+                                );
+                                let hover = format!(
+                                    "Load seed {} — {} · {} · {}\nPicks the panel up where the \
+                                     save left off.",
+                                    cache.seed,
+                                    cache_size(cache.bytes),
+                                    cache_age(cache.modified),
+                                    acts
+                                );
+                                let button = egui::Button::selectable(cache.seed == current, line)
+                                    .truncate();
+                                if ui
+                                    .add_enabled(!busy, button)
+                                    .on_hover_text(hover)
+                                    .on_disabled_hover_text("Wait for the act in flight to finish")
+                                    .clicked()
+                                {
+                                    picked = Some(cache.seed);
+                                }
+                            }
+                        });
+                });
+
+        // The header is also a question — "what is on disk now?" — so opening
+        // or closing it rescans, and the next frame shows the answer.
+        if response.header_response.clicked() {
+            refresh = true;
+        }
+
+        if refresh {
+            self.refresh_cached();
+        }
+        if let Some(seed) = picked {
+            self.pick_cached_world(seed);
+        }
+    }
+
+    /// The eight acts, in order: the one that can be run next is the only button
     /// that is pressable, and the one running wears its own progress bar.
     fn act_rows(&mut self, ui: &mut egui::Ui, busy: bool) {
         let running = self.job.as_ref().map(|job| job.stage);
         let mut pressed: Option<Stage> = None;
+        let mut rewind: Option<Stage> = None;
 
         for stage in Stage::ALL {
             let state = self.genesis.state(stage);
@@ -1413,6 +1898,20 @@ impl MapViewer {
                                 "· loaded".to_string()
                             },
                         );
+                        // A finished act can be un-done: this drops it and every
+                        // act after it, so they may be grown again — optionally
+                        // from a new seed typed into the field above.
+                        if ui
+                            .add_enabled(!busy, egui::Button::new("↺").frame(false))
+                            .on_hover_text(format!(
+                                "Redo from act {} — un-do it and everything after it",
+                                stage.index()
+                            ))
+                            .on_disabled_hover_text("Wait for the act in flight to finish")
+                            .clicked()
+                        {
+                            rewind = Some(stage);
+                        }
                     }
                     StageState::Ready if !busy => {
                         status_line(ui, "· next");
@@ -1426,6 +1925,9 @@ impl MapViewer {
             }
         }
 
+        if let Some(stage) = rewind {
+            self.rewind_world(stage);
+        }
         if let Some(stage) = pressed {
             let ctx = ui.ctx().clone();
             self.start_stage(stage, &ctx);
@@ -1444,7 +1946,10 @@ impl MapViewer {
         let bar = if job.total > 0 {
             egui::ProgressBar::new(job.done as f32 / job.total as f32)
                 .desired_width(bar_width)
-                .text(format!("{:.0}%", 100.0 * job.done as f32 / job.total as f32))
+                .text(format!(
+                    "{:.0}%",
+                    100.0 * job.done as f32 / job.total as f32
+                ))
         } else {
             egui::ProgressBar::new(0.0)
                 .desired_width(bar_width)
@@ -1461,7 +1966,10 @@ impl MapViewer {
         // A picture of the act, when it has one to show: the live plate is
         // painted from the very grid the act is working on.
         if let Some(live) = &self.live {
-            caption(ui, format!("🔴 live: {} · {}", live.label, job.stage.title()));
+            caption(
+                ui,
+                format!("🔴 live: {} · {}", live.label, job.stage.title()),
+            );
         }
     }
 
@@ -1495,10 +2003,7 @@ impl MapViewer {
                     }
                 }
             } else if ui
-                .add_enabled(
-                    self.world.is_some(),
-                    egui::Button::new("↺ Reset world"),
-                )
+                .add_enabled(self.world.is_some(), egui::Button::new("↺ Reset world"))
                 .on_hover_text("Throw this world away and begin again on the same seed")
                 .clicked()
             {
@@ -1622,8 +2127,8 @@ impl MapViewer {
         for px in &img.pixels {
             buf.extend_from_slice(&px.to_array());
         }
-        let full = image::RgbaImage::from_raw(w, h, buf)
-            .expect("RGBA buffer sized to the atlas texture");
+        let full =
+            image::RgbaImage::from_raw(w, h, buf).expect("RGBA buffer sized to the atlas texture");
         let plate = if (scale - 1.0).abs() < f32::EPSILON {
             full
         } else {
@@ -1649,10 +2154,12 @@ impl MapViewer {
         let land_political = matches!(scope, MapScope::Land | MapScope::Everywhere);
         let water_political = matches!(scope, MapScope::Water | MapScope::Everywhere);
         let civ_scope = scope.is_civilizations();
+        let language_scope = scope.is_languages();
         // The civilizations' own scope always shows them; every other scope shows
         // them only when the reader asks for the overlay.
-        let show_civs = self.show_civilizations || civ_scope;
+        let show_civs = (self.show_civilizations && !language_scope) || civ_scope;
         let civilizations = &world.civilizations;
+        let languages = &world.languages;
 
         let heightmap = &world.heightmap;
         // Which of the world's other grids exist depends on how old it is: the
@@ -1674,493 +2181,579 @@ impl MapViewer {
 
         let mut pixels = vec![0u8; w * h * 4];
 
-        pixels.par_chunks_exact_mut(4).enumerate().for_each(|(i, pixel)| {
-            let x = i % w;
-            let y = i / w;
-            let elev = *heightmap.get(x as isize, y as isize);
-            // A grid the world is too young to have yet reads as its own absence:
-            // no province claims a pixel before act four, no river runs before act
-            // three, no rain falls before act two. The scopes that would paint
-            // those are not offered until they exist (`MapScope::min_stage`), so
-            // these defaults are never something a reader can see.
-            let id = province_ids.map_or(0, |ids| *ids.get(x as isize, y as isize));
-            let ocean_id = ocean_province_ids.map_or(0, |ids| *ids.get(x as isize, y as isize));
-            let lake_here = is_lake.is_some_and(|lake| *lake.get(x as isize, y as isize));
-            let waste_here = is_wasteland.is_some_and(|w| *w.get(x as isize, y as isize));
+        pixels
+            .par_chunks_exact_mut(4)
+            .enumerate()
+            .for_each(|(i, pixel)| {
+                let x = i % w;
+                let y = i / w;
+                let elev = *heightmap.get(x as isize, y as isize);
+                // A grid the world is too young to have yet reads as its own absence:
+                // no province claims a pixel before act four, no river runs before act
+                // three, no rain falls before act two. The scopes that would paint
+                // those are not offered until they exist (`MapScope::min_stage`), so
+                // these defaults are never something a reader can see.
+                let id = province_ids.map_or(0, |ids| *ids.get(x as isize, y as isize));
+                let ocean_id = ocean_province_ids.map_or(0, |ids| *ids.get(x as isize, y as isize));
+                let lake_here = is_lake.is_some_and(|lake| *lake.get(x as isize, y as isize));
+                let waste_here = is_wasteland.is_some_and(|w| *w.get(x as isize, y as isize));
 
-            // Coordinates on 3D sphere for seamless spherical noise
-            let v = y as f32 / (h - 1) as f32;
-            let lat = (0.5 - v) * std::f32::consts::PI;
-            let u = x as f32 / w as f32;
-            let lon = (u - 0.5) * std::f32::consts::TAU;
-            let px = (lat.cos() * lon.cos()) as f64;
-            let py = lat.sin() as f64;
-            let pz = (lat.cos() * lon.sin()) as f64;
+                // Coordinates on 3D sphere for seamless spherical noise
+                let v = y as f32 / (h - 1) as f32;
+                let lat = (0.5 - v) * std::f32::consts::PI;
+                let u = x as f32 / w as f32;
+                let lon = (u - 0.5) * std::f32::consts::TAU;
+                let px = (lat.cos() * lon.cos()) as f64;
+                let py = lat.sin() as f64;
+                let pz = (lat.cos() * lon.sin()) as f64;
 
-            let micro_noise = sample_3d_fbm(&render_noise, px * 35.0, py * 35.0, pz * 35.0, 4, 2.0, 0.5);
-            let temp = temp_grid.map_or(0.0, |grid| *grid.get(x as isize, y as isize));
-            let precip = precip_grid.map_or(0.0, |grid| *grid.get(x as isize, y as isize));
-            let display_temp = temp + micro_noise * 5.5;
+                let micro_noise =
+                    sample_3d_fbm(&render_noise, px * 35.0, py * 35.0, pz * 35.0, 4, 2.0, 0.5);
+                let temp = temp_grid.map_or(0.0, |grid| *grid.get(x as isize, y as isize));
+                let precip = precip_grid.map_or(0.0, |grid| *grid.get(x as isize, y as isize));
+                let display_temp = temp + micro_noise * 5.5;
 
-            let (gx, gy) = heightmap.gradient(x as f32, y as f32);
-            let slope = (gx * gx + gy * gy).sqrt();
-            let hillshade = -(gx * lx + gy * ly);
-            let mut shade = (1.0 + hillshade * 5.5 - slope * 1.5).clamp(0.65, 1.38);
-            if y < 2 || y > h.saturating_sub(3) { shade = 1.0; }
+                let (gx, gy) = heightmap.gradient(x as f32, y as f32);
+                let slope = (gx * gx + gy * gy).sqrt();
+                let hillshade = -(gx * lx + gy * ly);
+                let mut shade = (1.0 + hillshade * 5.5 - slope * 1.5).clamp(0.65, 1.38);
+                if y < 2 || y > h.saturating_sub(3) {
+                    shade = 1.0;
+                }
 
-            // ── Physical pixel computation ────────────────────────────────
-            let compute_physical_color = || -> [f32; 3] {
-                if elev <= sea_level {
-                    if display_temp < -8.0 {
-                        [245.0, 248.0, 255.0] // Glacial ice shelf
-                    } else if display_temp < -3.0 {
-                        [165.0, 205.0, 235.0] // Polar sea ice
-                    } else {
-                        let depth = (elev / sea_level).clamp(0.0, 1.0);
-                        let shelf = depth.powf(2.8);
-                        let sea_shade = (1.0 + hillshade * 2.2).clamp(0.85, 1.15);
+                // ── Physical pixel computation ────────────────────────────────
+                let compute_physical_color = || -> [f32; 3] {
+                    if elev <= sea_level {
+                        if display_temp < -8.0 {
+                            [245.0, 248.0, 255.0] // Glacial ice shelf
+                        } else if display_temp < -3.0 {
+                            [165.0, 205.0, 235.0] // Polar sea ice
+                        } else {
+                            let depth = (elev / sea_level).clamp(0.0, 1.0);
+                            let shelf = depth.powf(2.8);
+                            let sea_shade = (1.0 + hillshade * 2.2).clamp(0.85, 1.15);
+                            [
+                                (12.0 * (1.0 - shelf) + 45.0 * shelf) * sea_shade,
+                                (35.0 * (1.0 - shelf) + 125.0 * shelf) * sea_shade,
+                                (75.0 * (1.0 - shelf) + 185.0 * shelf) * sea_shade,
+                            ]
+                        }
+                    } else if !climate_simulated {
+                        // Act one: the land exists and nothing else does. It is
+                        // painted as the bare relief it is — the hypsometric tints
+                        // under the world's own key light — rather than through a
+                        // biome palette that would have to be told the temperature
+                        // and rainfall of a world that has no weather yet.
+                        let band = hypsometric_color(relief::to_metres(elev));
                         [
-                            (12.0 * (1.0 - shelf) + 45.0 * shelf) * sea_shade,
-                            (35.0 * (1.0 - shelf) + 125.0 * shelf) * sea_shade,
-                            (75.0 * (1.0 - shelf) + 185.0 * shelf) * sea_shade,
+                            band[0] as f32 * shade,
+                            band[1] as f32 * shade,
+                            band[2] as f32 * shade,
                         ]
-                    }
-                } else if !climate_simulated {
-                    // Act one: the land exists and nothing else does. It is
-                    // painted as the bare relief it is — the hypsometric tints
-                    // under the world's own key light — rather than through a
-                    // biome palette that would have to be told the temperature
-                    // and rainfall of a world that has no weather yet.
-                    let band = hypsometric_color(relief::to_metres(elev));
-                    [
-                        band[0] as f32 * shade,
-                        band[1] as f32 * shade,
-                        band[2] as f32 * shade,
-                    ]
-                } else if lake_here {
-                    [42.0, 125.0, 185.0]
-                } else {
-                    let altitude = elev - sea_level;
-                    let base = get_atlas_biome_color(display_temp, precip, altitude);
-                    let mut color = [
-                        (base[0] as f32 * shade).clamp(0.0, 255.0),
-                        (base[1] as f32 * shade).clamp(0.0, 255.0),
-                        (base[2] as f32 * shade).clamp(0.0, 255.0),
-                    ];
-
-                    let flow = flow_grid.map_or(0.0, |grid| *grid.get(x as isize, y as isize));
-                    if flow >= min_river_flow {
-                        let river_strength = ((flow - min_river_flow) / major_river_flow).sqrt().clamp(0.30, 1.0);
-                        let blend = (river_strength * 1.4).clamp(0.0, 1.0);
-                        color = [
-                            color[0] * (1.0 - blend) + 20.0 * blend,
-                            color[1] * (1.0 - blend) + 75.0 * blend,
-                            color[2] * (1.0 - blend) + 155.0 * blend,
+                    } else if lake_here {
+                        [42.0, 125.0, 185.0]
+                    } else {
+                        let altitude = elev - sea_level;
+                        let base = get_atlas_biome_color(display_temp, precip, altitude);
+                        let mut color = [
+                            (base[0] as f32 * shade).clamp(0.0, 255.0),
+                            (base[1] as f32 * shade).clamp(0.0, 255.0),
+                            (base[2] as f32 * shade).clamp(0.0, 255.0),
                         ];
+
+                        let flow = flow_grid.map_or(0.0, |grid| *grid.get(x as isize, y as isize));
+                        if flow >= min_river_flow {
+                            let river_strength = ((flow - min_river_flow) / major_river_flow)
+                                .sqrt()
+                                .clamp(0.30, 1.0);
+                            let blend = (river_strength * 1.4).clamp(0.0, 1.0);
+                            color = [
+                                color[0] * (1.0 - blend) + 20.0 * blend,
+                                color[1] * (1.0 - blend) + 75.0 * blend,
+                                color[2] * (1.0 - blend) + 155.0 * blend,
+                            ];
+                        }
+                        color
+                    }
+                };
+
+                // ── Topographic (hypsometric) pixel computation ───────────────
+                let compute_topographic_color = || -> [f32; 3] {
+                    let metres = relief::to_metres(elev);
+                    let band = hypsometric_color(metres);
+                    let mut color = [band[0] as f32, band[1] as f32, band[2] as f32];
+
+                    if lake_here && elev > sea_level {
+                        color = [42.0, 125.0, 185.0];
+                    } else if elev <= sea_level {
+                        // Frozen seas read as "polar land": drifting pack ice over
+                        // the shelf, solid ice shelf deeper towards the pole. The
+                        // bathymetry stays faintly visible underneath.
+                        if display_temp < ICE_SHELF_TEMP {
+                            color = blend_rgb(color, [246.0, 249.0, 255.0], 0.90);
+                        } else if display_temp < PACK_ICE_TEMP {
+                            color = blend_rgb(color, [222.0, 236.0, 250.0], 0.70);
+                        }
+                    } else {
+                        color = [color[0] * shade, color[1] * shade, color[2] * shade];
+                        // Ice-capped land keeps its relief readable under a
+                        // translucent veneer instead of blanking the survey out.
+                        if display_temp < -3.0 {
+                            color = blend_rgb(color, [238.0, 244.0, 252.0], 0.75);
+                        }
+                        let flow = flow_grid.map_or(0.0, |grid| *grid.get(x as isize, y as isize));
+                        if flow >= min_river_flow {
+                            let river_strength = ((flow - min_river_flow) / major_river_flow)
+                                .sqrt()
+                                .clamp(0.30, 1.0);
+                            let blend = (river_strength * 1.4).clamp(0.0, 1.0);
+                            color = blend_rgb(color, [20.0, 75.0, 155.0], blend);
+                        }
+                    }
+
+                    // A contour line along every hypsometric band boundary, the way
+                    // a topographic sheet steps between its elevation tints.
+                    let band_idx = hypsometric_band(metres);
+                    let right = hypsometric_band(relief::to_metres(
+                        *heightmap.get(x as isize + 1, y as isize),
+                    ));
+                    let down = if y + 1 < h {
+                        hypsometric_band(relief::to_metres(
+                            *heightmap.get(x as isize, y as isize + 1),
+                        ))
+                    } else {
+                        band_idx
+                    };
+                    if right != band_idx || down != band_idx {
+                        color = [color[0] * 0.62, color[1] * 0.62, color[2] * 0.62];
                     }
                     color
-                }
-            };
+                };
 
-            // ── Topographic (hypsometric) pixel computation ───────────────
-            let compute_topographic_color = || -> [f32; 3] {
-                let metres = relief::to_metres(elev);
-                let band = hypsometric_color(metres);
-                let mut color = [band[0] as f32, band[1] as f32, band[2] as f32];
+                let mut final_color: [f32; 3];
 
-                if lake_here && elev > sea_level {
-                    color = [42.0, 125.0, 185.0];
-                } else if elev <= sea_level {
-                    // Frozen seas read as "polar land": drifting pack ice over
-                    // the shelf, solid ice shelf deeper towards the pole. The
-                    // bathymetry stays faintly visible underneath.
-                    if display_temp < ICE_SHELF_TEMP {
-                        color = blend_rgb(color, [246.0, 249.0, 255.0], 0.90);
-                    } else if display_temp < PACK_ICE_TEMP {
-                        color = blend_rgb(color, [222.0, 236.0, 250.0], 0.70);
-                    }
-                } else {
-                    color = [
-                        color[0] * shade,
-                        color[1] * shade,
-                        color[2] * shade,
+                if scope == MapScope::Physical {
+                    // Pure physical atlas rendering
+                    final_color = compute_physical_color();
+                } else if scope == MapScope::Topographic {
+                    // Hypsometric survey: colour is elevation, above and below water
+                    final_color = compute_topographic_color();
+                } else if scope == MapScope::Climate {
+                    // ── Climate zones ────────────────────────────────────────
+                    // Land is classified by mean temperature, rainfall and altitude;
+                    // the sea by its surface temperature. A little of the hillshade is
+                    // kept so the reader can still see where the mountains are.
+                    let lake = lake_here;
+                    let base: [u8; 3] = if lake {
+                        [58, 138, 178]
+                    } else if elev <= sea_level {
+                        themes::ocean_climate_color(temp)
+                    } else {
+                        ClimateZone::classify(display_temp, precip, elev - sea_level).color()
+                    };
+                    let relief_tint = if elev > sea_level && !lake {
+                        (0.88 + 0.14 * shade).clamp(0.82, 1.08)
+                    } else {
+                        1.0
+                    };
+                    final_color = [
+                        (base[0] as f32 * relief_tint).clamp(0.0, 255.0),
+                        (base[1] as f32 * relief_tint).clamp(0.0, 255.0),
+                        (base[2] as f32 * relief_tint).clamp(0.0, 255.0),
                     ];
-                    // Ice-capped land keeps its relief readable under a
-                    // translucent veneer instead of blanking the survey out.
-                    if display_temp < -3.0 {
-                        color = blend_rgb(color, [238.0, 244.0, 252.0], 0.75);
-                    }
-                    let flow = flow_grid.map_or(0.0, |grid| *grid.get(x as isize, y as isize));
-                    if flow >= min_river_flow {
-                        let river_strength = ((flow - min_river_flow) / major_river_flow).sqrt().clamp(0.30, 1.0);
-                        let blend = (river_strength * 1.4).clamp(0.0, 1.0);
-                        color = blend_rgb(color, [20.0, 75.0, 155.0], blend);
-                    }
-                }
-
-                // A contour line along every hypsometric band boundary, the way
-                // a topographic sheet steps between its elevation tints.
-                let band_idx = hypsometric_band(metres);
-                let right = hypsometric_band(relief::to_metres(*heightmap.get(x as isize + 1, y as isize)));
-                let down = if y + 1 < h {
-                    hypsometric_band(relief::to_metres(*heightmap.get(x as isize, y as isize + 1)))
-                } else {
-                    band_idx
-                };
-                if right != band_idx || down != band_idx {
-                    color = [color[0] * 0.62, color[1] * 0.62, color[2] * 0.62];
-                }
-                color
-            };
-
-            let mut final_color: [f32; 3];
-
-            if scope == MapScope::Physical {
-                // Pure physical atlas rendering
-                final_color = compute_physical_color();
-            } else if scope == MapScope::Topographic {
-                // Hypsometric survey: colour is elevation, above and below water
-                final_color = compute_topographic_color();
-            } else if scope == MapScope::Climate {
-                // ── Climate zones ────────────────────────────────────────
-                // Land is classified by mean temperature, rainfall and altitude;
-                // the sea by its surface temperature. A little of the hillshade is
-                // kept so the reader can still see where the mountains are.
-                let lake = lake_here;
-                let base: [u8; 3] = if lake {
-                    [58, 138, 178]
-                } else if elev <= sea_level {
-                    themes::ocean_climate_color(temp)
-                } else {
-                    ClimateZone::classify(display_temp, precip, elev - sea_level).color()
-                };
-                let relief_tint = if elev > sea_level && !lake {
-                    (0.88 + 0.14 * shade).clamp(0.82, 1.08)
-                } else {
-                    1.0
-                };
-                final_color = [
-                    (base[0] as f32 * relief_tint).clamp(0.0, 255.0),
-                    (base[1] as f32 * relief_tint).clamp(0.0, 255.0),
-                    (base[2] as f32 * relief_tint).clamp(0.0, 255.0),
-                ];
-            } else if scope == MapScope::Temperature {
-                // ── Thermal belts ────────────────────────────────────────
-                // The mean annual temperature as a number line: violet cold, red
-                // hot, with a thin dark isotherm wherever the 5 °C band changes.
-                let band = themes::isotherm_band(temp);
-                let base = themes::temperature_color(temp);
-                let right_band =
-                    themes::isotherm_band(temp_grid.map_or(0.0, |grid| *grid.get(x as isize + 1, y as isize)));
-                let down_band = if y + 1 < h {
-                    themes::isotherm_band(temp_grid.map_or(0.0, |grid| *grid.get(x as isize, y as isize + 1)))
-                } else {
-                    band
-                };
-                let on_isotherm = right_band != band || down_band != band;
-                let tint = if on_isotherm { 0.66 } else { 1.0 };
-                let mut color = [
-                    (base[0] as f32 * tint).clamp(0.0, 255.0),
-                    (base[1] as f32 * tint).clamp(0.0, 255.0),
-                    (base[2] as f32 * tint).clamp(0.0, 255.0),
-                ];
-
-                // Temperature is continuous, so the plate would be an unreadable
-                // gradient without a shoreline: draw it as a thin dark line.
-                let here_land = elev > sea_level;
-                let right_land = *heightmap.get(x as isize + 1, y as isize) > sea_level;
-                let down_land = if y + 1 < h {
-                    *heightmap.get(x as isize, y as isize + 1) > sea_level
-                } else {
-                    here_land
-                };
-                if here_land != right_land || here_land != down_land {
-                    color = blend_rgb(color, [46.0, 40.0, 54.0], 0.55);
-                }
-                final_color = color;
-            } else if scope == MapScope::Terrain {
-                // ── Landform classes ─────────────────────────────────────
-                // One flat colour per landform band, shaded enough to keep the
-                // ridges readable, with the rivers drawn as on the physical atlas.
-                let lake = lake_here;
-                let metres = relief::to_metres(elev);
-                let class = TerrainClass::classify(metres, lake, display_temp);
-                let base = class.color();
-                let mut color = [base[0] as f32, base[1] as f32, base[2] as f32];
-                if elev > sea_level && !lake && class != TerrainClass::Ice {
-                    let relief_tint = (0.86 + 0.16 * shade).clamp(0.80, 1.10);
-                    color = [
-                        color[0] * relief_tint,
-                        color[1] * relief_tint,
-                        color[2] * relief_tint,
-                    ];
-                    let flow = flow_grid.map_or(0.0, |grid| *grid.get(x as isize, y as isize));
-                    if flow >= min_river_flow {
-                        let river_strength = ((flow - min_river_flow) / major_river_flow)
-                            .sqrt()
-                            .clamp(0.30, 1.0);
-                        color = blend_rgb(color, [20.0, 75.0, 155.0], river_strength);
-                    }
-                }
-                final_color = color;
-            } else if civ_scope {
-                // ── Civilizations scope ────────────────────────────────
-                // The land is the subject, so the plate is built the way a political
-                // atlas is printed: a small ordered palette of flat fills, ink on the
-                // frontiers and the coast, the sea pushed back to a pale slate, and
-                // the relief carried *inside* each fill rather than mixed into it, so
-                // a realm keeps one hue from its coast to its mountains.
-                let lake = lake_here;
-                let is_ocean = elev <= sea_level && !lake;
-                let is_waste = waste_here
-                    || (id == 0 && elev > sea_level && !lake);
-                let owner = civilizations.owner_of(id);
-                let has_land_node = id != 0 && (id as usize) < hierarchy.provinces.len();
-
-                // Nobody's ground: a flat parchment, colder where the ice lies.
-                let parchment = |relief: f32| -> [f32; 3] {
-                    let phys = compute_physical_color();
-                    if display_temp < ICE_SHELF_TEMP {
-                        return blend_rgb(phys, [227.0, 236.0, 247.0], 0.55);
-                    }
-                    let grey = (phys[0] + phys[1] + phys[2]) / 3.0;
-                    [
-                        (grey * 0.45 + 214.0 * 0.55) * relief,
-                        (grey * 0.45 + 207.0 * 0.55) * relief,
-                        (grey * 0.45 + 188.0 * 0.55) * relief,
-                    ]
-                };
-
-                if is_ocean {
-                    final_color = muted_sea(compute_physical_color());
-                } else if lake {
-                    final_color = [92.0, 150.0, 186.0];
-                } else if owner != 0 && has_land_node {
-                    let civ_rgb = civilizations.color_of(owner);
-                    // Relief multiplies the fill instead of diluting it: the hue stays
-                    // exactly the realm's own across the whole of its country.
-                    let relief = (0.90 + 0.20 * (shade - 1.0)).clamp(0.82, 1.10);
+                } else if scope == MapScope::Temperature {
+                    // ── Thermal belts ────────────────────────────────────────
+                    // The mean annual temperature as a number line: violet cold, red
+                    // hot, with a thin dark isotherm wherever the 5 °C band changes.
+                    let band = themes::isotherm_band(temp);
+                    let base = themes::temperature_color(temp);
+                    let right_band = themes::isotherm_band(
+                        temp_grid.map_or(0.0, |grid| *grid.get(x as isize + 1, y as isize)),
+                    );
+                    let down_band = if y + 1 < h {
+                        themes::isotherm_band(
+                            temp_grid.map_or(0.0, |grid| *grid.get(x as isize, y as isize + 1)),
+                        )
+                    } else {
+                        band
+                    };
+                    let on_isotherm = right_band != band || down_band != band;
+                    let tint = if on_isotherm { 0.66 } else { 1.0 };
                     let mut color = [
-                        civ_rgb[0] as f32 * relief,
-                        civ_rgb[1] as f32 * relief,
-                        civ_rgb[2] as f32 * relief,
+                        (base[0] as f32 * tint).clamp(0.0, 255.0),
+                        (base[1] as f32 * tint).clamp(0.0, 255.0),
+                        (base[2] as f32 * tint).clamp(0.0, 255.0),
                     ];
-                    // Ice-capped country keeps its political colour under a thin
-                    // veneer rather than blanking the survey out.
-                    if display_temp < ICE_SHELF_TEMP {
-                        color = blend_rgb(color, [227.0, 236.0, 247.0], 0.45);
+
+                    // Temperature is continuous, so the plate would be an unreadable
+                    // gradient without a shoreline: draw it as a thin dark line.
+                    let here_land = elev > sea_level;
+                    let right_land = *heightmap.get(x as isize + 1, y as isize) > sea_level;
+                    let down_land = if y + 1 < h {
+                        *heightmap.get(x as isize, y as isize + 1) > sea_level
+                    } else {
+                        here_land
+                    };
+                    if here_land != right_land || here_land != down_land {
+                        color = blend_rgb(color, [46.0, 40.0, 54.0], 0.55);
                     }
                     final_color = color;
-
-                    // The cradle itself: a small dark dot with a pale halo, so it
-                    // reads on a hunter-gatherer khaki as well as on an oxblood state.
-                    if let Some(civ) = civilizations.civilization(owner) {
-                        let dx = {
-                            let mut d = (x as f32 - civ.seat_x).abs();
-                            let width = w as f32;
-                            if d > width * 0.5 {
-                                d = width - d;
-                            }
-                            d
-                        };
-                        let dy = (y as f32 - civ.seat_y).abs();
-                        if dx.max(dy) <= 1.0 {
-                            final_color = blend_rgb(final_color, [26.0, 20.0, 16.0], 0.85);
-                        } else if dx.max(dy) <= 2.0 {
-                            final_color = blend_rgb(final_color, [244.0, 240.0, 230.0], 0.30);
-                        }
-                    }
-
-                    // Rivers are a watermark here, not a subject: enough to tie the
-                    // political patches to the land, faint enough not to muddy them.
-                    let flow = flow_grid.map_or(0.0, |grid| *grid.get(x as isize, y as isize));
-                    if flow >= min_river_flow {
-                        let river_strength = ((flow - min_river_flow) / major_river_flow)
-                            .sqrt()
-                            .clamp(0.30, 1.0);
-                        let blend = (river_strength * 0.55).clamp(0.0, 0.55);
-                        final_color = blend_rgb(final_color, [36.0, 92.0, 150.0], blend);
-                    }
-
-                    if show_borders {
-                        // Draw the shoreline itself: a plate whose polities run
-                        // straight into the sea reads as a diagram, not a map.
-                        let touching_sea = |nx: isize, ny: isize| {
-                            *heightmap.get(nx, ny) <= sea_level && !is_lake.is_some_and(|lake| *lake.get(nx, ny))
-                        };
-                        if touching_sea(x as isize + 1, y as isize)
-                            || touching_sea(x as isize - 1, y as isize)
-                            || touching_sea(x as isize, y as isize + 1)
-                            || touching_sea(x as isize, y as isize - 1)
-                        {
-                            final_color = blend_rgb(final_color, CIV_INK, 0.32);
-                        }
-                        // Realm frontiers, and the subdivisions *inside* a realm at
-                        // the tier the selector names — drawn as line-work only. The
-                        // fill stays the realm's own colour, so a country never
-                        // shatters into a patchwork of shades.
-                        final_color = civ_border_shade(
-                            final_color,
-                            province_ids,
-                            hierarchy,
-                            civilizations,
-                            id,
-                            x,
-                            y,
-                            h,
-                            tier,
-                            true,
-                        );
-                    }
-                } else {
-                    // Wilderness and wasteland: one parchment, so the ink of the
-                    // polities is the only thing that draws the eye.
-                    final_color = parchment((0.96 + 0.10 * (shade - 1.0)).clamp(0.90, 1.04));
-
-                    // A dark rim on the wilderness side of every frontier, so even a
-                    // single-province realm reads as a place rather than a smudge.
-                    if show_borders && !is_waste {
-                        let holds = |nid: u32| nid != 0 && civilizations.owner_of(nid) != 0;
-                        let right = province_ids.map_or(0, |ids| {
-                            *ids.get(ids.wrap_x(x as isize + 1) as isize, y as isize)
-                        });
-                        let down = if y + 1 < h {
-                            province_ids.map_or(0, |ids| *ids.get(x as isize, y as isize + 1))
-                        } else {
-                            0
-                        };
-                        if holds(right) || holds(down) {
-                            final_color = blend_rgb(final_color, CIV_INK, 0.42);
-                        }
-                    }
-                }
-            } else {
-                // ── Political map modes ────────────────────────────────
-                let is_ocean = elev <= sea_level && !lake_here;
-                let is_waste = waste_here
-                    || (id == 0 && elev > sea_level && !lake_here);
-                let has_ocean_node = ocean_id != 0
-                    && (ocean_id as usize) < ocean_hierarchy.provinces.len();
-                let has_land_node = id != 0 && (id as usize) < hierarchy.provinces.len();
-
-                if is_ocean && water_political && has_ocean_node {
-                    // ── Hydro-political Ocean Territory ────────────────
-                    // Territory tint over the shaded bathymetry. The frozen
-                    // polar seas are still ocean, so they are tinted too and
-                    // never break the continuity of a marine realm's borders.
-                    let ocean_cid = tier_color_id(ocean_hierarchy, ocean_id, tier);
-                    let territory_rgb = id_to_territory_color(ocean_cid);
-                    let phys = compute_physical_color();
-                    final_color = [
-                        territory_rgb[0] * 0.60 + phys[0] * 0.40,
-                        territory_rgb[1] * 0.60 + phys[1] * 0.40,
-                        territory_rgb[2] * 0.60 + phys[2] * 0.40,
-                    ];
-                    if show_borders {
-                        final_color = ocean_border_shade(
-                            final_color, ocean_province_ids, ocean_hierarchy,
-                            ocean_id, ocean_cid, x, y, h, tier,
-                        );
-                    }
-                } else if is_ocean {
-                    // Water outside the current political scope: plain atlas sea.
-                    final_color = compute_physical_color();
-                } else if lake_here {
-                    final_color = [42.0, 125.0, 185.0];
-                } else if is_waste || !land_political || !has_land_node {
-                    // Wasteland, wilderness, or land that the current scope does
-                    // not portray. In the Water scope the continents are muted
-                    // so that the ocean politics stay legible.
-                    let phys = compute_physical_color();
-                    if is_waste {
-                        final_color = [
-                            phys[0] * 0.78 + 35.0,
-                            phys[1] * 0.78 + 35.0,
-                            phys[2] * 0.78 + 40.0,
+                } else if scope == MapScope::Terrain {
+                    // ── Landform classes ─────────────────────────────────────
+                    // One flat colour per landform band, shaded enough to keep the
+                    // ridges readable, with the rivers drawn as on the physical atlas.
+                    let lake = lake_here;
+                    let metres = relief::to_metres(elev);
+                    let class = TerrainClass::classify(metres, lake, display_temp);
+                    let base = class.color();
+                    let mut color = [base[0] as f32, base[1] as f32, base[2] as f32];
+                    if elev > sea_level && !lake && class != TerrainClass::Ice {
+                        let relief_tint = (0.86 + 0.16 * shade).clamp(0.80, 1.10);
+                        color = [
+                            color[0] * relief_tint,
+                            color[1] * relief_tint,
+                            color[2] * relief_tint,
                         ];
-                    } else if scope == MapScope::Water {
+                        let flow = flow_grid.map_or(0.0, |grid| *grid.get(x as isize, y as isize));
+                        if flow >= min_river_flow {
+                            let river_strength = ((flow - min_river_flow) / major_river_flow)
+                                .sqrt()
+                                .clamp(0.30, 1.0);
+                            color = blend_rgb(color, [20.0, 75.0, 155.0], river_strength);
+                        }
+                    }
+                    final_color = color;
+                } else if civ_scope {
+                    // ── Civilizations scope ────────────────────────────────
+                    // The land is the subject, so the plate is built the way a political
+                    // atlas is printed: a small ordered palette of flat fills, ink on the
+                    // frontiers and the coast, the sea pushed back to a pale slate, and
+                    // the relief carried *inside* each fill rather than mixed into it, so
+                    // a realm keeps one hue from its coast to its mountains.
+                    let lake = lake_here;
+                    let is_ocean = elev <= sea_level && !lake;
+                    let is_waste = waste_here || (id == 0 && elev > sea_level && !lake);
+                    let owner = civilizations.owner_of(id);
+                    let has_land_node = id != 0 && (id as usize) < hierarchy.provinces.len();
+
+                    // Nobody's ground: a flat parchment, colder where the ice lies.
+                    let parchment = |relief: f32| -> [f32; 3] {
+                        let phys = compute_physical_color();
+                        if display_temp < ICE_SHELF_TEMP {
+                            return blend_rgb(phys, [227.0, 236.0, 247.0], 0.55);
+                        }
+                        let grey = (phys[0] + phys[1] + phys[2]) / 3.0;
+                        [
+                            (grey * 0.45 + 214.0 * 0.55) * relief,
+                            (grey * 0.45 + 207.0 * 0.55) * relief,
+                            (grey * 0.45 + 188.0 * 0.55) * relief,
+                        ]
+                    };
+
+                    if is_ocean {
+                        final_color = muted_sea(compute_physical_color());
+                    } else if lake {
+                        final_color = [92.0, 150.0, 186.0];
+                    } else if owner != 0 && has_land_node {
+                        let civ_rgb = civilizations.color_of(owner);
+                        // Relief multiplies the fill instead of diluting it: the hue stays
+                        // exactly the realm's own across the whole of its country.
+                        let relief = (0.90 + 0.20 * (shade - 1.0)).clamp(0.82, 1.10);
+                        let mut color = [
+                            civ_rgb[0] as f32 * relief,
+                            civ_rgb[1] as f32 * relief,
+                            civ_rgb[2] as f32 * relief,
+                        ];
+                        // Ice-capped country keeps its political colour under a thin
+                        // veneer rather than blanking the survey out.
+                        if display_temp < ICE_SHELF_TEMP {
+                            color = blend_rgb(color, [227.0, 236.0, 247.0], 0.45);
+                        }
+                        final_color = color;
+
+                        // The cradle itself: a small dark dot with a pale halo, so it
+                        // reads on a hunter-gatherer khaki as well as on an oxblood state.
+                        if let Some(civ) = civilizations.civilization(owner) {
+                            let dx = {
+                                let mut d = (x as f32 - civ.seat_x).abs();
+                                let width = w as f32;
+                                if d > width * 0.5 {
+                                    d = width - d;
+                                }
+                                d
+                            };
+                            let dy = (y as f32 - civ.seat_y).abs();
+                            if dx.max(dy) <= 1.0 {
+                                final_color = blend_rgb(final_color, [26.0, 20.0, 16.0], 0.85);
+                            } else if dx.max(dy) <= 2.0 {
+                                final_color = blend_rgb(final_color, [244.0, 240.0, 230.0], 0.30);
+                            }
+                        }
+
+                        // Rivers are a watermark here, not a subject: enough to tie the
+                        // political patches to the land, faint enough not to muddy them.
+                        let flow = flow_grid.map_or(0.0, |grid| *grid.get(x as isize, y as isize));
+                        if flow >= min_river_flow {
+                            let river_strength = ((flow - min_river_flow) / major_river_flow)
+                                .sqrt()
+                                .clamp(0.30, 1.0);
+                            let blend = (river_strength * 0.55).clamp(0.0, 0.55);
+                            final_color = blend_rgb(final_color, [36.0, 92.0, 150.0], blend);
+                        }
+
+                        if show_borders {
+                            // Draw the shoreline itself: a plate whose polities run
+                            // straight into the sea reads as a diagram, not a map.
+                            let touching_sea = |nx: isize, ny: isize| {
+                                *heightmap.get(nx, ny) <= sea_level
+                                    && !is_lake.is_some_and(|lake| *lake.get(nx, ny))
+                            };
+                            if touching_sea(x as isize + 1, y as isize)
+                                || touching_sea(x as isize - 1, y as isize)
+                                || touching_sea(x as isize, y as isize + 1)
+                                || touching_sea(x as isize, y as isize - 1)
+                            {
+                                final_color = blend_rgb(final_color, CIV_INK, 0.32);
+                            }
+                            // Realm frontiers, and the subdivisions *inside* a realm at
+                            // the tier the selector names — drawn as line-work only. The
+                            // fill stays the realm's own colour, so a country never
+                            // shatters into a patchwork of shades.
+                            final_color = civ_border_shade(
+                                final_color,
+                                province_ids,
+                                hierarchy,
+                                civilizations,
+                                id,
+                                x,
+                                y,
+                                h,
+                                tier,
+                                true,
+                            );
+                        }
+                    } else {
+                        // Wilderness and wasteland: one parchment, so the ink of the
+                        // polities is the only thing that draws the eye.
+                        final_color = parchment((0.96 + 0.10 * (shade - 1.0)).clamp(0.90, 1.04));
+
+                        // A dark rim on the wilderness side of every frontier, so even a
+                        // single-province realm reads as a place rather than a smudge.
+                        if show_borders && !is_waste {
+                            let holds = |nid: u32| nid != 0 && civilizations.owner_of(nid) != 0;
+                            let right = province_ids.map_or(0, |ids| {
+                                *ids.get(ids.wrap_x(x as isize + 1) as isize, y as isize)
+                            });
+                            let down = if y + 1 < h {
+                                province_ids.map_or(0, |ids| *ids.get(x as isize, y as isize + 1))
+                            } else {
+                                0
+                            };
+                            if holds(right) || holds(down) {
+                                final_color = blend_rgb(final_color, CIV_INK, 0.42);
+                            }
+                        }
+                    }
+                } else if language_scope {
+                    // ── Languages scope ────────────────────────────────────
+                    // One flat colour per family, a shade per language, relief
+                    // carried inside the fill so a tongue keeps its hue from coast
+                    // to mountain.
+                    let lake = lake_here;
+                    let is_ocean = elev <= sea_level && !lake;
+                    if is_ocean {
+                        final_color = muted_sea(compute_physical_color());
+                    } else if lake {
+                        final_color = [92.0, 150.0, 186.0];
+                    } else if id != 0 {
+                        let language_id = languages
+                            .province_language
+                            .get(id as usize)
+                            .copied()
+                            .unwrap_or(0);
+                        if language_id != 0 {
+                            let language = languages.color_of_language(language_id);
+                            let relief = (0.90 + 0.20 * (shade - 1.0)).clamp(0.82, 1.10);
+                            final_color = [
+                                language[0] as f32 * relief,
+                                language[1] as f32 * relief,
+                                language[2] as f32 * relief,
+                            ];
+                            if show_borders {
+                                final_color = language_border_shade(
+                                    final_color,
+                                    province_ids,
+                                    languages,
+                                    id,
+                                    x,
+                                    y,
+                                    h,
+                                );
+                            }
+                        } else {
+                            let phys = compute_physical_color();
+                            let grey = (phys[0] + phys[1] + phys[2]) / 3.0;
+                            final_color = [
+                                grey * 0.45 + 214.0 * 0.55,
+                                grey * 0.45 + 207.0 * 0.55,
+                                grey * 0.45 + 188.0 * 0.55,
+                            ];
+                        }
+                    } else {
+                        let phys = compute_physical_color();
                         let grey = (phys[0] + phys[1] + phys[2]) / 3.0;
                         final_color = [
-                            phys[0] * 0.40 + grey * 0.60,
-                            phys[1] * 0.40 + grey * 0.60,
-                            phys[2] * 0.40 + grey * 0.60,
+                            grey * 0.45 + 214.0 * 0.55,
+                            grey * 0.45 + 207.0 * 0.55,
+                            grey * 0.45 + 188.0 * 0.55,
                         ];
-                    } else {
-                        final_color = phys;
                     }
                 } else {
-                    // Civilized Populated Province: territory tint over subtle terrain relief
-                    let color_id = tier_color_id(hierarchy, id, tier);
-                    let territory_rgb = id_to_territory_color(color_id);
-                    let altitude = elev - sea_level;
-                    let base = get_atlas_biome_color(display_temp, precip, altitude);
+                    // ── Political map modes ────────────────────────────────
+                    let is_ocean = elev <= sea_level && !lake_here;
+                    let is_waste = waste_here || (id == 0 && elev > sea_level && !lake_here);
+                    let has_ocean_node =
+                        ocean_id != 0 && (ocean_id as usize) < ocean_hierarchy.provinces.len();
+                    let has_land_node = id != 0 && (id as usize) < hierarchy.provinces.len();
 
-                    // Blend 65% territory color + 35% shaded relief
-                    final_color = [
-                        territory_rgb[0] * 0.65 + base[0] as f32 * shade * 0.35,
-                        territory_rgb[1] * 0.65 + base[1] as f32 * shade * 0.35,
-                        territory_rgb[2] * 0.65 + base[2] as f32 * shade * 0.35,
-                    ];
-
-                    let flow = flow_grid.map_or(0.0, |grid| *grid.get(x as isize, y as isize));
-                    if flow >= min_river_flow {
-                        let river_strength = ((flow - min_river_flow) / major_river_flow).sqrt().clamp(0.30, 1.0);
-                        let blend = (river_strength * 1.3).clamp(0.0, 1.0);
+                    if is_ocean && water_political && has_ocean_node {
+                        // ── Hydro-political Ocean Territory ────────────────
+                        // Territory tint over the shaded bathymetry. The frozen
+                        // polar seas are still ocean, so they are tinted too and
+                        // never break the continuity of a marine realm's borders.
+                        let ocean_cid = tier_color_id(ocean_hierarchy, ocean_id, tier);
+                        let territory_rgb = id_to_territory_color(ocean_cid);
+                        let phys = compute_physical_color();
                         final_color = [
-                            final_color[0] * (1.0 - blend) + 20.0 * blend,
-                            final_color[1] * (1.0 - blend) + 75.0 * blend,
-                            final_color[2] * (1.0 - blend) + 155.0 * blend,
+                            territory_rgb[0] * 0.60 + phys[0] * 0.40,
+                            territory_rgb[1] * 0.60 + phys[1] * 0.40,
+                            territory_rgb[2] * 0.60 + phys[2] * 0.40,
                         ];
-                    }
+                        if show_borders {
+                            final_color = ocean_border_shade(
+                                final_color,
+                                ocean_province_ids,
+                                ocean_hierarchy,
+                                ocean_id,
+                                ocean_cid,
+                                x,
+                                y,
+                                h,
+                                tier,
+                            );
+                        }
+                    } else if is_ocean {
+                        // Water outside the current political scope: plain atlas sea.
+                        final_color = compute_physical_color();
+                    } else if lake_here {
+                        final_color = [42.0, 125.0, 185.0];
+                    } else if is_waste || !land_political || !has_land_node {
+                        // Wasteland, wilderness, or land that the current scope does
+                        // not portray. In the Water scope the continents are muted
+                        // so that the ocean politics stay legible.
+                        let phys = compute_physical_color();
+                        if is_waste {
+                            final_color = [
+                                phys[0] * 0.78 + 35.0,
+                                phys[1] * 0.78 + 35.0,
+                                phys[2] * 0.78 + 40.0,
+                            ];
+                        } else if scope == MapScope::Water {
+                            let grey = (phys[0] + phys[1] + phys[2]) / 3.0;
+                            final_color = [
+                                phys[0] * 0.40 + grey * 0.60,
+                                phys[1] * 0.40 + grey * 0.60,
+                                phys[2] * 0.40 + grey * 0.60,
+                            ];
+                        } else {
+                            final_color = phys;
+                        }
+                    } else {
+                        // Civilized Populated Province: territory tint over subtle terrain relief
+                        let color_id = tier_color_id(hierarchy, id, tier);
+                        let territory_rgb = id_to_territory_color(color_id);
+                        let altitude = elev - sea_level;
+                        let base = get_atlas_biome_color(display_temp, precip, altitude);
 
-                    if show_borders {
-                        final_color = land_border_shade(
-                            final_color, province_ids, hierarchy,
-                            id, color_id, x, y, h, tier,
-                        );
+                        // Blend 65% territory color + 35% shaded relief
+                        final_color = [
+                            territory_rgb[0] * 0.65 + base[0] as f32 * shade * 0.35,
+                            territory_rgb[1] * 0.65 + base[1] as f32 * shade * 0.35,
+                            territory_rgb[2] * 0.65 + base[2] as f32 * shade * 0.35,
+                        ];
+
+                        let flow = flow_grid.map_or(0.0, |grid| *grid.get(x as isize, y as isize));
+                        if flow >= min_river_flow {
+                            let river_strength = ((flow - min_river_flow) / major_river_flow)
+                                .sqrt()
+                                .clamp(0.30, 1.0);
+                            let blend = (river_strength * 1.3).clamp(0.0, 1.0);
+                            final_color = [
+                                final_color[0] * (1.0 - blend) + 20.0 * blend,
+                                final_color[1] * (1.0 - blend) + 75.0 * blend,
+                                final_color[2] * (1.0 - blend) + 155.0 * blend,
+                            ];
+                        }
+
+                        if show_borders {
+                            final_color = land_border_shade(
+                                final_color,
+                                province_ids,
+                                hierarchy,
+                                id,
+                                color_id,
+                                x,
+                                y,
+                                h,
+                                tier,
+                            );
+                        }
                     }
                 }
-            }
 
-            // ── Civilizations overlay on every other scope ────────────────
-            // The dawn can be laid over the physical relief, the survey sheet or
-            // either political hierarchy: the realm tint never replaces the layer
-            // underneath, it just claims the ground its provinces stand on. On the
-            // political scopes the blend is lighter, so both layers stay readable.
-            if show_civs && !civ_scope {
-                let lake = lake_here;
-                let is_ocean = elev <= sea_level && !lake;
-                let owner = civilizations.owner_of(id);
-                if !is_ocean && !lake && owner != 0 && id != 0 {
-                    let civ_rgb = civilizations.color_of(owner);
-                    let weight = if land_political || water_political { 0.40 } else { 0.62 };
-                    final_color = blend_rgb(
-                        final_color,
-                        [civ_rgb[0] as f32, civ_rgb[1] as f32, civ_rgb[2] as f32],
-                        weight,
-                    );
-                    if show_borders {
-                        final_color = civ_border_shade(
+                // ── Civilizations overlay on every other scope ────────────────
+                // The dawn can be laid over the physical relief, the survey sheet or
+                // either political hierarchy: the realm tint never replaces the layer
+                // underneath, it just claims the ground its provinces stand on. On the
+                // political scopes the blend is lighter, so both layers stay readable.
+                if show_civs && !civ_scope {
+                    let lake = lake_here;
+                    let is_ocean = elev <= sea_level && !lake;
+                    let owner = civilizations.owner_of(id);
+                    if !is_ocean && !lake && owner != 0 && id != 0 {
+                        let civ_rgb = civilizations.color_of(owner);
+                        let weight = if land_political || water_political {
+                            0.40
+                        } else {
+                            0.62
+                        };
+                        final_color = blend_rgb(
                             final_color,
-                            province_ids,
-                            hierarchy,
-                            civilizations,
-                            id,
-                            x,
-                            y,
-                            h,
-                            tier,
-                            false,
+                            [civ_rgb[0] as f32, civ_rgb[1] as f32, civ_rgb[2] as f32],
+                            weight,
                         );
+                        if show_borders {
+                            final_color = civ_border_shade(
+                                final_color,
+                                province_ids,
+                                hierarchy,
+                                civilizations,
+                                id,
+                                x,
+                                y,
+                                h,
+                                tier,
+                                false,
+                            );
+                        }
                     }
                 }
-            }
 
-            pixel[0] = final_color[0].clamp(0.0, 255.0) as u8;
-            pixel[1] = final_color[1].clamp(0.0, 255.0) as u8;
-            pixel[2] = final_color[2].clamp(0.0, 255.0) as u8;
-            pixel[3] = 255;
-        });
+                pixel[0] = final_color[0].clamp(0.0, 255.0) as u8;
+                pixel[1] = final_color[1].clamp(0.0, 255.0) as u8;
+                pixel[2] = final_color[2].clamp(0.0, 255.0) as u8;
+                pixel[3] = 255;
+            });
 
         ColorImage::from_rgba_unmultiplied([w, h], &pixels)
     }
@@ -2211,7 +2804,6 @@ impl MapViewer {
     }
 }
 
-
 impl MapViewer {
     /// Paint the world, and the atlas that describes it.
     fn atlas_ui(&mut self, ui: &mut egui::Ui, world: &AtlasWorld) {
@@ -2236,9 +2828,10 @@ impl MapViewer {
         let mut fit_request = false;
         let mut focus_request: Option<(f32, f32, f32)> = None;
         let mut clicked_civ: Option<u32> = None;
+        let mut clicked_family: Option<u16> = None;
 
         // ── TOP CONTROLS BAR ──────────────────────────────────────────────────
-        // Two rows, because the atlas now has nine map modes: what it shows, then
+        // Two rows, because the atlas now has ten map modes: what it shows, then
         // how it shows it. Both rows wrap, so a narrow window never clips a button.
         egui::Panel::top("top_controls")
             .frame(panel_frame.clone())
@@ -2260,6 +2853,7 @@ impl MapViewer {
                     (MapScope::Temperature, "🌡 Temperature"),
                     (MapScope::Terrain, "🪨 Terrain"),
                     (MapScope::Civilizations, "🏺 Civilizations"),
+                    (MapScope::Languages, "🗣 Languages"),
                     (MapScope::Land, "🏛 Land"),
                     (MapScope::Water, "🌊 Water"),
                     (MapScope::Everywhere, "🌍 Everywhere"),
@@ -2417,71 +3011,70 @@ impl MapViewer {
         // Topographic scope carries the palette — every band, its metre range and
         // its name — plus the world's own relief extremes. Both extremes are
         // clickable: a figure the reader cannot find is a figure worth nothing.
-        if let Some(relief) = self.relief {
-                // The survey sheet is only offered once there is a heightmap to
-                // measure, so its extremes are always here to be shown.
-                let (peak_lat, peak_lon) = self.pixel_lat_lon(relief.peak_x, relief.peak_y);
-                let (trench_lat, trench_lon) = self.pixel_lat_lon(relief.trench_x, relief.trench_y);
-                let peak_where = lat_lon_label(peak_lat, peak_lon);
-                let trench_where = lat_lon_label(trench_lat, trench_lon);
+        if self.scope == MapScope::Topographic
+            && let Some(relief) = self.relief
+        {
+            // The survey sheet is only offered once there is a heightmap to
+            // measure, so its extremes are always here to be shown.
+            let (peak_lat, peak_lon) = self.pixel_lat_lon(relief.peak_x, relief.peak_y);
+            let (trench_lat, trench_lon) = self.pixel_lat_lon(relief.trench_x, relief.trench_y);
+            let peak_where = lat_lon_label(peak_lat, peak_lon);
+            let trench_where = lat_lon_label(trench_lat, trench_lon);
 
-                egui::Panel::right("hypsometric_legend")
-                    .frame(panel_frame.clone())
-                    .resizable(false)
-                    .exact_size(LEGEND_WIDTH)
-                    .show(ui, |ui| {
-                        panel_title(ui, "⛰ Topographic Scale");
-                        caption(ui, "Tint = elevation above / depth below the sea surface.");
-                        ui.separator();
+            egui::Panel::right("hypsometric_legend")
+                .frame(panel_frame.clone())
+                .resizable(false)
+                .exact_size(LEGEND_WIDTH)
+                .show(ui, |ui| {
+                    panel_title(ui, "⛰ Topographic Scale");
+                    caption(ui, "Tint = elevation above / depth below the sea surface.");
+                    ui.separator();
 
-                        let peak_label = format!("🗻 Highest peak   +{:.0} m", relief.peak_metres);
-                        if ui
-                            .add(egui::Button::new(peak_label).frame(false))
-                            .on_hover_text(format!("{peak_where}\nClick to fly to the summit"))
-                            .clicked()
-                        {
-                            // Never zoom *out* to fly somewhere: a reader who is already
-                            // closer than the default keeps their scale.
-                            let zoom = RELIEF_FOCUS_ZOOM.max(self.zoom);
-                            focus_request = Some((relief.peak_x, relief.peak_y, zoom));
+                    let peak_label = format!("🗻 Highest peak   +{:.0} m", relief.peak_metres);
+                    if ui
+                        .add(egui::Button::new(peak_label).frame(false))
+                        .on_hover_text(format!("{peak_where}\nClick to fly to the summit"))
+                        .clicked()
+                    {
+                        // Never zoom *out* to fly somewhere: a reader who is already
+                        // closer than the default keeps their scale.
+                        let zoom = RELIEF_FOCUS_ZOOM.max(self.zoom);
+                        focus_request = Some((relief.peak_x, relief.peak_y, zoom));
+                    }
+                    caption(ui, peak_where);
+
+                    let trench_label = format!("🌊 Deepest trench  {:.0} m", relief.trench_metres);
+                    if ui
+                        .add(egui::Button::new(trench_label).frame(false))
+                        .on_hover_text(format!("{trench_where}\nClick to fly to the deepest point"))
+                        .clicked()
+                    {
+                        let zoom = RELIEF_FOCUS_ZOOM.max(self.zoom);
+                        focus_request = Some((relief.trench_x, relief.trench_y, zoom));
+                    }
+                    caption(ui, trench_where);
+
+                    ui.label(format!(
+                        "🌍 Surface: {:.0}% ocean",
+                        relief.ocean_share * 100.0
+                    ));
+                    caption(ui, "Click a figure above to centre the map on it.");
+                    ui.separator();
+
+                    // The band list is the only part that can overflow a short
+                    // window, so it is the part that scrolls. It wears the same
+                    // row as every other legend: swatch, band name, metre range.
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for band in (0..HYPSOMETRIC_COLORS.len()).rev() {
+                            themes::legend_row(
+                                ui,
+                                HYPSOMETRIC_COLORS[band],
+                                HYPSOMETRIC_NAMES[band],
+                                &hypsometric_range_label(band),
+                            );
                         }
-                        caption(ui, peak_where);
-
-                        let trench_label =
-                            format!("🌊 Deepest trench  {:.0} m", relief.trench_metres);
-                        if ui
-                            .add(egui::Button::new(trench_label).frame(false))
-                            .on_hover_text(format!(
-                                "{trench_where}\nClick to fly to the deepest point"
-                            ))
-                            .clicked()
-                        {
-                            let zoom = RELIEF_FOCUS_ZOOM.max(self.zoom);
-                            focus_request = Some((relief.trench_x, relief.trench_y, zoom));
-                        }
-                        caption(ui, trench_where);
-
-                        ui.label(format!(
-                            "🌍 Surface: {:.0}% ocean",
-                            relief.ocean_share * 100.0
-                        ));
-                        caption(ui, "Click a figure above to centre the map on it.");
-                        ui.separator();
-
-                        // The band list is the only part that can overflow a short
-                        // window, so it is the part that scrolls. It wears the same
-                        // row as every other legend: swatch, band name, metre range.
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            for band in (0..HYPSOMETRIC_COLORS.len()).rev() {
-                                themes::legend_row(
-                                    ui,
-                                    HYPSOMETRIC_COLORS[band],
-                                    HYPSOMETRIC_NAMES[band],
-                                    &hypsometric_range_label(band),
-                                );
-                            }
-                        });
                     });
+                });
         }
 
         // ── CLIMATE LEGEND (Climate scope only) ───────────────────────────────
@@ -2718,6 +3311,84 @@ impl MapViewer {
                 });
         }
 
+        // ── LANGUAGES LEGEND (Languages scope only) ───────────────────────────
+        if self.scope == MapScope::Languages {
+            egui::Panel::right("languages_legend")
+                .frame(panel_frame.clone())
+                .resizable(false)
+                .exact_size(CIV_LEGEND_WIDTH)
+                .show(ui, |ui| {
+                    panel_title(ui, "🗣 Languages of the World");
+                    caption(
+                        ui,
+                        "Each family is a colour, each language a shade of it. A family holds the provinces its speakers settled, from its Urheimat outward.",
+                    );
+                    ui.separator();
+                    if world.languages.is_empty() {
+                        caption(ui, "No tongue has been given to this world yet.");
+                    } else {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            for family in world.languages.families_by_size() {
+                                let selected = self.selected_family == Some(family.id);
+                                let response = ui
+                                    .horizontal(|ui| {
+                                        themes::swatch(ui, family.color);
+                                        ui.selectable_label(
+                                            selected,
+                                            egui::RichText::new(&family.name).strong(),
+                                        )
+                                    })
+                                    .inner;
+                                if response.clicked() {
+                                    clicked_family = Some(family.id);
+                                }
+                                caption(
+                                    ui,
+                                    format!(
+                                        "{} · {}",
+                                        family.autonym,
+                                        family.urheimat.archetype.label()
+                                    ),
+                                );
+                                caption(
+                                    ui,
+                                    format!(
+                                        "{} languages · {} provinces · {} people",
+                                        family.languages.len(),
+                                        family.province_count,
+                                        thousands_u64(family.population),
+                                    ),
+                                );
+                                caption(
+                                    ui,
+                                    format!("Urheimat: {}", world.languages.urheimat_label(family.id)),
+                                );
+                                for language in world.languages.languages_of(family.id).iter().take(6) {
+                                    ui.horizontal(|ui| {
+                                        themes::swatch(ui, language.color);
+                                        ui.label(egui::RichText::new(&language.name).small());
+                                        caption(
+                                            ui,
+                                            format!("{} provinces", language.province_count),
+                                        );
+                                    });
+                                }
+                                ui.separator();
+                            }
+                        });
+                    }
+                });
+        }
+
+        // A click on a family's legend entry flies the map to its Urheimat.
+        if let Some(id) = clicked_family {
+            self.selected_family = Some(id);
+            if let Some(family) = world.languages.family(id) {
+                let zoom = CIV_FOCUS_ZOOM.max(self.zoom);
+                focus_request = Some((family.urheimat.x, family.urheimat.y, zoom));
+            }
+        }
+
         // A click on a realm's legend entry flies the map to that realm.
         if let Some(id) = clicked_civ {
             self.selected_civ = Some(id);
@@ -2732,11 +3403,15 @@ impl MapViewer {
         // while an act is running the *live* plate is what the canvas shows.
         if self.job.is_none() && (self.texture.is_none() || visual_changed) {
             let img = self.generate_texture(world);
-            self.texture = Some(ui.ctx().load_texture("map_texture", img, TextureOptions::NEAREST));
+            self.texture = Some(
+                ui.ctx()
+                    .load_texture("map_texture", img, TextureOptions::NEAREST),
+            );
         }
 
         // ── INTERACTIVE MAP CANVAS ────────────────────────────────────────────
-        let (rect, response) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+        let (rect, response) =
+            ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
 
         // The canvas is the only thing that knows how big the map area really is,
         // so both "fit" and "fly to" are resolved here, in the same frame the
@@ -2767,7 +3442,8 @@ impl MapViewer {
 
                 if let Some(mouse_pos) = ui.ctx().pointer_hover_pos() {
                     let zoom_ratio = self.zoom / old_zoom;
-                    self.offset = mouse_pos.to_vec2() - (mouse_pos.to_vec2() - self.offset) * zoom_ratio;
+                    self.offset =
+                        mouse_pos.to_vec2() - (mouse_pos.to_vec2() - self.offset) * zoom_ratio;
                 }
             }
         }
@@ -2779,12 +3455,19 @@ impl MapViewer {
         // working on. It is drawn in the same rectangle as the finished map, at
         // the same zoom and offset, so the reader can pan the world as it grows —
         // and when the act lands, the 8K plate replaces it in place.
-        let live = if self.job.is_some() { self.live.as_ref() } else { None };
+        let live = if self.job.is_some() {
+            self.live.as_ref()
+        } else {
+            None
+        };
         let plate = live
             .map(|live| (&live.texture, live.label.as_str()))
             .or_else(|| self.texture.as_ref().map(|texture| (texture, "")));
         if let Some((texture, live_label)) = plate {
-            let map_size = egui::vec2(world.width as f32 * self.zoom, world.height as f32 * self.zoom);
+            let map_size = egui::vec2(
+                world.width as f32 * self.zoom,
+                world.height as f32 * self.zoom,
+            );
             let map_rect = egui::Rect::from_min_size(rect.min + self.offset, map_size);
 
             let mut mesh = egui::Mesh::with_texture(texture.id());
@@ -2794,7 +3477,9 @@ impl MapViewer {
                 Color32::WHITE,
             );
 
-            ui.painter().with_clip_rect(rect).add(egui::Shape::mesh(mesh));
+            ui.painter()
+                .with_clip_rect(rect)
+                .add(egui::Shape::mesh(mesh));
 
             // The place the atlas was last flown to, ringed so the reader can see
             // what the "Highest peak" or a clicked realm actually points at.
@@ -2807,11 +3492,7 @@ impl MapViewer {
                         14.0,
                         Stroke::new(2.0, Color32::from_rgb(255, 236, 170)),
                     );
-                    painter.circle_stroke(
-                        at,
-                        5.0,
-                        Stroke::new(1.5, Color32::from_rgb(60, 46, 24)),
-                    );
+                    painter.circle_stroke(at, 5.0, Stroke::new(1.5, Color32::from_rgb(60, 46, 24)));
                 }
             }
 
@@ -2824,11 +3505,7 @@ impl MapViewer {
                     egui::vec2(rect.width().min(520.0), 34.0),
                 );
                 let painter = ui.painter().with_clip_rect(rect);
-                painter.rect_filled(
-                    strip,
-                    4.0,
-                    Color32::from_rgba_unmultiplied(12, 16, 28, 224),
-                );
+                painter.rect_filled(strip, 4.0, Color32::from_rgba_unmultiplied(12, 16, 28, 224));
                 let text = format!("🔴 {} — {}", live_label, stage_progress(self.job.as_ref()));
                 painter.text(
                     strip.left_center() + egui::vec2(12.0, 0.0),
@@ -2845,7 +3522,11 @@ impl MapViewer {
             let map_x = ((mouse_pos.x - rect.min.x - self.offset.x) / self.zoom).floor() as isize;
             let map_y = ((mouse_pos.y - rect.min.y - self.offset.y) / self.zoom).floor() as isize;
 
-            if map_x >= 0 && map_x < world.width as isize && map_y >= 0 && map_y < world.height as isize {
+            if map_x >= 0
+                && map_x < world.width as isize
+                && map_y >= 0
+                && map_y < world.height as isize
+            {
                 let elev = *world.heightmap.get(map_x, map_y);
                 // A grid the world does not have yet reads as its own absence:
                 // there is no temperature in a world with no atmosphere.
@@ -2857,7 +3538,10 @@ impl MapViewer {
                     .precipitation
                     .as_ref()
                     .map_or(0.0, |grid| *grid.get(map_x, map_y));
-                let flow = world.flow.as_ref().map_or(0.0, |grid| *grid.get(map_x, map_y));
+                let flow = world
+                    .flow
+                    .as_ref()
+                    .map_or(0.0, |grid| *grid.get(map_x, map_y));
                 let sea_level = relief::SEA_LEVEL;
                 // `altitude` stays in heightmap units: the biome palette's own
                 // thresholds are expressed in those units. Everything that is
@@ -2876,7 +3560,15 @@ impl MapViewer {
                 let hx = (lat.cos() * lon.cos()) as f64;
                 let hy = lat.sin() as f64;
                 let hz = (lat.cos() * lon.sin()) as f64;
-                let micro_noise = sample_3d_fbm(&OpenSimplex::new(777), hx * 35.0, hy * 35.0, hz * 35.0, 4, 2.0, 0.5);
+                let micro_noise = sample_3d_fbm(
+                    &OpenSimplex::new(777),
+                    hx * 35.0,
+                    hy * 35.0,
+                    hz * 35.0,
+                    4,
+                    2.0,
+                    0.5,
+                );
                 let display_temp = temp + micro_noise * 5.5;
 
                 let id = province_ids.map_or(0, |ids| *ids.get(map_x, map_y));
@@ -2884,10 +3576,19 @@ impl MapViewer {
                 // A frozen polar sea is "polar land": physically the very same
                 // impassable wasteland as the ice-capped polar continents, but
                 // politically it still belongs to a marine realm.
-                let is_ocean = elev <= sea_level && !world.is_lake.as_ref().is_some_and(|lake| *lake.get(map_x, map_y));
+                let is_ocean = elev <= sea_level
+                    && !world
+                        .is_lake
+                        .as_ref()
+                        .is_some_and(|lake| *lake.get(map_x, map_y));
                 let frozen_sea = is_frozen_sea(display_temp, elev, sea_level);
                 let is_waste = is_wasteland.is_some_and(|w| *w.get(map_x, map_y))
-                    || (id == 0 && elev > sea_level && !world.is_lake.as_ref().is_some_and(|lake| *lake.get(map_x, map_y)));
+                    || (id == 0
+                        && elev > sea_level
+                        && !world
+                            .is_lake
+                            .as_ref()
+                            .is_some_and(|lake| *lake.get(map_x, map_y)));
 
                 response.on_hover_ui_at_pointer(|ui| {
                     if self.scope == MapScope::Civilizations {
@@ -2901,7 +3602,13 @@ impl MapViewer {
                                 .civilizations
                                 .civilization(owner)
                                 .expect("owner id always indexes a civilization");
-                            civilization_dossier(ui, civ, &world.civilizations);
+                            civilization_dossier(
+                                ui,
+                                owner,
+                                civ,
+                                &world.civilizations,
+                                &world.languages,
+                            );
                         } else if lake {
                             card_title(ui, "💧 Inland Freshwater Lake");
                             ui.label("No realm claims the water itself.");
@@ -2933,6 +3640,88 @@ impl MapViewer {
                             ui.label(format!("Temperature: {:.1} °C", temp));
                             ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
                             ui.separator();
+                            ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                        }
+                    } else if self.scope == MapScope::Languages {
+                        // ── The language readout ──────────────────────────────
+                        let lake = world
+                            .is_lake
+                            .as_ref()
+                            .is_some_and(|lake| *lake.get(map_x, map_y));
+                        if is_ocean {
+                            card_title(ui, "🌊 Open Water");
+                            ui.label("No land, and so no tongue of its own.");
+                            ui.separator();
+                            ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                        } else if lake {
+                            card_title(ui, "💧 Inland Freshwater Lake");
+                            ui.label("The water itself belongs to no language.");
+                            ui.separator();
+                            ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                        } else if let (Some(language), Some(family)) = (
+                            world.languages.language_of_province(id),
+                            world.languages.family_of_province(id),
+                        ) {
+                            ui.horizontal(|ui| {
+                                themes::swatch(ui, family.color);
+                                card_title(ui, family.name.as_str());
+                            });
+                            ui.strong(format!(
+                                "{} · {}",
+                                language.name,
+                                family.urheimat.archetype.label()
+                            ));
+                            caption(ui, family.urheimat.archetype.describe());
+                            ui.separator();
+                            ui.label(format!("Autonym: {}", language.autonym));
+                            ui.label(format!(
+                                "Urheimat: {}",
+                                world.languages.urheimat_label(family.id)
+                            ));
+                            if let Some(name) = world
+                                .languages
+                                .province_names
+                                .get(id as usize)
+                                .filter(|name| !name.is_empty())
+                            {
+                                ui.label(format!("Province: {name}"));
+                            }
+                            let owner = world.civilizations.owner_of(id);
+                            if owner != 0 {
+                                ui.separator();
+                                ui.label(format!(
+                                    "Society: {}",
+                                    world.civilizations.name_of(owner)
+                                ));
+                                if let Some(tier) = world.civilizations.tier_of(id) {
+                                    ui.label(egui::RichText::new(tier.label()).small());
+                                }
+                            }
+                            ui.separator();
+                            ui.label(format!("Size: {} px", {
+                                world
+                                    .hierarchy
+                                    .provinces
+                                    .get(id as usize)
+                                    .map_or(0, |node| node.pixel_count)
+                            }));
+                            ui.label(format!(
+                                "Elevation: {:.0} m",
+                                relief::altitude_metres(elev)
+                            ));
+                            ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                        } else {
+                            card_title(ui, "🏔️ Beyond the Tongues");
+                            ui.strong("No language has settled this ground");
+                            ui.separator();
+                            ui.label(format!(
+                                "Environment: {}",
+                                get_biome_name(display_temp, precip, altitude)
+                            ));
+                            ui.label(format!(
+                                "Elevation: {:.0} m",
+                                relief::altitude_metres(elev)
+                            ));
                             ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
                         }
                     } else if self.scope == MapScope::Topographic {
@@ -3250,6 +4039,7 @@ mod tests {
             MapScope::Water,
             MapScope::Everywhere,
             MapScope::Civilizations,
+            MapScope::Languages,
         ] {
             assert!(
                 !scope.available(Stage::Geology),
@@ -3268,6 +4058,7 @@ mod tests {
             MapScope::Temperature,
             MapScope::Terrain,
             MapScope::Civilizations,
+            MapScope::Languages,
             MapScope::Land,
             MapScope::Water,
             MapScope::Everywhere,
@@ -3315,6 +4106,13 @@ mod tests {
         };
 
         says("🧬 Genesis");
+        // The world data controls say what they are: an action, a setting, and
+        // the list of what is on disk.
+        says("World data");
+        says("📂 Load");
+        says("💾 Save");
+        says("Save automatically when act 3 and act 6 land");
+        says("Saved worlds");
         // The first act is offered, and marked as the one to run next.
         says("▶ 1. Geology & Erosion");
         // Nothing after it is offered at all.
@@ -3351,6 +4149,47 @@ mod tests {
         assert_eq!(viewer.scope, MapScope::Physical);
     }
 
+    /// A world adopted from the full cache opens at act seven, with acts one to
+    /// six done and the rest still locked.
+    #[test]
+    fn a_world_of_six_acts_opens_at_the_seventh() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+        let mut viewer = MapViewer::new(Genesis::for_test(1_980, Stage::HydroPolitics));
+        let painted = draw_frames(&ctx, &mut viewer);
+        let text: Vec<&str> = painted.iter().map(|(drawn, _)| drawn.as_str()).collect();
+        let says = |needle: &str| {
+            assert!(
+                text.iter().any(|drawn| drawn.contains(needle)),
+                "the atlas never painted {needle:?}"
+            );
+        };
+
+        says("✔ 6. Hydro-Political Hierarchy");
+        says("▶ 7. Dawn of Civilization");
+        says("▢ 8. Languages & Phonetics");
+    }
+
+    /// A finished act can be un-done from the panel: rewinding re-offers that act
+    /// and locks the ones that had followed it, while the acts before it stand.
+    #[test]
+    fn a_finished_act_can_be_un_done_from_the_panel() {
+        let mut viewer = MapViewer::new(Genesis::for_test(1_980, Stage::HydroPolitics));
+        viewer.rewind_world(Stage::Provinces);
+
+        assert_eq!(viewer.genesis.ready(), Some(Stage::Provinces));
+        assert_eq!(
+            viewer.genesis.state(Stage::Hydrology),
+            StageState::Done { secs: 0.0 },
+            "act three stands untouched"
+        );
+        assert_eq!(
+            viewer.genesis.state(Stage::Geopolitics),
+            StageState::Locked,
+            "and act five is locked again"
+        );
+    }
+
     /// An act in flight is shown as it happens: the sub-step it is on, how far
     /// into that sub-step it has got, and the live plate it is pushing up.
     #[test]
@@ -3375,10 +4214,16 @@ mod tests {
         });
 
         progress_tx
-            .send(ProgressEvent::SubStep { label: "Valley carving", total: 100 })
+            .send(ProgressEvent::SubStep {
+                label: "Valley carving",
+                total: 100,
+            })
             .expect("the atlas is listening");
         progress_tx
-            .send(ProgressEvent::Tick { done: 42, total: 100 })
+            .send(ProgressEvent::Tick {
+                done: 42,
+                total: 100,
+            })
             .expect("and taking ticks");
         // A plate of a 3x2 world, as an act would send it.
         progress_tx
@@ -3410,20 +4255,22 @@ mod tests {
     }
 
     /// What the panel says about the world cache and what the pipeline would do
-    /// with it are one fact, not two: a reader who never touches the radio still
-    /// gets the world they were told they would get.
+    /// with it are one fact, not two: the Save checkbox *is* a pipeline setting,
+    /// and it survives a world being begun again.
     #[test]
     fn the_panel_and_the_pipeline_agree_about_the_world_cache() {
-        // The atlas opens on Save, and the pipeline is armed to match.
+        // The atlas opens ready to save the world as it grows, and the pipeline is
+        // armed to match.
         let ctx = egui::Context::default();
         ctx.all_styles_mut(configure_style);
         let mut viewer = MapViewer::new(Genesis::new(42));
-        assert_eq!(viewer.cache_mode, CacheMode::Save);
         let _ = draw_frames(&ctx, &mut viewer);
-        assert!(viewer.genesis.autosave(), "Save means act 3 writes the cache");
+        assert!(
+            viewer.genesis.autosave(),
+            "the Save checkbox means act 3 and act 6 write the cache"
+        );
 
-        // Choosing Load is not only a change of radio: it stops the write.
-        viewer.cache_mode = CacheMode::Load;
+        // Turning it off is a setting on the pipeline, not a mode in the panel.
         viewer.genesis.set_autosave(false);
         // ... and a world begun again keeps the reader's choice.
         viewer.reset_world();
@@ -3433,13 +4280,68 @@ mod tests {
         );
     }
 
+    /// Picking a world from the saved list adopts its seed and loads it at once:
+    /// there is no second press between picking and loading, and a cache that is
+    /// not there is a sentence rather than a crash.
+    #[test]
+    fn picking_a_saved_seed_adopts_it_and_says_why_when_there_is_nothing_to_load() {
+        let mut viewer = MapViewer::new(Genesis::new(42));
+        // No cache will ever be written under this seed in a test.
+        viewer.pick_cached_world(u64::MAX);
+
+        assert_eq!(
+            viewer.seed_text,
+            u64::MAX.to_string(),
+            "the seed field follows the pick"
+        );
+        assert_eq!(viewer.genesis.seed(), u64::MAX, "and so does the pipeline");
+        let notice = viewer.cache_notice.as_deref().unwrap_or_default();
+        assert!(
+            notice.contains("No saved world"),
+            "a missing cache is said in words: {notice:?}"
+        );
+    }
+
+    /// The metadata under a saved world is written in the units a reader thinks
+    /// in, not in bytes and nanoseconds.
+    #[test]
+    fn a_cache_is_described_in_units_a_reader_thinks_in() {
+        assert_eq!(cache_size(570_425_480), "544 MB");
+        assert_eq!(cache_size(2 * 1024 * 1024 * 1024), "2.0 GB");
+
+        let now = SystemTime::now();
+        assert_eq!(
+            cache_age(Some(now - std::time::Duration::from_secs(90))),
+            "1 min ago"
+        );
+        assert_eq!(
+            cache_age(Some(now - std::time::Duration::from_secs(3 * 86_400))),
+            "3 d ago"
+        );
+        assert_eq!(cache_age(None), "at an unknown time");
+    }
+
+    /// The row for a saved world says which acts it holds, when the file's header
+    /// names them; an older save with no header says only that a world is there.
+    #[test]
+    fn a_saved_world_says_which_acts_it_holds() {
+        assert_eq!(acts_saved(Some(5)), "acts 1–5");
+        assert_eq!(acts_saved(Some(6)), "acts 1–6");
+        assert_eq!(acts_saved(None), "a saved world");
+    }
+
     /// Changing the seed mid-way does not throw the world away: the acts already
     /// grown stay on the canvas, and the seed re-points only the acts still to run.
     #[test]
     fn changing_the_seed_keeps_the_world_that_is_already_grown() {
         let mut viewer = MapViewer::new(Genesis::for_test(1_980, Stage::Geology));
-        assert!(viewer.world.is_some(), "the atlas opens on the world act one grew");
-        viewer.log.insert(0, "✔ 1. Geology & Erosion — 8.0s".to_string());
+        assert!(
+            viewer.world.is_some(),
+            "the atlas opens on the world act one grew"
+        );
+        viewer
+            .log
+            .insert(0, "✔ 1. Geology & Erosion — 8.0s".to_string());
 
         viewer.seed_text = "4242".to_string();
         viewer.apply_seed();
@@ -3474,9 +4376,16 @@ mod tests {
         assert_eq!(genesis.state(Stage::Geology), StageState::Ready);
         assert_eq!(genesis.state(Stage::Climate), StageState::Locked);
         for (position, stage) in Stage::ALL.iter().enumerate() {
-            assert_eq!(stage.index(), position + 1, "the acts are numbered in order");
+            assert_eq!(
+                stage.index(),
+                position + 1,
+                "the acts are numbered in order"
+            );
             assert!(!stage.title().is_empty(), "every act is named");
-            assert!(!stage.blurb().is_empty(), "and every act says what it makes");
+            assert!(
+                !stage.blurb().is_empty(),
+                "and every act says what it makes"
+            );
         }
     }
 
@@ -3585,6 +4494,78 @@ mod tests {
         );
     }
 
+    /// The survey sheet's own scale belongs to the survey sheet.
+    ///
+    /// Every scope carries its own legend, and a right panel that does not belong
+    /// to the current scope is not merely the wrong key: egui lays right panels
+    /// out from the window's edge *inward*, in creation order, so a stray panel
+    /// also shoves the scope's real legend into the middle of the window. The
+    /// Topographic Scale showing in every mode, and the dawn's society list
+    /// landing mid-window instead of at the right edge, were that one bug.
+    #[test]
+    fn the_topographic_scale_is_shown_only_on_the_survey_sheet() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+
+        // A world old enough to offer every scope, so only the scope gate — not
+        // whether the data exists — decides what is painted.
+        let world = Genesis::for_test(1, Stage::Civilization)
+            .atlas()
+            .expect("a world of seven acts");
+
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1720.0, 1040.0));
+
+        for scope in [
+            MapScope::Physical,
+            MapScope::Topographic,
+            MapScope::Climate,
+            MapScope::Temperature,
+            MapScope::Terrain,
+            MapScope::Civilizations,
+            MapScope::Languages,
+        ] {
+            let mut viewer = MapViewer::from_world(world.clone());
+            viewer.scope = scope;
+
+            // A few passes: a brand-new area measures itself before it paints.
+            let mut painted = Vec::new();
+            for frame in 0..3 {
+                let mut input = egui::RawInput::default();
+                input.screen_rect = Some(screen);
+                input.time = Some(1.0 + f64::from(frame));
+                let mut output = ctx.run_ui(input, |ui| viewer.frame_ui(ui));
+                painted = drawn_text_rects(&output);
+                output.textures_delta.clear();
+            }
+
+            let scale = painted
+                .iter()
+                .find(|(text, _)| text.contains("Topographic Scale"));
+            assert_eq!(
+                scale.is_some(),
+                scope == MapScope::Topographic,
+                "the topographic scale must be painted on the survey sheet alone, not in {scope:?}"
+            );
+
+            // The dawn's legend is the rightmost panel when nothing intrudes on
+            // it, so its title must begin inside the rightmost panel's width:
+            // a panel to its right would push the whole list inward.
+            if scope == MapScope::Civilizations {
+                let dawn = painted
+                    .iter()
+                    .find(|(text, _)| text.contains("The Dawn of Civilization"))
+                    .expect("the dawn's legend is always painted in its own scope");
+                assert!(
+                    dawn.1.min.x >= screen.max.x - CIV_LEGEND_WIDTH,
+                    "the dawn's legend must sit at the window's right edge, but it starts at \
+                     x = {:.1} while the edge is at {:.1}",
+                    dawn.1.min.x,
+                    screen.max.x,
+                );
+            }
+        }
+    }
+
     /// The size the atlas draws a given style in.
     fn size_of(style: &egui::Style, text_style: TextStyle) -> f32 {
         style
@@ -3652,6 +4633,36 @@ mod tests {
                             job.text[range.start.0..range.end.0].to_owned(),
                             section.format.font_id.size,
                         ));
+                    }
+                }
+                egui::epaint::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut drawn = Vec::new();
+        for clipped in &output.shapes {
+            walk(&clipped.shape, &mut drawn);
+        }
+        drawn
+    }
+
+    /// Every run of text egui was asked to paint, with the rectangle it was
+    /// painted in. Where [`drawn_text`] answers *what* a frame said, this answers
+    /// *where* — which is how a panel's own edge is told from its neighbour's.
+    fn drawn_text_rects(output: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
+        fn walk(shape: &egui::epaint::Shape, out: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::epaint::Shape::Text(text) => {
+                    let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                    let job = &text.galley.job;
+                    for section in &job.sections {
+                        let range = section.byte_range.clone();
+                        out.push((job.text[range.start.0..range.end.0].to_owned(), rect));
                     }
                 }
                 egui::epaint::Shape::Vec(shapes) => {

@@ -8,6 +8,8 @@
 
 use crate::civilization::{Civilization, CivilizationWorld, SocietyTier};
 use crate::core::fmt::{thousands, thousands_u64};
+use crate::language::naming::sample_roots;
+use crate::language::LanguagesWorld;
 
 /// Print the dawn of history: the calendar, the five-way scheme, then a full
 /// dossier for every state and one line for every people.
@@ -220,3 +222,63 @@ fn name_list(ids: &[u32]) -> String {
         ),
     }
 }
+
+/// Print the world's languages: every family, its phonology, its homeland, its
+/// lexicon in miniature, and the languages that descend from it.
+pub fn report_languages(world: &LanguagesWorld) {
+    println!(
+        "── Languages & Phonetics (seed {}) ───────────────────",
+        world.seed
+    );
+    if world.is_empty() {
+        println!("   No language ever took root on this world.");
+        return;
+    }
+    println!(
+        "   {} families · {} languages · {} inhabited provinces · {} people",
+        world.families.len(),
+        world.languages.len(),
+        world.total_provinces(),
+        thousands_u64(world.total_population()),
+    );
+    println!();
+    for family in world.families_by_size() {
+        println!(
+            "   🗣 {} ({}) — {} · {}",
+            family.name,
+            family.urheimat.archetype.label(),
+            family.autonym,
+            family.urheimat.archetype.describe(),
+        );
+        println!(
+            "      Urheimat: {} | {} languages | {} provinces | {} people",
+            world.urheimat_label(family.id),
+            family.languages.len(),
+            family.province_count,
+            thousands_u64(family.population),
+        );
+        println!("      Roots: {}", sample_roots(&family.lexicon));
+        for language in world.languages_of(family.id) {
+            println!(
+                "      · {:<32} depth {} · {} provinces · {} people",
+                language.name,
+                language.depth,
+                language.province_count,
+                thousands_u64(language.population),
+            );
+        }
+        println!();
+    }
+
+    println!("   Named realms (the first twenty) —");
+    for (index, name) in world.realm_names.iter().take(20).enumerate() {
+        let family = world
+            .family(world.family_of_realm.get(index).copied().unwrap_or(0))
+            .map_or("an unknown tongue", |family| family.name.as_str());
+        let language = world
+            .language(world.language_of_realm.get(index).copied().unwrap_or(0))
+            .map_or("an unknown tongue", |language| language.name.as_str());
+        println!("      {:<34} {:<28} {language}", name, family);
+    }
+}
+

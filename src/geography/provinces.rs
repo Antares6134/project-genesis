@@ -5,6 +5,7 @@ use crate::geography::config::GeographyConfig;
 use noise::{NoiseFn, OpenSimplex};
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
+use serde::{Deserialize, Serialize};
 use std::collections::{BinaryHeap, VecDeque};
 
 /// Rows of latitude between two progress checkpoints on the survey passes.
@@ -16,7 +17,7 @@ const PREVIEW_ROWS: usize = 32;
 /// the bar moves smoothly, and every checkpoint also offers a picture.
 const EXPANSION_STEPS_PER_CHECKPOINT: usize = 250_000;
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ProvinceResult {
     pub province_ids: Grid<u32>,
     pub habitability: Grid<f32>,

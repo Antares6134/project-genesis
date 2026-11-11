@@ -54,7 +54,7 @@ pub use config::CivilizationConfig;
 #[allow(unused_imports)]
 pub use epoch::{Epoch, Timeline};
 pub use generator::generate_civilizations;
-pub use report::{report_civilizations, report_civilizations_all};
+pub use report::{report_civilizations, report_civilizations_all, report_languages};
 
 // ─── WHY A CIVILIZATION ROSE WHERE IT DID ────────────────────────────────────
 

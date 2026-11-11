@@ -1,7 +1,7 @@
 //! Progress reporting: what a world looks like while it is still being made.
 //!
 //! The pipeline used to run to completion before a window ever opened, so a
-//! stage had no one to talk to. Now the atlas opens first and the seven acts of
+//! stage had no one to talk to. Now the atlas opens first and the eight acts of
 //! creation are run from its panel, which means a stage has to be able to say
 //! two things *while it runs*: how far along it is, and what the world currently
 //! looks like.

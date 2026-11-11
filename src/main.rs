@@ -1,15 +1,16 @@
+mod civilization;
 mod climate;
 mod core;
 mod export;
 mod geography;
-mod hydrology;
-mod terrain;
 mod geopolitics;
-mod civilization;
+mod hydrology;
+mod language;
 mod pipeline;
+mod terrain;
 mod viewer;
 
-use crate::civilization::{report_civilizations, report_civilizations_all};
+use crate::civilization::{report_civilizations, report_civilizations_all, report_languages};
 use crate::core::relief;
 use pipeline::{Genesis, LoadError, Stage};
 use std::env;
@@ -29,15 +30,27 @@ fn main() {
     let mut run_plates = false;
     let mut run_civilizations = false;
     let mut report_all_societies = false;
+    let mut run_languages = false;
 
     for arg in env::args().skip(1) {
-        if arg == "--save" { save_cache = true; } 
-        else if arg == "--load" { load_cache = true; }
-        else if arg == "--viewer" { run_viewer = true; }
-        else if arg == "--plates" { run_plates = true; }
-        else if arg == "--civs" { run_civilizations = true; }
-        else if arg == "--civs-all" { run_civilizations = true; report_all_societies = true; }
-        else if let Ok(parsed_seed) = arg.parse::<u64>() { seed = parsed_seed; }
+        if arg == "--save" {
+            save_cache = true;
+        } else if arg == "--load" {
+            load_cache = true;
+        } else if arg == "--viewer" {
+            run_viewer = true;
+        } else if arg == "--plates" {
+            run_plates = true;
+        } else if arg == "--civs" {
+            run_civilizations = true;
+        } else if arg == "--civs-all" {
+            run_civilizations = true;
+            report_all_societies = true;
+        } else if arg == "--langs" {
+            run_languages = true;
+        } else if let Ok(parsed_seed) = arg.parse::<u64>() {
+            seed = parsed_seed;
+        }
     }
 
     println!(
@@ -54,17 +67,17 @@ fn main() {
     // Every act of creation is now run from the viewer's own panel, one press at
     // a time, and watched while it runs. The command line therefore no longer
     // decides *what* gets generated before the window opens — only where the
-    // panel starts: a seed to begin from, whether act three should write the
-    // world cache (`--save`), and whether to adopt the world already on disk
-    // (`--load`) instead of growing one.
+    // panel starts: a seed to begin from, whether act three and act six should
+    // write the world cache (`--save`), and whether to adopt the world already on
+    // disk (`--load`) instead of growing one.
     if run_viewer {
         let mut genesis = Genesis::new(seed);
         genesis.set_autosave(save_cache);
         if load_cache {
-            // `--load --viewer` opens a world that is already physical: acts one
-            // to three are adopted from disk, and the panel offers act four on.
-            // This is the old "instant atlas" experience, and it is still instant:
-            // no stage is re-run, only the cache is read.
+            // `--load --viewer` adopts the saved world for the seed in one read:
+            // the acts the file carries are taken as done, and the act after them
+            // is offered next. It is instant: no stage is re-run, only the file is
+            // read.
             if let Err(why) = genesis.load_cache() {
                 report_load_failure(&why);
             }
@@ -105,7 +118,8 @@ fn main() {
         }
     }
 
-    let want_civilizations = run_civilizations || run_plates;
+    let want_civilizations = run_civilizations || run_plates || run_languages;
+    let want_languages = run_languages || run_civilizations || run_plates;
     genesis.run_through(Stage::HydroPolitics, None);
 
     // --- STAGE 7: THE DAWN OF HISTORY (CIVILIZATIONS) ---
@@ -116,7 +130,10 @@ fn main() {
         genesis.run_stage(Stage::Civilization, None);
         if run_civilizations {
             println!();
-            let world = genesis.atlas().expect("act seven just finished").civilizations;
+            let world = genesis
+                .atlas()
+                .expect("act seven just finished")
+                .civilizations;
             if report_all_societies {
                 report_civilizations_all(&world);
             } else {
@@ -124,11 +141,31 @@ fn main() {
             }
         }
     } else {
-        println!("· [7/7] Dawn of Civilization skipped (pass --civs to wake the world up).");
+        println!("· [7/8] Dawn of Civilization skipped (pass --civs to wake the world up).");
+    }
+
+    // --- STAGE 8: LANGUAGES & PHONETICS ---
+    // Names are the point: the realms Stage 7 generated are republished with
+    // their own autonyms, and every province receives a language and family.
+    if want_languages && want_civilizations {
+        // Languages are cheap — a fraction of a second — so there is no companion
+        // cache to adopt: the stage simply runs, and a loaded world grows its
+        // tongues afresh rather than reading them back.
+        genesis.run_stage(Stage::Languages, None);
+        if run_languages {
+            println!();
+            let world = genesis.atlas().expect("act eight just finished").languages;
+            report_languages(&world);
+        }
+    } else {
+        println!("· [8/8] Languages & Phonetics skipped (pass --langs to give the world a voice).");
     }
 
     println!("-------------------------------------------------------");
-    println!("Total Generation Time:                     {:.2?}", total_start.elapsed());
+    println!(
+        "Total Generation Time:                     {:.2?}",
+        total_start.elapsed()
+    );
     println!("-------------------------------------------------------");
 
     let world = genesis.atlas().expect("a finished world");
@@ -152,9 +189,13 @@ fn main() {
         hydro_config.min_river_flow,
         hydro_config.major_river_flow,
         "world_political_map.png",
-    ).expect("Failed to export political map");
+    )
+    .expect("Failed to export political map");
 
-    println!("✓ Rendered Hierarchical Political Map in:   {:.2?}", exp_start.elapsed());
+    println!(
+        "✓ Rendered Hierarchical Political Map in:   {:.2?}",
+        exp_start.elapsed()
+    );
 
     let phys_start = Instant::now();
     export::save_physical_map(
@@ -167,9 +208,13 @@ fn main() {
         hydro_config.min_river_flow,
         hydro_config.major_river_flow,
         "world_physical_map.png",
-    ).expect("Failed to export physical map");
+    )
+    .expect("Failed to export physical map");
 
-    println!("✓ Rendered Physical Relief Map in:         {:.2?}", phys_start.elapsed());
+    println!(
+        "✓ Rendered Physical Relief Map in:         {:.2?}",
+        phys_start.elapsed()
+    );
 
     let topo_start = Instant::now();
     export::save_topographic_map(
@@ -181,9 +226,13 @@ fn main() {
         hydro_config.min_river_flow,
         hydro_config.major_river_flow,
         "world_topographic_map.png",
-    ).expect("Failed to export topographic map");
+    )
+    .expect("Failed to export topographic map");
 
-    println!("✓ Rendered Topographic Survey Map in:      {:.2?}", topo_start.elapsed());
+    println!(
+        "✓ Rendered Topographic Survey Map in:      {:.2?}",
+        topo_start.elapsed()
+    );
 
     // --- STAGE 9: CIVILIZATIONS MAP (optional) ---
     // The very same painter the viewer's Civilizations scope uses, exported at
@@ -191,7 +240,11 @@ fn main() {
     if want_civilizations && !world.civilizations.is_empty() {
         let civ_start = Instant::now();
         let mut civ_viewer = viewer::MapViewer::from_world(world.clone());
-        civ_viewer.set_view(viewer::MapScope::Civilizations, viewer::MapTier::Regions, true);
+        civ_viewer.set_view(
+            viewer::MapScope::Civilizations,
+            viewer::MapTier::Regions,
+            true,
+        );
         civ_viewer
             .save_png("world_civilizations_map.png", 1.0)
             .unwrap_or_else(|e| panic!("Failed to render civilizations map: {e}"));
@@ -201,30 +254,122 @@ fn main() {
         );
     }
 
+    // --- STAGE 9b: LANGUAGES MAP (optional) ---
+    // The tongue each province speaks, in the same painter the atlas uses.
+    if want_languages && !world.languages.is_empty() {
+        let tongue_start = Instant::now();
+        let mut language_viewer = viewer::MapViewer::from_world(world.clone());
+        language_viewer.set_view(
+            viewer::MapScope::Languages,
+            viewer::MapTier::Provinces,
+            true,
+        );
+        language_viewer
+            .save_png("world_languages_map.png", 1.0)
+            .unwrap_or_else(|e| panic!("Failed to render languages map: {e}"));
+        println!(
+            "✓ Rendered Languages Map in:              {:.2?}",
+            tongue_start.elapsed()
+        );
+    }
+
     // --- STAGE 10: HEADLESS ATLAS PLATES (optional) ---
     // The very same painter the interactive window uses, exported straight to
     // 2K PNGs. Handy for regenerating the README's scope and tier tables in one
     // shot: `cargo run --release -- <seed> --load --plates`.
     if run_plates {
         let plate_start = Instant::now();
-        let plates: [(&str, viewer::MapScope, viewer::MapTier); 17] = [
-            ("./exports/atlas_physical.png",            viewer::MapScope::Physical,      viewer::MapTier::Provinces),
-            ("./exports/atlas_topographic.png",         viewer::MapScope::Topographic,   viewer::MapTier::Provinces),
-            ("./exports/atlas_climate.png",             viewer::MapScope::Climate,       viewer::MapTier::Provinces),
-            ("./exports/atlas_temperature.png",         viewer::MapScope::Temperature,   viewer::MapTier::Provinces),
-            ("./exports/atlas_terrain.png",             viewer::MapScope::Terrain,       viewer::MapTier::Provinces),
-            ("./exports/atlas_civilizations.png",       viewer::MapScope::Civilizations, viewer::MapTier::Provinces),
-            ("./exports/atlas_land_provinces.png",      viewer::MapScope::Land,          viewer::MapTier::Provinces),
-            ("./exports/atlas_land_areas.png",          viewer::MapScope::Land,          viewer::MapTier::Areas),
-            ("./exports/atlas_land_regions.png",        viewer::MapScope::Land,          viewer::MapTier::Regions),
-            ("./exports/atlas_land_superregions.png",   viewer::MapScope::Land,          viewer::MapTier::Superregions),
-            ("./exports/atlas_land_continents.png",     viewer::MapScope::Land,          viewer::MapTier::Continents),
-            ("./exports/atlas_water_provinces.png",     viewer::MapScope::Water,         viewer::MapTier::Provinces),
-            ("./exports/atlas_water_areas.png",         viewer::MapScope::Water,         viewer::MapTier::Areas),
-            ("./exports/atlas_water_regions.png",       viewer::MapScope::Water,         viewer::MapTier::Regions),
-            ("./exports/atlas_water_superregions.png",  viewer::MapScope::Water,         viewer::MapTier::Superregions),
-            ("./exports/atlas_water_basins.png",        viewer::MapScope::Water,         viewer::MapTier::Continents),
-            ("./exports/atlas_everywhere_regions.png",  viewer::MapScope::Everywhere,    viewer::MapTier::Regions),
+        let plates: [(&str, viewer::MapScope, viewer::MapTier); 18] = [
+            (
+                "./exports/atlas_physical.png",
+                viewer::MapScope::Physical,
+                viewer::MapTier::Provinces,
+            ),
+            (
+                "./exports/atlas_topographic.png",
+                viewer::MapScope::Topographic,
+                viewer::MapTier::Provinces,
+            ),
+            (
+                "./exports/atlas_climate.png",
+                viewer::MapScope::Climate,
+                viewer::MapTier::Provinces,
+            ),
+            (
+                "./exports/atlas_temperature.png",
+                viewer::MapScope::Temperature,
+                viewer::MapTier::Provinces,
+            ),
+            (
+                "./exports/atlas_terrain.png",
+                viewer::MapScope::Terrain,
+                viewer::MapTier::Provinces,
+            ),
+            (
+                "./exports/atlas_civilizations.png",
+                viewer::MapScope::Civilizations,
+                viewer::MapTier::Provinces,
+            ),
+            (
+                "./exports/atlas_languages.png",
+                viewer::MapScope::Languages,
+                viewer::MapTier::Provinces,
+            ),
+            (
+                "./exports/atlas_land_provinces.png",
+                viewer::MapScope::Land,
+                viewer::MapTier::Provinces,
+            ),
+            (
+                "./exports/atlas_land_areas.png",
+                viewer::MapScope::Land,
+                viewer::MapTier::Areas,
+            ),
+            (
+                "./exports/atlas_land_regions.png",
+                viewer::MapScope::Land,
+                viewer::MapTier::Regions,
+            ),
+            (
+                "./exports/atlas_land_superregions.png",
+                viewer::MapScope::Land,
+                viewer::MapTier::Superregions,
+            ),
+            (
+                "./exports/atlas_land_continents.png",
+                viewer::MapScope::Land,
+                viewer::MapTier::Continents,
+            ),
+            (
+                "./exports/atlas_water_provinces.png",
+                viewer::MapScope::Water,
+                viewer::MapTier::Provinces,
+            ),
+            (
+                "./exports/atlas_water_areas.png",
+                viewer::MapScope::Water,
+                viewer::MapTier::Areas,
+            ),
+            (
+                "./exports/atlas_water_regions.png",
+                viewer::MapScope::Water,
+                viewer::MapTier::Regions,
+            ),
+            (
+                "./exports/atlas_water_superregions.png",
+                viewer::MapScope::Water,
+                viewer::MapTier::Superregions,
+            ),
+            (
+                "./exports/atlas_water_basins.png",
+                viewer::MapScope::Water,
+                viewer::MapTier::Continents,
+            ),
+            (
+                "./exports/atlas_everywhere_regions.png",
+                viewer::MapScope::Everywhere,
+                viewer::MapTier::Regions,
+            ),
         ];
 
         let mut plate_viewer = viewer::MapViewer::from_world(world.clone());
@@ -235,7 +380,11 @@ fn main() {
                 .unwrap_or_else(|e| panic!("Failed to render atlas plate {path}: {e}"));
             println!("✓ Rendered atlas plate:                    {path}");
         }
-        println!("✓ Rendered {} atlas plates in:             {:.2?}", plates.len(), plate_start.elapsed());
+        println!(
+            "✓ Rendered {} atlas plates in:             {:.2?}",
+            plates.len(),
+            plate_start.elapsed()
+        );
     }
 
     println!("=======================================================");
@@ -255,4 +404,3 @@ fn report_load_failure(why: &LoadError) {
         ),
     }
 }
-

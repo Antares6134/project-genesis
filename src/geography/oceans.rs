@@ -18,6 +18,7 @@ use crate::export::live;
 use crate::geography::config::OceanConfig;
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
+use serde::{Deserialize, Serialize};
 use std::collections::BinaryHeap;
 
 /// Rows of latitude between two progress checkpoints on the survey passes.
@@ -30,7 +31,7 @@ const EXPANSION_STEPS_PER_CHECKPOINT: usize = 250_000;
 /// Ocean pixels (open water *and* the frozen polar seas — the Arctic and
 /// Southern Oceans are still oceans) carry IDs `1..=num_provinces`; land and
 /// inland freshwater lakes are `0`.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct OceanResult {
     pub ocean_province_ids: Grid<u32>,
     pub num_provinces: usize,

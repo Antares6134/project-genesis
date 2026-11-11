@@ -1,4 +1,4 @@
-//! The seven acts of creation, as a state the atlas can drive.
+//! The eight acts of creation, as a state the atlas can drive.
 //!
 //! The engine used to be a straight line: `main` ran every stage to completion
 //! and only then opened a window. It is now a *pipeline* — a [`Genesis`] value
@@ -13,6 +13,7 @@
 //!   5 Geopolitical Hierarchy     provinces → areas → regions → superregions
 //!   6 Hydro-Political Hierarchy  the world ocean, same five tiers
 //!   7 Dawn of Civilization       realms, societies, populations
+//!   8 Languages & Phonetics      phonologies, lexicons, Urheimats, native names
 //! ```
 //!
 //! Three properties make this work, and every change here must preserve them:
@@ -36,33 +37,28 @@
 //!   already grown; a world grown from one seed throughout is still exactly that
 //!   seed's planet.
 
-use crate::civilization::{
-    generate_civilizations, CivilizationConfig, CivilizationWorld,
-};
-use crate::climate::{
-    simulate_moisture, simulate_temperature, simulate_winds, ClimateConfig,
-};
+use crate::civilization::{CivilizationConfig, CivilizationWorld, generate_civilizations};
+use crate::climate::{ClimateConfig, simulate_moisture, simulate_temperature, simulate_winds};
 use crate::core::fmt::{thousands, thousands_u64};
 use crate::core::progress::{MapRefs, Progress, Sink};
-use crate::core::{polar, relief, Grid, WorldCache, WorldCacheView};
+use crate::core::{Grid, WorldCache, WorldCacheView, cache_stage, polar, relief};
 use crate::geography::{
-    generate_ocean_provinces, generate_provinces, GeographyConfig, OceanConfig, OceanResult,
-    ProvinceResult,
+    GeographyConfig, OceanConfig, OceanResult, ProvinceResult, generate_ocean_provinces,
+    generate_provinces,
 };
 use crate::geopolitics::{
-    build_geopolitical_hierarchy, build_ocean_hierarchy, extract_ocean_graph,
-    extract_province_graph, GeopoliticalHierarchy,
+    GeopoliticalHierarchy, build_geopolitical_hierarchy, build_ocean_hierarchy,
+    extract_ocean_graph, extract_province_graph,
 };
-use crate::hydrology::{
-    calculate_flow, fill_depressions_and_find_lakes, HydrologyConfig,
-};
+use crate::hydrology::{HydrologyConfig, calculate_flow, fill_depressions_and_find_lakes};
+use crate::language::{LanguageConfig, LanguagesWorld, generate_languages};
 use crate::terrain::{
-    apply_fractal_detail, simulate_hydraulic_erosion, simulate_tectonics, simulate_thermal_erosion,
-    WorldConfig,
+    WorldConfig, apply_fractal_detail, simulate_hydraulic_erosion, simulate_tectonics,
+    simulate_thermal_erosion,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 /// Canvas the engine grows: 8K. Fixed, because a world's resolution is part of
 /// its identity — a seed must always mean exactly one planet.
@@ -72,7 +68,7 @@ pub const WORLD_HEIGHT: usize = 4096;
 /// Directory a world's cache is written to.
 pub const CACHE_DIR: &str = "./saved_seeds";
 
-/// The seven acts of creation, in the only order they can be run.
+/// The eight acts of creation, in the only order they can be run.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Stage {
     Geology,
@@ -82,11 +78,12 @@ pub enum Stage {
     Geopolitics,
     HydroPolitics,
     Civilization,
+    Languages,
 }
 
 impl Stage {
     /// Every act, in order. The atlas lays its buttons out from this.
-    pub const ALL: [Stage; 7] = [
+    pub const ALL: [Stage; 8] = [
         Stage::Geology,
         Stage::Climate,
         Stage::Hydrology,
@@ -94,6 +91,7 @@ impl Stage {
         Stage::Geopolitics,
         Stage::HydroPolitics,
         Stage::Civilization,
+        Stage::Languages,
     ];
 
     /// Where the act sits in the sequence, counting from one.
@@ -106,6 +104,7 @@ impl Stage {
             Stage::Geopolitics => 5,
             Stage::HydroPolitics => 6,
             Stage::Civilization => 7,
+            Stage::Languages => 8,
         }
     }
 
@@ -119,6 +118,7 @@ impl Stage {
             Stage::Geopolitics => "Geopolitical Hierarchy",
             Stage::HydroPolitics => "Hydro-Political Hierarchy",
             Stage::Civilization => "Dawn of Civilization",
+            Stage::Languages => "Languages & Phonetics",
         }
     }
 
@@ -136,9 +136,16 @@ impl Stage {
                  written here."
             }
             Stage::Provinces => "The inhabited land divided into provinces, its wilderness mapped.",
-            Stage::Geopolitics => "Provinces gathered into areas, regions, superregions and continents.",
+            Stage::Geopolitics => {
+                "Provinces gathered into areas, regions, superregions and continents."
+            }
             Stage::HydroPolitics => "The world ocean partitioned into its own five matching tiers.",
-            Stage::Civilization => "Realms rise, spread and are given a history, an age and a people.",
+            Stage::Civilization => {
+                "Realms rise, spread and are given a history, an age and a people."
+            }
+            Stage::Languages => {
+                "Phonologies, proto-lexicons, Urheimats and the tongues that spread from them."
+            }
         }
     }
 
@@ -194,7 +201,7 @@ pub enum LoadError {
 /// Everything the atlas needs to paint the world as it stands.
 ///
 /// Assembled from whichever acts have been run, so a world three acts old and a
-/// world seven acts old are both paintable. The fields whose act has not been
+/// world eight acts old are both paintable. The fields whose act has not been
 /// run yet hold *empty* values — an empty hierarchy, a civilization with nobody
 /// in it — never stale or placeholder data, and `stage` tells the painter which
 /// is which: it must not read the province grids before act four, or the realms
@@ -226,6 +233,8 @@ pub struct AtlasWorld {
     pub ocean_hierarchy: Arc<GeopoliticalHierarchy>,
     /// The dawn of history — act seven onward.
     pub civilizations: Arc<CivilizationWorld>,
+    /// The world's languages — act eight onward.
+    pub languages: Arc<LanguagesWorld>,
 }
 
 /// The world being built, act by act.
@@ -250,7 +259,14 @@ pub struct Genesis {
     width: usize,
     height: usize,
     heightmap: Option<Arc<Grid<f32>>>,
+    /// Act two's climate, and the artefact that is never mutated: the belt of
+    /// polar ice is pinned into a *copy* of it (see [`Genesis::frozen_temperature`])
+    /// so that rewinding to act three can start again from the honest climate.
     temperature: Option<Arc<Grid<f32>>>,
+    /// Act three's temperature: [`Genesis::temperature`] with the permanent polar
+    /// ice pinned in. Acts four onward read this one, because they decide where
+    /// ice begins by reading temperature.
+    frozen_temperature: Option<Arc<Grid<f32>>>,
     precipitation: Option<Arc<Grid<f32>>>,
     flow: Option<Arc<Grid<f32>>>,
     is_lake: Option<Arc<Grid<bool>>>,
@@ -261,10 +277,17 @@ pub struct Genesis {
     hierarchy: Option<Arc<GeopoliticalHierarchy>>,
     ocean: Option<Arc<OceanResult>>,
     ocean_hierarchy: Option<Arc<GeopoliticalHierarchy>>,
+    /// Act seven's realms, before act eight gives them native names.
     civilizations: Option<Arc<CivilizationWorld>>,
+    /// Act eight's realms: the same societies, republished under the names their
+    /// own tongues gave them. Kept apart from [`Genesis::civilizations`] so that
+    /// rewinding to act eight restores the unnamed dawn rather than losing it.
+    named_civilizations: Option<Arc<CivilizationWorld>>,
+    languages: Option<Arc<LanguagesWorld>>,
     /// How long each act took, so the atlas can show it done.
-    timings: [Option<f32>; 7],
-    /// Write the world cache as soon as act three lands.
+    timings: [Option<f32>; 8],
+    /// Write the world cache (every act grown so far, up to act six) whenever act
+    /// three and again when act six land, overwriting the earlier save.
     autosave: bool,
 }
 
@@ -278,6 +301,7 @@ impl Genesis {
             height: WORLD_HEIGHT,
             heightmap: None,
             temperature: None,
+            frozen_temperature: None,
             precipitation: None,
             flow: None,
             is_lake: None,
@@ -287,7 +311,9 @@ impl Genesis {
             ocean: None,
             ocean_hierarchy: None,
             civilizations: None,
-            timings: [None; 7],
+            named_civilizations: None,
+            languages: None,
+            timings: [None; 8],
             autosave: false,
         }
     }
@@ -295,6 +321,11 @@ impl Genesis {
     /// The seed this world grows from.
     pub fn seed(&self) -> u64 {
         self.seed
+    }
+
+    /// The deepest act behind this world, or `None` before act one.
+    pub fn stage(&self) -> Option<Stage> {
+        self.stage
     }
 
     /// Re-point the acts still to run at a new seed, keeping every act already grown.
@@ -309,14 +340,75 @@ impl Genesis {
         self.seed = seed;
     }
 
-    /// Whether act three writes the world cache when it finishes.
+    /// Whether act three and act six write the world cache when they finish.
     pub fn set_autosave(&mut self, on: bool) {
         self.autosave = on;
     }
 
-    /// Whether act three would write the world cache right now.
+    /// Whether act three or act six would write the world cache right now.
     pub fn autosave(&self) -> bool {
         self.autosave
+    }
+
+    /// Throw away every act from `stage` onward, so that it — and all the acts
+    /// that followed it — may be grown again.
+    ///
+    /// This is cheap: each act's work is an `Arc`, and dropping one is a refcount
+    /// decrement, not a recomputation. Nothing is regenerated here; the acts are
+    /// simply un-done, and the act named becomes the next one the panel offers.
+    ///
+    /// The seed is left alone. Because it is read by each act as it runs, a seed
+    /// typed *after* a rewind re-points only the acts from the rewind point on —
+    /// exactly the rule that governs changing it between acts at any other time.
+    ///
+    /// Two artefacts are deliberately kept apart from their act so that a rewind
+    /// can restore them honestly: [`Genesis::temperature`] (act two's climate,
+    /// which act three would otherwise overwrite with its iced copy) and
+    /// [`Genesis::civilizations`] (act seven's unnamed realms, which act eight
+    /// would otherwise overwrite with their named copy).
+    pub fn rewind_to(&mut self, stage: Stage) {
+        if stage.index() <= 1 {
+            // Back to before act one: nothing is left of the world but its seed
+            // and what the reader chose about saving it.
+            let (seed, autosave) = (self.seed, self.autosave);
+            *self = Self::new(seed);
+            self.autosave = autosave;
+            return;
+        }
+
+        // Drop exactly the acts at or after `stage`, and mark them un-run.
+        for act in Stage::ALL {
+            if act.index() < stage.index() {
+                continue;
+            }
+            match act {
+                Stage::Geology => {}
+                Stage::Climate => {
+                    self.temperature = None;
+                    self.frozen_temperature = None;
+                    self.precipitation = None;
+                }
+                Stage::Hydrology => {
+                    self.frozen_temperature = None;
+                    self.flow = None;
+                    self.is_lake = None;
+                    self.polar_ice = None;
+                }
+                Stage::Provinces => self.provinces = None,
+                Stage::Geopolitics => self.hierarchy = None,
+                Stage::HydroPolitics => {
+                    self.ocean = None;
+                    self.ocean_hierarchy = None;
+                }
+                Stage::Civilization => self.civilizations = None,
+                Stage::Languages => {
+                    self.named_civilizations = None;
+                    self.languages = None;
+                }
+            }
+            self.timings[act.index() - 1] = None;
+        }
+        self.stage = Stage::ALL.get(stage.index() - 2).copied();
     }
 
     /// The act that may be run next, or `None` when the world is finished.
@@ -357,7 +449,10 @@ impl Genesis {
     }
 
     pub fn climate_config(&self) -> ClimateConfig {
-        ClimateConfig { seed: self.seed, ..Default::default() }
+        ClimateConfig {
+            seed: self.seed,
+            ..Default::default()
+        }
     }
 
     pub fn hydro_config(&self) -> HydrologyConfig {
@@ -381,6 +476,10 @@ impl Genesis {
         CivilizationConfig::default()
     }
 
+    pub fn language_config(&self) -> LanguageConfig {
+        LanguageConfig::default()
+    }
+
     // ─── THE WORLD CACHE ─────────────────────────────────────────────────────
 
     /// Where this world's cache lives.
@@ -388,22 +487,18 @@ impl Genesis {
         cache_path(self.seed)
     }
 
-    /// Write the completed acts one to three to disk, as `world_<seed>.bin`.
+    /// Write the acts grown so far to disk, as `world_<seed>.bin`, overwriting any
+    /// earlier save for this seed.
     ///
-    /// Only the first three — the heightmap, the climate and the water — because
-    /// those are the expensive, purely physical half of the pipeline, and the
-    /// half that a later act never changes. Everything after act three is cheap
-    /// enough to run again from the cache on demand.
+    /// The save holds acts one through whichever act the world has reached, capped
+    /// at act six: the bare land, the climate, the water, and as far up the two
+    /// hierarchies as the world has climbed. Acts seven and eight are never
+    /// written, so a saved world always resumes at the dawn or before it. A world
+    /// with no act behind it has nothing worth keeping and is not written.
     pub fn save_cache(&self) -> Result<PathBuf, LoadError> {
         let path = self.cache_path();
-        let (Some(heightmap), Some(temperature), Some(precipitation), Some(flow), Some(is_lake)) = (
-            &self.heightmap,
-            &self.temperature,
-            &self.precipitation,
-            &self.flow,
-            &self.is_lake,
-        ) else {
-            // The first three acts are not finished, so there is no world yet.
+        let Some(heightmap) = &self.heightmap else {
+            // No act has run, so there is no world yet.
             return Err(LoadError::Missing(path));
         };
         if let Some(parent) = path.parent() {
@@ -415,10 +510,14 @@ impl Genesis {
                 width: self.width,
                 height: self.height,
                 heightmap,
-                temp_grid: temperature,
-                precip_grid: precipitation,
-                flow_grid: flow,
-                is_lake,
+                temp_grid: self.temperature.as_deref(),
+                precip_grid: self.precipitation.as_deref(),
+                flow_grid: self.flow.as_deref(),
+                is_lake: self.is_lake.as_deref(),
+                provinces: self.provinces.as_deref(),
+                hierarchy: self.hierarchy.as_deref(),
+                ocean: self.ocean.as_deref(),
+                ocean_hierarchy: self.ocean_hierarchy.as_deref(),
             },
             &path.to_string_lossy(),
         )
@@ -426,12 +525,12 @@ impl Genesis {
         Ok(path)
     }
 
-    /// Adopt the acts one to three that are already on disk for this seed.
+    /// Adopt the acts already saved for this seed, from `world_<seed>.bin`.
     ///
-    /// On success the pipeline holds a complete physical world and the next
-    /// pressable act is *Geography & Provinces*: the same thing `--load` has
-    /// always done, only now it happens mid-session instead of before the window
-    /// opens.
+    /// The save carries acts one through whichever act the world had reached when
+    /// it was written, so the pipeline picks up at the act after that one — act
+    /// four for a save made at act three, act seven for one made at act six. On
+    /// success it holds exactly that much of the world, and no more.
     pub fn load_cache(&mut self) -> Result<(), LoadError> {
         let path = self.cache_path();
         if !Path::new(&path).exists() {
@@ -442,27 +541,37 @@ impl Genesis {
         let cache = WorldCache::try_load(&path.to_string_lossy())
             .map_err(|why| LoadError::Unreadable(path.clone(), why))?;
 
-        // A loaded world has acts one to three behind it, and no polar ice yet:
-        // the belt is resolved below exactly as it is after act three is run,
-        // which is what keeps a loaded world identical to a grown one.
-        let (width, height, heightmap, temperature, precipitation, flow, is_lake) =
-            cache.into_parts();
-        self.width = width;
-        self.height = height;
-        self.heightmap = Some(Arc::new(heightmap));
-        self.temperature = Some(Arc::new(temperature));
-        self.precipitation = Some(Arc::new(precipitation));
-        self.flow = Some(Arc::new(flow));
-        self.is_lake = Some(Arc::new(is_lake));
+        let stage = Stage::ALL[(cache.stage() - 1) as usize];
+        self.width = cache.width;
+        self.height = cache.height;
+        self.heightmap = Some(Arc::new(cache.heightmap));
+        self.temperature = cache.temp_grid.map(Arc::new);
+        self.precipitation = cache.precip_grid.map(Arc::new);
+        self.flow = cache.flow_grid.map(Arc::new);
+        self.is_lake = cache.is_lake.map(Arc::new);
+        self.provinces = cache.provinces.map(Arc::new);
+        self.hierarchy = cache.hierarchy.map(Arc::new);
+        self.ocean = cache.ocean.map(Arc::new);
+        self.ocean_hierarchy = cache.ocean_hierarchy.map(Arc::new);
+        // The ice belt is not stored: it is resolved again here, from the same
+        // grids and the same seed, exactly as act three resolves it. It is a no-op
+        // for a save made before act three, whose lakes are not there yet.
         self.finish_polar_ice();
-        self.stage = Some(Stage::Hydrology);
-        // The first two acts are not timed — they happened in another session —
-        // so they report their `Done` state with the zero that marks a stage
-        // adopted from disk rather than run just now.
-        self.timings[0] = Some(0.0);
-        self.timings[1] = Some(0.0);
-        self.timings[2] = Some(0.0);
-        println!("✓ Loaded cached world data in:             {:.2?}", start.elapsed());
+        self.stage = Some(stage);
+        // Every act the save carries happened in another session, so each reports
+        // `Done` with the zero that marks an act adopted from disk rather than run
+        // just now.
+        for act in Stage::ALL {
+            self.timings[act.index() - 1] = if act.index() <= stage.index() {
+                Some(0.0)
+            } else {
+                None
+            };
+        }
+        println!(
+            "✓ Loaded cached world data in:             {:.2?}",
+            start.elapsed()
+        );
         Ok(())
     }
 }
@@ -470,6 +579,111 @@ impl Genesis {
 /// Where a world's cache lives.
 pub fn cache_path(seed: u64) -> PathBuf {
     PathBuf::from(format!("{CACHE_DIR}/world_{seed}.bin"))
+}
+
+/// One world cache found on disk, as the atlas lists it.
+///
+/// This is metadata only: the atlas reads a cache's *header* — never its payload —
+/// to describe it. The file itself is loaded only when the reader asks to load it.
+///
+/// A seed carries a single cache: `world_<seed>.bin`, holding every act it has
+/// grown. The `bytes` and `modified` describe that one file, which is what a Load
+/// would adopt.
+#[derive(Clone, Debug)]
+pub struct CachedWorld {
+    /// The seed the cache is named after.
+    pub seed: u64,
+    /// Size of the cache, in bytes.
+    pub bytes: u64,
+    /// When the cache was last written, when the platform says.
+    pub modified: Option<SystemTime>,
+    /// The deepest act the cache holds, when its header says. `None` for a cache
+    /// written before the header existed, or one that will not open — the act
+    /// would then be knowable only by decoding the payload, which the list does
+    /// not pay for.
+    pub acts: Option<u8>,
+}
+
+/// The cache for one seed, if any checkpoint for it is on disk.
+///
+/// A handful of metadata calls, so the panel may ask on every frame whether the
+/// seed it is showing can be loaded.
+pub fn cached_world(seed: u64) -> Option<CachedWorld> {
+    describe_cached_world(Path::new(CACHE_DIR), seed)
+}
+
+/// Describe one seed's cache as it sits in `dir`, or `None` if it is not there.
+///
+/// Metadata only, so the per-frame [`cached_world`] costs nothing: the act the
+/// save holds is left `None` here and filled by [`cached_worlds_in`], which reads
+/// a cache's header once per scan rather than once per frame.
+fn describe_cached_world(dir: &Path, seed: u64) -> Option<CachedWorld> {
+    let file = std::fs::metadata(dir.join(format!("world_{seed}.bin")))
+        .ok()
+        .filter(std::fs::Metadata::is_file)?;
+    Some(CachedWorld {
+        seed,
+        bytes: file.len(),
+        modified: file.modified().ok(),
+        acts: None,
+    })
+}
+
+/// Every world cache in the cache directory, newest first.
+pub fn cached_worlds() -> Vec<CachedWorld> {
+    cached_worlds_in(Path::new(CACHE_DIR))
+}
+
+/// Every world cache in `dir`, newest first.
+///
+/// A world is named by one canonical spelling: `world_<seed>.bin`. A stray file, a
+/// `.lang.bin` left over from an older build, or a cache spelled `world_0042.bin`
+/// names nothing the atlas can load, so it is not listed. An unreadable directory
+/// is an empty list, never a panic.
+pub fn cached_worlds_in(dir: &Path) -> Vec<CachedWorld> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut seeds: Vec<u64> = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some(rest) = name.strip_prefix("world_") else {
+            continue;
+        };
+        let Some(digits) = rest.strip_suffix(".bin") else {
+            continue;
+        };
+        let Ok(seed) = digits.parse::<u64>() else {
+            continue;
+        };
+        if name != format!("world_{seed}.bin") {
+            continue;
+        }
+        if !seeds.contains(&seed) {
+            seeds.push(seed);
+        }
+    }
+    let mut worlds: Vec<CachedWorld> = seeds
+        .into_iter()
+        .filter_map(|seed| describe_cached_world(dir, seed))
+        .collect();
+    // The act cannot be told from metadata alone, so each listed file's header is
+    // read here for it. This runs once per scan, not once per frame, so a list of
+    // many worlds costs a handful of bytes each — never a decoded payload.
+    for world in &mut worlds {
+        let path = dir.join(format!("world_{}.bin", world.seed));
+        world.acts = cache_stage(&path.to_string_lossy());
+    }
+    worlds.sort_by(|a, b| b.modified.cmp(&a.modified).then(b.seed.cmp(&a.seed)));
+    worlds
 }
 
 impl Genesis {
@@ -490,17 +704,22 @@ impl Genesis {
             Stage::Geopolitics => self.run_geopolitics(&sink),
             Stage::HydroPolitics => self.run_hydro_politics(&sink),
             Stage::Civilization => self.run_civilization(&sink),
+            Stage::Languages => self.run_languages(&sink),
         };
         let secs = start.elapsed().as_secs_f32();
         self.timings[stage.index() - 1] = Some(secs);
         self.stage = Some(stage);
         println!(
-            "✓ [{}/7] {} completed: {:.2?}",
+            "✓ [{}/8] {} completed: {:.2?}",
             stage.index(),
             stage.title(),
             start.elapsed()
         );
-        Some(StageReport { stage, secs, summary })
+        Some(StageReport {
+            stage,
+            secs,
+            summary,
+        })
     }
 
     /// Run every act up to and including `last`, in order.
@@ -537,12 +756,44 @@ impl Genesis {
         if stage.available(Stage::Hydrology) {
             genesis.flow = Some(Arc::new(Grid::filled_with(width, height, 0.0f32)));
             genesis.is_lake = Some(Arc::new(Grid::filled_with(width, height, false)));
+            // Act three's iced copy of the climate, so a test can watch a rewind
+            // drop it while act two's honest grid stays.
+            genesis.frozen_temperature =
+                Some(Arc::new(Grid::filled_with(width, height, -30.0f32)));
+        }
+        if stage.available(Stage::Provinces) {
+            genesis.provinces = Some(Arc::new(ProvinceResult {
+                province_ids: Grid::filled_with(width, height, 1u32),
+                habitability: Grid::filled_with(width, height, 0.5f32),
+                is_wasteland: Grid::filled_with(width, height, false),
+                num_provinces: 1,
+            }));
+        }
+        if stage.available(Stage::Geopolitics) {
+            genesis.hierarchy = Some(Arc::new(GeopoliticalHierarchy::empty()));
+        }
+        if stage.available(Stage::HydroPolitics) {
+            genesis.ocean = Some(Arc::new(OceanResult {
+                ocean_province_ids: Grid::filled_with(width, height, 0u32),
+                num_provinces: 0,
+            }));
+            genesis.ocean_hierarchy = Some(Arc::new(GeopoliticalHierarchy::empty()));
+        }
+        if stage.available(Stage::Civilization) {
+            genesis.civilizations = Some(Arc::new(CivilizationWorld::empty(seed)));
+        }
+        if stage.available(Stage::Languages) {
+            genesis.named_civilizations = Some(Arc::new(CivilizationWorld::empty(seed)));
+            genesis.languages = Some(Arc::new(LanguagesWorld::empty(seed)));
         }
         for act in Stage::ALL {
             // Acts already behind a world adopted from disk were not timed here,
             // which is what the panel reports as `loaded`.
-            genesis.timings[act.index() - 1] =
-                if act.index() <= stage.index() { Some(0.0) } else { None };
+            genesis.timings[act.index() - 1] = if act.index() <= stage.index() {
+                Some(0.0)
+            } else {
+                None
+            };
         }
         genesis
     }
@@ -556,7 +807,12 @@ impl Genesis {
             width: self.width,
             height: self.height,
             heightmap,
-            temperature: self.temperature.clone(),
+            // Acts four onward read the iced climate; a world younger than act
+            // three has only act two's, which is the honest thing to paint.
+            temperature: self
+                .frozen_temperature
+                .clone()
+                .or_else(|| self.temperature.clone()),
             precipitation: self.precipitation.clone(),
             flow: self.flow.clone(),
             is_lake: self.is_lake.clone(),
@@ -570,10 +826,17 @@ impl Genesis {
                 .ocean_hierarchy
                 .clone()
                 .unwrap_or_else(|| Arc::new(GeopoliticalHierarchy::empty())),
+            // Once act eight has run, the named realms are the ones to paint; a
+            // world that has only reached act seven shows them unnamed.
             civilizations: self
-                .civilizations
+                .named_civilizations
                 .clone()
+                .or_else(|| self.civilizations.clone())
                 .unwrap_or_else(|| Arc::new(CivilizationWorld::empty(self.seed))),
+            languages: self
+                .languages
+                .clone()
+                .unwrap_or_else(|| Arc::new(LanguagesWorld::empty(self.seed))),
         })
     }
 
@@ -649,7 +912,10 @@ impl Genesis {
     fn run_hydrology(&mut self, sink: &Option<Arc<Sink>>) -> Vec<String> {
         let hydro_config = self.hydro_config();
         let progress = watching(sink);
-        let heightmap = self.heightmap.clone().expect("act one runs before act three");
+        let heightmap = self
+            .heightmap
+            .clone()
+            .expect("act one runs before act three");
         let precipitation = self
             .precipitation
             .clone()
@@ -669,7 +935,12 @@ impl Genesis {
             &progress,
         );
 
-        let lakes = pit_res.is_lake.raw_slice().iter().filter(|&&lake| lake).count();
+        let lakes = pit_res
+            .is_lake
+            .raw_slice()
+            .iter()
+            .filter(|&&lake| lake)
+            .count();
         let is_lake = Arc::new(pit_res.is_lake);
         self.flow = Some(Arc::new(flow_res.accumulated_flow));
         self.is_lake = Some(is_lake.clone());
@@ -680,27 +951,29 @@ impl Genesis {
         // load. A cached world and a freshly grown one therefore agree to the
         // last bit — which is what makes `--load` a genuine shortcut rather than
         // a second, subtly different world.
-        if self.autosave && let Err(why) = self.save_cache() {
+        if self.autosave
+            && let Err(why) = self.save_cache()
+        {
             println!("⚠ The world cache could not be written: {why:?}");
         }
 
         // The belt is permanent arctic waste — no province may settle there, no
         // tundra may grow at its shore — so it is resolved here, at the end of
         // act three, and pinned into the temperature grid every later act reads.
-        let polar_ice = polar::permanent_polar_ice(
-            &heightmap,
-            &is_lake,
-            relief::SEA_LEVEL,
-            self.seed,
-        );
-        let mut temperature = (*self
+        //
+        // It is pinned into a *copy*: act two's climate stays untouched, so a
+        // rewind to act three re-freezes from the same honest grid rather than
+        // layering a second belt over the first.
+        let polar_ice =
+            polar::permanent_polar_ice(&heightmap, &is_lake, relief::SEA_LEVEL, self.seed);
+        let mut frozen = (*self
             .temperature
             .clone()
             .expect("act two runs before act three"))
         .clone();
-        polar::freeze_polar_ice(&mut temperature, &polar_ice);
+        polar::freeze_polar_ice(&mut frozen, &polar_ice);
 
-        self.temperature = Some(Arc::new(temperature));
+        self.frozen_temperature = Some(Arc::new(frozen));
         self.polar_ice = Some(Arc::new(polar_ice));
 
         vec![
@@ -730,7 +1003,10 @@ impl Genesis {
         let mut frozen = (*temperature).clone();
         polar::freeze_polar_ice(&mut frozen, &polar_ice);
 
-        self.temperature = Some(Arc::new(frozen));
+        // The iced copy is act three's own artefact. Act two's climate is left
+        // exactly as the atmosphere simulated it, so that rewinding to act three
+        // can freeze the belt again from the honest grid.
+        self.frozen_temperature = Some(Arc::new(frozen));
         self.is_lake = Some(is_lake);
         self.polar_ice = Some(Arc::new(polar_ice));
     }
@@ -748,10 +1024,22 @@ impl Genesis {
 
         let result = generate_provinces(
             &world.heightmap,
-            world.temperature.as_deref().expect("act two runs before act four"),
-            world.precipitation.as_deref().expect("act two runs before act four"),
-            world.flow.as_deref().expect("act three runs before act four"),
-            world.is_lake.as_deref().expect("act three runs before act four"),
+            world
+                .temperature
+                .as_deref()
+                .expect("act two runs before act four"),
+            world
+                .precipitation
+                .as_deref()
+                .expect("act two runs before act four"),
+            world
+                .flow
+                .as_deref()
+                .expect("act three runs before act four"),
+            world
+                .is_lake
+                .as_deref()
+                .expect("act three runs before act four"),
             &polar_ice,
             // The planet's own vertical datum. The old 0.11 threshold is only the
             // *noise* water line.
@@ -762,7 +1050,12 @@ impl Genesis {
             &progress,
         );
 
-        let wasteland = result.is_wasteland.raw_slice().iter().filter(|&&w| w).count();
+        let wasteland = result
+            .is_wasteland
+            .raw_slice()
+            .iter()
+            .filter(|&&w| w)
+            .count();
         let summary = vec![
             format!("{} provinces", thousands_u64(result.num_provinces as u64)),
             format!("{} wasteland pixels", thousands_u64(wasteland as u64)),
@@ -776,8 +1069,14 @@ impl Genesis {
     fn run_geopolitics(&mut self, sink: &Option<Arc<Sink>>) -> Vec<String> {
         let progress = watching(sink);
         let world = self.atlas().expect("act four runs before act five");
-        let provinces = world.provinces.clone().expect("act four runs before act five");
-        let is_lake = world.is_lake.clone().expect("act three runs before act five");
+        let provinces = world
+            .provinces
+            .clone()
+            .expect("act four runs before act five");
+        let is_lake = world
+            .is_lake
+            .clone()
+            .expect("act three runs before act five");
 
         let extracted = extract_province_graph(
             &provinces.province_ids,
@@ -814,8 +1113,14 @@ impl Genesis {
     fn run_hydro_politics(&mut self, sink: &Option<Arc<Sink>>) -> Vec<String> {
         let ocean_config = self.ocean_config();
         let world = self.atlas().expect("act four runs before act six");
-        let is_lake = world.is_lake.clone().expect("act three runs before act six");
-        let land = world.provinces.clone().expect("act four runs before act six");
+        let is_lake = world
+            .is_lake
+            .clone()
+            .expect("act three runs before act six");
+        let land = world
+            .provinces
+            .clone()
+            .expect("act four runs before act six");
 
         let result = generate_ocean_provinces(
             &world.heightmap,
@@ -852,12 +1157,24 @@ impl Genesis {
         );
 
         let summary = vec![
-            format!("{} marine provinces", thousands_u64(result.num_provinces as u64)),
+            format!(
+                "{} marine provinces",
+                thousands_u64(result.num_provinces as u64)
+            ),
             format!("{} ocean basins", ocean_hierarchy.total_continents),
             format!("{} oceanic regions", ocean_hierarchy.total_regions),
         ];
         self.ocean = Some(Arc::new(result));
         self.ocean_hierarchy = Some(Arc::new(ocean_hierarchy));
+
+        // Everything the world is before history is added to it, written the
+        // moment act six lands — overwriting the save act three made, so the file
+        // now holds acts one to six.
+        if self.autosave
+            && let Err(why) = self.save_cache()
+        {
+            println!("⚠ The world cache could not be written: {why:?}");
+        }
         summary
     }
 
@@ -868,11 +1185,23 @@ impl Genesis {
         let climate_config = self.climate_config();
         let civ_config = self.civilization_config();
         let atlas = self.atlas().expect("act six runs before act seven");
-        let provinces = atlas.provinces.clone().expect("act four runs before act seven");
+        let provinces = atlas
+            .provinces
+            .clone()
+            .expect("act four runs before act seven");
         let hierarchy = atlas.hierarchy.clone();
-        let is_lake = atlas.is_lake.clone().expect("act three runs before act seven");
-        let temperature = atlas.temperature.clone().expect("act two runs before act seven");
-        let precipitation = atlas.precipitation.clone().expect("act two runs before act seven");
+        let is_lake = atlas
+            .is_lake
+            .clone()
+            .expect("act three runs before act seven");
+        let temperature = atlas
+            .temperature
+            .clone()
+            .expect("act two runs before act seven");
+        let precipitation = atlas
+            .precipitation
+            .clone()
+            .expect("act two runs before act seven");
         let flow = atlas.flow.clone().expect("act three runs before act seven");
 
         let progress = watching(sink).with_map(MapRefs {
@@ -899,11 +1228,49 @@ impl Genesis {
 
         let summary = vec![
             format!("{} realms", world.civilizations.len()),
-            format!("{} civilized provinces", thousands_u64(world.civilized_provinces as u64)),
+            format!(
+                "{} civilized provinces",
+                thousands_u64(world.civilized_provinces as u64)
+            ),
             format!("world population {}", thousands_u64(world.total_population)),
             format!("atlas date {}", world.map_year_label()),
         ];
         self.civilizations = Some(Arc::new(world));
+        summary
+    }
+
+    // ─── 8. LANGUAGES & PHONETICS ────────────────────────────────────────────
+
+    fn run_languages(&mut self, sink: &Option<Arc<Sink>>) -> Vec<String> {
+        let config = self.language_config();
+        let atlas = self.atlas().expect("act seven runs before act eight");
+        let provinces = atlas
+            .provinces
+            .clone()
+            .expect("act four runs before act eight");
+
+        let progress = watching(sink).with_map(MapRefs {
+            heightmap: &atlas.heightmap,
+            province_ids: &provinces.province_ids,
+            ocean_ids: None,
+        });
+        let (world, named_civilizations) =
+            generate_languages(&atlas, &config, self.seed, &progress);
+
+        let summary = vec![
+            format!("{} language families", world.families.len()),
+            format!(
+                "{} languages across {} provinces",
+                world.languages.len(),
+                world.total_provinces()
+            ),
+            format!("{} realms named", named_civilizations.civilizations.len()),
+        ];
+        // The named realms are act eight's own artefact, kept beside act seven's
+        // unnamed ones so that a rewind to act eight restores the dawn rather
+        // than a world that is already wearing its names.
+        self.named_civilizations = Some(Arc::new(named_civilizations));
+        self.languages = Some(Arc::new(world));
         summary
     }
 }
@@ -1014,7 +1381,10 @@ mod tests {
         match genesis.load_cache() {
             Err(LoadError::Missing(path)) => {
                 let path = path.to_string_lossy().to_string();
-                assert!(path.starts_with(CACHE_DIR), "{path} lives in the cache directory");
+                assert!(
+                    path.starts_with(CACHE_DIR),
+                    "{path} lives in the cache directory"
+                );
                 assert!(path.contains("world_"), "{path} is named after its seed");
             }
             _ => panic!("a world that was never saved must be reported as missing"),
@@ -1024,18 +1394,107 @@ mod tests {
             Some(Stage::Geology),
             "a load that found nothing leaves the pipeline exactly where it was"
         );
-        assert!(genesis.atlas().is_none(), "and there is still no world to paint");
+        assert!(
+            genesis.atlas().is_none(),
+            "and there is still no world to paint"
+        );
     }
 
-    /// An unfinished world has nothing worth writing: the cache holds the first
-    /// three acts, so a world of one act has no cache to save.
+    /// A world with no act behind it has nothing worth writing.
     #[test]
-    fn a_world_cannot_be_saved_before_it_has_weather_and_water() {
+    fn a_world_cannot_be_saved_before_any_act_has_run() {
         let genesis = Genesis::new(7);
         assert!(
             genesis.save_cache().is_err(),
             "there is no world yet, so there is nothing to write"
         );
+    }
+
+    /// A save holds every act the world has grown, capped at six, so a world of
+    /// three acts writes acts one to three and resumes at act four.
+    #[test]
+    fn a_partial_world_round_trips_through_its_cache() {
+        // A synthetic seed that no real cache will ever be written for, so the
+        // test leaves the cache directory as it found it. Not `u64::MAX`: the
+        // polar-ice pass salts the seed into a `u32`, and the all-ones low word
+        // would overflow that addition.
+        let seed = 0x0BAD_C0DF;
+        let genesis = Genesis::for_test(seed, Stage::Hydrology);
+        let path = genesis.cache_path();
+        let _ = std::fs::remove_file(&path);
+        genesis.save_cache().expect("write the world");
+
+        let mut adopted = Genesis::new(seed);
+        adopted.load_cache().expect("read the world back");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(adopted.ready(), Some(Stage::Provinces));
+        assert_eq!(
+            adopted.state(Stage::Hydrology),
+            StageState::Done { secs: 0.0 },
+            "acts one to three are adopted from disk"
+        );
+        let world = adopted.atlas().expect("three acts are a world");
+        assert_eq!(world.stage, Stage::Hydrology);
+        assert!(world.flow.is_some() && world.is_lake.is_some());
+        assert!(
+            world.provinces.is_none() && world.ocean.is_none(),
+            "acts four to six were never saved, so they are not there"
+        );
+    }
+
+    /// A full world written to disk is the same world when it is read back, and
+    /// the pipeline picks up at act seven rather than re-running acts one to six.
+    #[test]
+    fn a_full_world_round_trips_through_its_cache() {
+        let seed = 0x0BAD_C0DE;
+        let genesis = Genesis::for_test(seed, Stage::HydroPolitics);
+        let path = genesis.cache_path();
+        let _ = std::fs::remove_file(&path);
+        genesis.save_cache().expect("write the world");
+
+        let mut adopted = Genesis::new(seed);
+        adopted.load_cache().expect("read the world back");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(adopted.ready(), Some(Stage::Civilization));
+        assert_eq!(
+            adopted.state(Stage::HydroPolitics),
+            StageState::Done { secs: 0.0 },
+            "acts one to six are adopted from disk"
+        );
+        let world = adopted.atlas().expect("six acts are a world");
+        assert_eq!(world.stage, Stage::HydroPolitics);
+        assert!(world.flow.is_some() && world.is_lake.is_some());
+        assert!(
+            world.provinces.is_some() && world.ocean.is_some(),
+            "the provinces and the ocean came back with it"
+        );
+    }
+
+    /// A save holds exactly the acts the world had grown, and a load resumes at
+    /// the act after the last of them — for every act from one to six.
+    #[test]
+    fn a_save_resumes_at_the_act_after_the_one_it_holds() {
+        let seed = 0x0BAD_C0D1;
+        let path = cache_path(seed);
+        let _ = std::fs::remove_file(&path);
+        for (index, stage) in Stage::ALL[..6].iter().enumerate() {
+            let genesis = Genesis::for_test(seed, *stage);
+            genesis.save_cache().expect("write the world");
+
+            let mut adopted = Genesis::new(seed);
+            adopted.load_cache().expect("read the world back");
+
+            let next = Stage::ALL.get(index + 1).copied();
+            assert_eq!(
+                adopted.ready(),
+                next,
+                "a save at {stage:?} resumes at {next:?}"
+            );
+            assert_eq!(adopted.stage(), Some(*stage), "and holds exactly {stage:?}");
+        }
+        let _ = std::fs::remove_file(&path);
     }
 
     /// A cache is named after the seed it holds, and lives with its siblings.
@@ -1045,7 +1504,105 @@ mod tests {
             cache_path(1_980).to_string_lossy(),
             format!("{CACHE_DIR}/world_1980.bin")
         );
-        assert_ne!(cache_path(1).to_string_lossy(), cache_path(2).to_string_lossy());
+        assert_ne!(
+            cache_path(1).to_string_lossy(),
+            cache_path(2).to_string_lossy()
+        );
+    }
+
+    /// The atlas lists what is actually on disk: one entry per seed that has a
+    /// cache, newest first.
+    #[test]
+    fn a_cache_directory_lists_its_worlds_newest_first() {
+        let dir =
+            std::env::temp_dir().join(format!("project-genesis-cache-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch cache directory");
+
+        let write = |name: &str, bytes: &[u8]| {
+            std::fs::write(dir.join(name), bytes).expect("a scratch cache file");
+        };
+        // Two worlds, and a retired `world_<seed>.full.bin` beside one of them.
+        write("world_42.bin", b"cache");
+        write("world_42.full.bin", b"retired");
+        write("world_7.bin", b"fuller");
+        // Not worlds: a stray file, a `.lang.bin` from an older build, and a
+        // non-canonical spelling of a real seed.
+        write("notes.txt", b"x");
+        write("world_9.lang.bin", b"x");
+        write("world_0042.bin", b"x");
+
+        // Pin the timestamps, so "newest first" is a fact of the test rather
+        // than of how fast the files happened to be written.
+        let stamp = |name: &str, secs: u64| {
+            let file = std::fs::File::options()
+                .write(true)
+                .open(dir.join(name))
+                .expect("the scratch file");
+            file.set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs)),
+            )
+            .expect("a writable timestamp");
+        };
+        stamp("world_42.bin", 1_000);
+        stamp("world_7.bin", 2_000);
+
+        let worlds = cached_worlds_in(&dir);
+        let seeds: Vec<u64> = worlds.iter().map(|world| world.seed).collect();
+        assert_eq!(seeds, vec![7, 42], "the newest cache is listed first");
+
+        let seven = worlds
+            .iter()
+            .find(|world| world.seed == 7)
+            .expect("seed 7 is listed");
+        assert_eq!(seven.bytes, 6, "the size is the file's own");
+
+        let forty_two = worlds
+            .iter()
+            .find(|world| world.seed == 42)
+            .expect("seed 42 is listed");
+        assert_eq!(
+            forty_two.bytes, 5,
+            "a retired `.full.bin` beside it is not the world's size"
+        );
+        assert_eq!(
+            forty_two.modified,
+            Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000))
+        );
+        assert_eq!(
+            (seven.acts, forty_two.acts),
+            (None, None),
+            "a scratch file with no acts header names no acts"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The list says how far each save was grown, read from the cache's header —
+    /// one small read per file, never a decoded payload.
+    #[test]
+    fn a_listed_world_says_which_acts_it_holds() {
+        // A synthetic seed no real cache is ever written for.
+        let seed = 0x0BAD_C0F0;
+        let path = cache_path(seed);
+        let _ = std::fs::remove_file(&path);
+        Genesis::for_test(seed, Stage::Geopolitics)
+            .save_cache()
+            .expect("write the world");
+
+        let worlds = cached_worlds_in(Path::new(CACHE_DIR));
+        let world = worlds
+            .iter()
+            .find(|world| world.seed == seed)
+            .expect("the save is listed");
+        assert_eq!(
+            world.acts,
+            Some(5),
+            "a world grown to act five holds acts one to five"
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 
     /// A world adopted from disk is a world of three acts, whatever the seed.
@@ -1053,14 +1610,110 @@ mod tests {
     fn a_world_of_three_acts_offers_the_fourth() {
         let genesis = Genesis::for_test(5, Stage::Hydrology);
         assert_eq!(genesis.ready(), Some(Stage::Provinces));
-        assert_eq!(genesis.state(Stage::Hydrology), StageState::Done { secs: 0.0 });
+        assert_eq!(
+            genesis.state(Stage::Hydrology),
+            StageState::Done { secs: 0.0 }
+        );
         assert_eq!(genesis.state(Stage::Provinces), StageState::Ready);
         assert_eq!(genesis.state(Stage::Geopolitics), StageState::Locked);
         let world = genesis.atlas().expect("three acts are a world");
         assert_eq!(world.stage, Stage::Hydrology);
         assert!(world.temperature.is_some() && world.is_lake.is_some());
         assert!(world.provinces.is_none(), "act four has not run");
-        assert_eq!(world.hierarchy.total_provinces, 0, "and neither has act five");
+        assert_eq!(
+            world.hierarchy.total_provinces, 0,
+            "and neither has act five"
+        );
+    }
+
+    /// A world adopted from the full cache is a world of six acts, and the act it
+    /// offers next is the dawn of history.
+    #[test]
+    fn a_world_of_six_acts_offers_the_seventh() {
+        let genesis = Genesis::for_test(5, Stage::HydroPolitics);
+        assert_eq!(genesis.ready(), Some(Stage::Civilization));
+        assert_eq!(
+            genesis.state(Stage::HydroPolitics),
+            StageState::Done { secs: 0.0 }
+        );
+        assert_eq!(genesis.state(Stage::Civilization), StageState::Ready);
+        assert_eq!(genesis.state(Stage::Languages), StageState::Locked);
+        assert_eq!(
+            genesis.state(Stage::Geology),
+            StageState::Done { secs: 0.0 },
+            "every act behind act six is done"
+        );
+    }
+
+    /// A rewind un-does exactly the acts named and everything after them, and
+    /// leaves the acts before them — and their artefacts — untouched.
+    #[test]
+    fn rewinding_drops_the_acts_at_and_after_the_one_named() {
+        let mut genesis = Genesis::for_test(5, Stage::HydroPolitics);
+        assert_eq!(genesis.ready(), Some(Stage::Civilization));
+
+        genesis.rewind_to(Stage::Hydrology);
+
+        assert_eq!(
+            genesis.ready(),
+            Some(Stage::Hydrology),
+            "act three is the act that waits again"
+        );
+        assert_eq!(
+            genesis.state(Stage::Climate),
+            StageState::Done { secs: 0.0 },
+            "act two is untouched"
+        );
+        assert_eq!(genesis.state(Stage::Hydrology), StageState::Ready);
+        assert_eq!(genesis.state(Stage::Provinces), StageState::Locked);
+        assert_eq!(genesis.state(Stage::HydroPolitics), StageState::Locked);
+
+        // Act two's honest climate survives; act three's iced copy and its water
+        // are gone, so act three can freeze the belt again from the same grid.
+        let world = genesis.atlas().expect("two acts are still a world");
+        assert_eq!(world.stage, Stage::Climate);
+        assert!(
+            world.temperature.is_some(),
+            "act two's climate is still there to paint"
+        );
+        assert!(
+            world.flow.is_none() && world.is_lake.is_none(),
+            "act three's water is gone"
+        );
+    }
+
+    /// Rewinding to the very beginning leaves nothing but the seed and the
+    /// reader's choice about saving.
+    #[test]
+    fn rewinding_to_geology_empties_the_world_but_keeps_the_seed() {
+        let mut genesis = Genesis::for_test(1_980, Stage::HydroPolitics);
+        genesis.set_autosave(true);
+
+        genesis.rewind_to(Stage::Geology);
+
+        assert_eq!(genesis.ready(), Some(Stage::Geology));
+        assert_eq!(genesis.seed(), 1_980, "the seed is kept");
+        assert!(genesis.autosave(), "and so is the save choice");
+        assert!(genesis.atlas().is_none(), "there is no world left to paint");
+    }
+
+    /// Rewinding to act eight drops the tongues and the names it gave the realms,
+    /// but leaves the dawn act seven grew.
+    #[test]
+    fn rewinding_to_languages_keeps_the_dawn_but_drops_the_tongues() {
+        let mut genesis = Genesis::for_test(1_980, Stage::Languages);
+        assert_eq!(genesis.ready(), None, "a world of eight acts is finished");
+
+        genesis.rewind_to(Stage::Languages);
+
+        assert_eq!(genesis.ready(), Some(Stage::Languages));
+        assert_eq!(
+            genesis.state(Stage::Civilization),
+            StageState::Done { secs: 0.0 },
+            "act seven stands"
+        );
+        let world = genesis.atlas().expect("seven acts are still a world");
+        assert!(world.languages.is_empty(), "act eight's tongues are gone");
     }
 
     /// A seed is read by each act as it runs, so changing it keeps every act
@@ -1072,7 +1725,11 @@ mod tests {
 
         genesis.set_seed(4_242);
 
-        assert_eq!(genesis.seed(), 4_242, "the world now grows from the new seed");
+        assert_eq!(
+            genesis.seed(),
+            4_242,
+            "the world now grows from the new seed"
+        );
         assert_eq!(
             genesis.ready(),
             Some(Stage::Climate),
