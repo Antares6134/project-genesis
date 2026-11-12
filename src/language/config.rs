@@ -86,8 +86,8 @@ pub struct LanguageConfig {
 impl Default for LanguageConfig {
     fn default() -> Self {
         Self {
-            min_families: 10,
-            max_families: 18,
+            min_families: 20,
+            max_families: 30,
 
             family_separation_frac: 0.045,
             family_floor_frac: 0.012,

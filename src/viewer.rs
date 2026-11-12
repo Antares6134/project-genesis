@@ -2173,8 +2173,11 @@ impl MapViewer {
         let is_lake = world.is_lake.as_deref();
 
         let sea_level = relief::SEA_LEVEL;
-        let min_river_flow = 1800.0f32;
-        let major_river_flow = 15000.0f32;
+        // The river thresholds are the pipeline's own, not a private copy: the
+        // live plate and the printed plates must agree on what counts as a river.
+        let hydro = self.genesis.hydro_config();
+        let min_river_flow = hydro.min_river_flow;
+        let major_river_flow = hydro.major_river_flow;
         let lx = -0.7071f32;
         let ly = -0.7071f32;
         let render_noise = OpenSimplex::new(777);
@@ -2223,7 +2226,11 @@ impl MapViewer {
 
                 // ── Physical pixel computation ────────────────────────────────
                 let compute_physical_color = || -> [f32; 3] {
-                    if elev <= sea_level {
+                    // Lake first: a landlocked basin can hold its surface below the
+                    // datum, and it must read as fresh water rather than as sea.
+                    if lake_here {
+                        [42.0, 125.0, 185.0]
+                    } else if elev <= sea_level {
                         if display_temp < -8.0 {
                             [245.0, 248.0, 255.0] // Glacial ice shelf
                         } else if display_temp < -3.0 {
@@ -2250,8 +2257,6 @@ impl MapViewer {
                             band[1] as f32 * shade,
                             band[2] as f32 * shade,
                         ]
-                    } else if lake_here {
-                        [42.0, 125.0, 185.0]
                     } else {
                         let altitude = elev - sea_level;
                         let base = get_atlas_biome_color(display_temp, precip, altitude);
@@ -2283,7 +2288,7 @@ impl MapViewer {
                     let band = hypsometric_color(metres);
                     let mut color = [band[0] as f32, band[1] as f32, band[2] as f32];
 
-                    if lake_here && elev > sea_level {
+                    if lake_here {
                         color = [42.0, 125.0, 185.0];
                     } else if elev <= sea_level {
                         // Frozen seas read as "polar land": drifting pack ice over
@@ -3757,7 +3762,7 @@ impl MapViewer {
                             ui.label(format!("Temperature: {:.1} °C", temp));
                             ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
                         }
-                        if !is_ocean && flow >= 1800.0 {
+                        if !is_ocean && flow >= self.genesis.hydro_config().min_river_flow {
                             ui.label(format!("River Flow: {:.0} m³/s", flow));
                         }
                         ui.separator();
@@ -3875,7 +3880,7 @@ impl MapViewer {
                         }
                         ui.label(format!("Temperature: {:.1} °C", temp));
                         ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
-                        if flow >= 1800.0 {
+                        if flow >= self.genesis.hydro_config().min_river_flow {
                             ui.label(format!("River Flow: {:.0} m³/s", flow));
                         }
                         ui.separator();

@@ -47,7 +47,9 @@ pub fn choose_urheimats(
         }
         let node = &hierarchy.provinces[index];
         let climate = climate_score(profile);
-        let river = (profile.max_flow / 4_000.0).clamp(0.0, 1.0);
+        // A province threaded by a great river is a likely cradle: Nile-class
+        // discharge (~3 000 m³/s) fills the score.
+        let river = (profile.max_flow / 3_000.0).clamp(0.0, 1.0);
         let water = if profile.coastal || profile.lakeshore {
             1.0
         } else {
@@ -156,7 +158,8 @@ pub fn archetype_for(profile: &ProvinceProfile) -> SoundArchetype {
     if profile.mean_elevation_m >= 1_400.0 {
         return SoundArchetype::GlottalHighland;
     }
-    if profile.max_flow >= 2_500.0 {
+    // A major river (m³/s) gives a family a riverine voice.
+    if profile.max_flow >= 1_500.0 {
         return SoundArchetype::NasalRiverine;
     }
     if profile.mean_temp_c < 7.0 && profile.mean_precip >= 0.20 {

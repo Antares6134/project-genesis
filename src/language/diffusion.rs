@@ -180,8 +180,10 @@ fn terrain_friction(profile: &ProvinceProfile, config: &LanguageConfig) -> f32 {
     }
 
     // Rivers are roads; a step between two well-watered provinces follows the
-    // valley rather than crossing it.
-    if profile.max_flow >= 1_800.0 {
+    // valley rather than crossing it. Discharge is in m³/s now, so the bar is a
+    // river worth following: a couple of hundred cubic metres a second — the
+    // Thames is ~65, the Rhine ~2 900.
+    if profile.max_flow >= 200.0 {
         friction *= config.river_discount;
     }
 

@@ -457,9 +457,9 @@ impl Genesis {
 
     pub fn hydro_config(&self) -> HydrologyConfig {
         HydrologyConfig {
-            min_lake_depth: 0.015,
-            min_river_flow: 1800.0,
-            major_river_flow: 15_000.0,
+            min_lake_depth: 0.012,
+            min_river_flow: 100.0,      // major rivers and their larger branches — not the capillary web
+            major_river_flow: 3_000.0,  // the Nile: a continental trunk drawn at full width
             ..Default::default()
         }
     }
@@ -920,6 +920,10 @@ impl Genesis {
             .precipitation
             .clone()
             .expect("act two runs before act three");
+        let temperature = self
+            .temperature
+            .clone()
+            .expect("act two runs before act three");
 
         let pit_res = fill_depressions_and_find_lakes(
             &heightmap,
@@ -928,8 +932,9 @@ impl Genesis {
             &progress,
         );
         let flow_res = calculate_flow(
-            &pit_res.filled_heightmap,
+            &pit_res.routing_heightmap,
             &precipitation,
+            &temperature,
             relief::SEA_LEVEL,
             &hydro_config,
             &progress,

@@ -53,7 +53,10 @@ pub fn simulate_temperature(
             };
 
             // Steeper cosine curve: Keeps mid-latitudes temperate, freezing ONLY at extreme poles (75°+)
-            let polar_taper = (insolation * 1.15).min(1.0).powf(0.65);
+            // Clamped at zero: at the exact poles `cos(-π/2)` can round to a
+            // tiny negative, and `powf` of a negative is NaN — which would leave
+            // two rows of the world with no temperature at all.
+            let polar_taper = (insolation * 1.15).clamp(0.0, 1.0).powf(0.65);
             let mut base_temp = config.pole_temp + polar_taper * (config.equator_temp - config.pole_temp);
 
             // Organic Atmospheric Waves (bends horizontal climate bands organically!)

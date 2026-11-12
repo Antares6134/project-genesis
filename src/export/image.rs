@@ -312,7 +312,13 @@ pub fn save_physical_map<P: AsRef<Path>>(
             let mut shade = (1.0 + hillshade * 5.5 - slope * 1.5).clamp(0.65, 1.38);
             if y < 2 || y > (h as isize - 3) { shade = 1.0; }
 
-            let mut final_color: [f32; 3] = if elev <= sea_level {
+            // A lake is fresh water wherever its surface sits — even below the
+            // datum, where a landlocked basin keeps a below-sea-level water line.
+            // Testing `is_lake` first keeps such a body lake-coloured instead of
+            // painting it as open sea.
+            let mut final_color: [f32; 3] = if *is_lake.get(x, y) {
+                [42.0, 125.0, 185.0]
+            } else if elev <= sea_level {
                 if display_temp < -8.0 {
                     [245.0, 248.0, 255.0]
                 } else if display_temp < -3.0 {
@@ -327,8 +333,6 @@ pub fn save_physical_map<P: AsRef<Path>>(
                         (75.0 * (1.0 - shelf) + 185.0 * shelf) * sea_shade,
                     ]
                 }
-            } else if *is_lake.get(x, y) {
-                [42.0, 125.0, 185.0]
             } else {
                 let altitude = elev - sea_level;
                 let base = get_atlas_biome_color(display_temp, precip, altitude);
@@ -407,7 +411,9 @@ pub fn save_topographic_map<P: AsRef<Path>>(
             let is_lake_px = *is_lake.get(x, y);
             let mut final_color: [f32; 3];
 
-            if is_lake_px && elev > sea_level {
+            // Lake first: a landlocked basin may hold its surface below the datum,
+            // and it must still read as a lake rather than as sea floor.
+            if is_lake_px {
                 final_color = [42.0, 125.0, 185.0];
             } else if elev <= sea_level {
                 let band = hypsometric_color(metres);
@@ -525,7 +531,11 @@ pub fn save_hierarchical_political_map<P: AsRef<Path>>(
 
             let mut final_color: [f32; 3];
 
-            if elev <= sea_level {
+            // Lakes first, exactly as the viewer's political scopes draw them: a
+            // landlocked basin below the datum is fresh water, not sea.
+            if *is_lake.get(x, y) {
+                final_color = [42.0, 125.0, 185.0];
+            } else if elev <= sea_level {
                 if display_temp < -8.0 {
                     final_color = [245.0, 248.0, 255.0];
                 } else if display_temp < -3.0 {
@@ -540,8 +550,6 @@ pub fn save_hierarchical_political_map<P: AsRef<Path>>(
                         (75.0 * (1.0 - shelf) + 185.0 * shelf) * sea_shade,
                     ];
                 }
-            } else if *is_lake.get(x, y) {
-                final_color = [42.0, 125.0, 185.0];
             } else {
                 let altitude = elev - sea_level;
                 let base = get_atlas_biome_color(display_temp, precip, altitude);
