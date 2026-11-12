@@ -1,12 +1,31 @@
 #[derive(Clone, Debug)]
 pub struct GeographyConfig {
     pub num_provinces: usize,
+    /// Most of the ice-free land that may be handed to impassable wilderness.
+    ///
+    /// Worlds differ enormously in how much hyper-arid or high ground they hold
+    /// — a supercontinent can easily be a quarter desert — so the wilderness is
+    /// budgeted rather than left to the hostility score alone. Set to `0.0` for a
+    /// completely settled planet; `0.18` is the Earth-like ceiling the atlas was
+    /// tuned at. Permanent polar ice is excluded from the budget: it is
+    /// geography, not a tunable.
+    ///
+    /// `f64`: the share is multiplied by a land-pixel count in the tens of
+    /// millions, so the ceiling is kept at the precision the budget is spent in.
+    pub max_waste_share: f64,
+    /// Environmental hostility above which a province is abandoned to the wild.
+    ///
+    /// Lowering it makes the planet harsher and harder to colonise; raising it
+    /// leaves even the deep desert settled.
+    pub waste_cutoff: f32,
 }
 
 impl Default for GeographyConfig {
     fn default() -> Self {
         Self {
             num_provinces: 30_000, // Grand Strategy Location Scale!
+            max_waste_share: 0.18,
+            waste_cutoff: 0.68,
         }
     }
 }

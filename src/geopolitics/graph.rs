@@ -74,6 +74,7 @@ pub fn extract_province_graph(
     heightmap:     &Grid<f32>,
     is_lake:       &Grid<bool>,
     sea_level:     f32,
+    max_continents: usize,
 ) -> ExtractedGraph {
     let w = province_grid.width;
     let h = province_grid.height;
@@ -239,12 +240,15 @@ pub fn extract_province_graph(
     let mut continent_assignments = vec![0u32; n + 1];
     let mut is_mainland = vec![false; n + 1];
     let mut total_continents = 0u32;
+    // The ceiling is the panel's; one continent is the floor, because a world
+    // with no continental core at all has no hierarchy to build above it.
+    let ceiling = max_continents.max(1) as u32;
 
     for (_root, members) in &sorted_landmasses {
         let is_major = members.len() >= 120
             || (total_continents < 4 && members.len() >= 20);
 
-        if is_major && total_continents < 7 {
+        if is_major && total_continents < ceiling {
             total_continents += 1;
             for &p in members {
                 continent_assignments[p as usize] = total_continents;

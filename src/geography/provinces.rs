@@ -138,7 +138,10 @@ pub fn generate_provinces(
     const COAST_RING: f32 = 20.0;      // guaranteed-populated coastal belt
     const ICE_LOCK_TEMP: f32 = -14.0;  // frozen coasts may still be wilderness
     const MIN_WASTE_BLOB: usize = 64;  // discard sub-visible speckle
-    const WASTE_CUTOFF: f32 = 0.68;    // hostility threshold
+    // The hostility threshold and the share of land it may claim are the panel's
+    // (`GeographyConfig`), so a reader can settle a planet or freeze it out.
+    let waste_cutoff = config.waste_cutoff;
+    let max_waste_share = config.max_waste_share;
 
     // ── Permanent polar ice ───────────────────────────────────────────────────
     // The belt is not this generator's own invention: `polar::permanent_polar_ice`
@@ -248,7 +251,7 @@ pub fn generate_provinces(
                 };
                 hostility_map.set(x as isize, y as isize, q);
 
-                wasteland = ice || hostility > WASTE_CUTOFF;
+                wasteland = ice || hostility > waste_cutoff;
             }
 
             if on_polar_ice {
@@ -287,8 +290,7 @@ pub fn generate_provinces(
     // world is never given *extra* wasteland. Permanent polar ice is left out of
     // the accounting entirely: it is mandatory wilderness, not a tunable.
     {
-        const MAX_WASTE_SHARE: f64 = 0.18;
-        let min_q = (WASTE_CUTOFF * 100.0) as usize;
+        let min_q = (waste_cutoff * 100.0) as usize;
 
         let mut hist = [0u32; 256];
         let mut total_land_px = 0u64;   // every land pixel, polar ice included
@@ -310,7 +312,7 @@ pub fn generate_provinces(
         }
 
         let raw: u64 = hist[min_q.min(255)..].iter().map(|&c| c as u64).sum();
-        let budget = (budget_land_px as f64 * MAX_WASTE_SHARE) as u64;
+        let budget = (budget_land_px as f64 * max_waste_share) as u64;
 
         if raw > budget {
             let mut acc = 0u64;
@@ -328,7 +330,7 @@ pub fn generate_provinces(
                 raw as f64 / budget_land_px.max(1) as f64 * 100.0,
                 raw as f64 / total_land_px.max(1) as f64 * 100.0,
                 cut as f32 / 100.0,
-                MAX_WASTE_SHARE * 100.0,
+                max_waste_share * 100.0,
             );
             for y in 0..h {
                 for x in 0..w {

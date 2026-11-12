@@ -1,4 +1,4 @@
-use crate::core::polar;
+use crate::core::polar::{self, PolarConfig};
 use crate::core::progress::Progress;
 use crate::core::relief::{self, SEA_LEVEL};
 use crate::core::Grid;
@@ -98,9 +98,23 @@ fn sample_3d_fbm(noise: &OpenSimplex, x: f64, y: f64, z: f64, octaves: usize, la
     (total / max_val) as f32
 }
 
-pub fn simulate_tectonics(config: &WorldConfig, progress: &Progress) -> TectonicsResult {
+pub fn simulate_tectonics(
+    config: &WorldConfig,
+    polar: &PolarConfig,
+    progress: &Progress,
+) -> TectonicsResult {
     let w = config.width;
     let h = config.height;
+
+    // The continental field's own shape, as the panel describes it. Read once
+    // into locals: the inner loop is per pixel of an 8K canvas.
+    let sea_threshold = config.sea_threshold;
+    let continent_freq = config.continental_freq;
+    let continent_persistence = config.continental_persistence;
+    let warp_amp = config.domain_warp_amp;
+    let mountain_lift_max = config.mountain_lift;
+    let fault_freq = config.fault_noise_freq;
+    let fault_band = config.fault_band;
 
     let continent_noise = OpenSimplex::new(config.seed as u32);
     let warp_x = OpenSimplex::new(config.seed.wrapping_add(101) as u32);
@@ -141,19 +155,28 @@ pub fn simulate_tectonics(config: &WorldConfig, progress: &Progress) -> Tectonic
             let pz = cos_lat * (lon as f64).sin();
 
             // Slightly stronger warp for jagged, realistic coastlines (HD: 6 octaves)
-            let wx = sample_3d_fbm(&warp_x, px * 1.5, py * 1.5, pz * 1.5, 6, 2.0, 0.5) * 0.32;
-            let wy = sample_3d_fbm(&warp_y, px * 1.5, py * 1.5, pz * 1.5, 6, 2.0, 0.5) * 0.32;
-            let wz = sample_3d_fbm(&warp_z, px * 1.5, py * 1.5, pz * 1.5, 6, 2.0, 0.5) * 0.32;
+            let wx = sample_3d_fbm(&warp_x, px * 1.5, py * 1.5, pz * 1.5, 6, 2.0, 0.5) * warp_amp;
+            let wy = sample_3d_fbm(&warp_y, px * 1.5, py * 1.5, pz * 1.5, 6, 2.0, 0.5) * warp_amp;
+            let wz = sample_3d_fbm(&warp_z, px * 1.5, py * 1.5, pz * 1.5, 6, 2.0, 0.5) * warp_amp;
 
             let sx = px + wx as f64;
             let sy = py + wy as f64;
             let sz = pz + wz as f64;
 
-            // The exact frequency and threshold that generated the perfect continents.
+            // The continental field: its frequency, its persistence and the sea
+            // level it is read against are the panel's, so a reader can choose
+            // one supercontinent or an archipelago without touching the code.
             // HD UPGRADE: Raised from 6 to 9 octaves for millimeter-level coastal detail!
-            let continent_val = sample_3d_fbm(&continent_noise, sx * 1.05, sy * 1.05, sz * 1.05, 9, 2.1, 0.52);
-            let sea_threshold = 0.11f32; 
-            
+            let continent_val = sample_3d_fbm(
+                &continent_noise,
+                sx * continent_freq,
+                sy * continent_freq,
+                sz * continent_freq,
+                9,
+                2.1,
+                continent_persistence,
+            );
+
             let mut elev_raw: f32;
 
             if continent_val > sea_threshold {
@@ -161,16 +184,24 @@ pub fn simulate_tectonics(config: &WorldConfig, progress: &Progress) -> Tectonic
                 let base_plain = 0.415 + land_t.powf(1.3) * 0.065;
 
                 // CONTINUOUS FAULT LINES (The Andes / Rockies system)
-                let fault_val = sample_3d_fbm(&fault_noise, sx * 1.6, sy * 1.6, sz * 1.6, 4, 2.0, 0.5);
+                let fault_val = sample_3d_fbm(
+                    &fault_noise,
+                    sx * fault_freq,
+                    sy * fault_freq,
+                    sz * fault_freq,
+                    4,
+                    2.0,
+                    0.5,
+                );
                 let fault_dist = fault_val.abs();
                 
                 let mut mountain_lift = 0.0;
-                if fault_dist < 0.10 && land_t > 0.05 {
+                if fault_dist < fault_band && land_t > 0.05 {
                     // HD Mountains: Raised to 9 octaves for extreme craggy details
                     let m_sample = sample_3d_fbm(&mountain_noise, sx * 4.0, sy * 4.0, sz * 4.0, 9, 2.2, 0.48);
                     let ridge = (1.0 - m_sample.abs()).powf(3.0);
-                    let fault_intensity = (1.0 - (fault_dist / 0.10)).powf(1.5);
-                    mountain_lift = ridge * fault_intensity * 0.45;
+                    let fault_intensity = (1.0 - (fault_dist / fault_band)).powf(1.5);
+                    mountain_lift = ridge * fault_intensity * mountain_lift_max;
                 }
 
                 // Add rolling hills to plains (HD: 6 octaves)
@@ -203,7 +234,7 @@ pub fn simulate_tectonics(config: &WorldConfig, progress: &Progress) -> Tectonic
             // is an organic shore rather than a latitude circle. Only pixels
             // inside the cap are touched, so the open ocean keeps its bathymetry.
             let cap_wobble = sample_3d_fbm(&cap_noise, px * 2.6, py * 2.6, pz * 2.6, 5, 2.0, 0.5);
-            let cap_t = polar::polar_cap_blend(lat.abs() + cap_wobble * 0.10);
+            let cap_t = polar.cap_blend(lat.abs() + cap_wobble * 0.10);
             let elev = if cap_t > 0.0 {
                 let cap_relief = sample_3d_fbm(&mountain_noise, sx * 3.2, sy * 3.2, sz * 3.2, 6, 2.0, 0.5) * 0.045;
                 let cap_surface = polar::POLAR_CAP_BASE_ELEV

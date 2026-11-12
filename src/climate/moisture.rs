@@ -97,19 +97,22 @@ pub fn simulate_moisture(
             let temperate = (-temperate_dist.powf(2.0)).exp() * 0.55;
             let polar_dry = ((organic_lat - 65.0).max(0.0) / 25.0).clamp(0.0, 0.7);
 
-            let mut base_rain = 0.45 + itcz + temperate - hadley_dry * 0.48 - polar_dry;
+            let mut base_rain =
+                config.base_rainfall + itcz + temperate - hadley_dry * config.hadley_dry_depth - polar_dry;
             base_rain = base_rain.clamp(0.02, 1.2);
 
             // B. Continentality (Distance to Ocean)
             let dist = *ocean_dist.get(x as isize, y as isize);
             let continentality = (-dist / 14.0).exp(); 
-            let inland_factor = 0.40 + 0.60 * continentality;
+            let inland_floor = config.inland_factor_floor;
+            let inland_factor = inland_floor + (1.0 - inland_floor) * continentality;
 
             // C. Orographic Rain & Rain Shadows
             let wind = *winds.get(x as isize, y as isize);
             let (gx, gy) = heightmap.gradient(fx, y as f32);
             let slope_upwind = -(wind.dx * gx + wind.dy * gy);
-            let orographic = (slope_upwind * 15.0).clamp(-0.35, 0.60);
+            let orographic =
+                (slope_upwind * config.orographic_strength).clamp(-0.35, 0.60);
 
             // D. Local High-Frequency Detail Noise
             let local_noise = detail_noise.get([

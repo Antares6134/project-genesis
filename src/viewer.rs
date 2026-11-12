@@ -1,3 +1,4 @@
+mod settings;
 mod themes;
 
 use crate::civilization::SocietyTier;
@@ -253,8 +254,11 @@ pub struct MapViewer {
     cached_scanned: bool,
     /// Set when an act may have written a cache, so the list is read again.
     cached_dirty: bool,
-    /// What each finished act produced, newest first.
-    log: Vec<String>,
+    /// The last thing worth saying about the world, in one line: what an act
+    /// produced, what a save wrote, why an act did not finish. The panel keeps
+    /// the acts themselves — which are done, how long each took — so this is a
+    /// note beside them, not a log to read back.
+    notice: Option<String>,
     /// Keep running the acts, one after another, until the world is finished.
     run_queue: bool,
     /// The low-resolution plate of the act in flight, painted from the grid that
@@ -1044,7 +1048,7 @@ impl MapViewer {
             cached: Vec::new(),
             cached_scanned: false,
             cached_dirty: true,
-            log: Vec::new(),
+            notice: None,
             run_queue: false,
             live: None,
             scope,
@@ -1086,12 +1090,14 @@ impl MapViewer {
         // of the world as it stands, which is what lets it go on painting a world
         // whose own copy is being mutated on another thread.
         let autosave = self.genesis.autosave();
+        let settings = self.genesis.settings().clone();
         let mut genesis = Genesis::new(self.genesis.seed());
         std::mem::swap(&mut genesis, &mut self.genesis);
         // The pipeline left behind is a placeholder, but the panel still asks it
         // what it would do: without this the Save choice would flicker off for the
-        // length of every act.
+        // length of every act, and the settings would read as defaults.
         self.genesis.set_autosave(autosave);
+        self.genesis.set_settings(settings);
         let fallback = genesis.clone();
 
         let (progress_tx, progress_rx) = mpsc::channel::<ProgressEvent>();
@@ -1111,10 +1117,7 @@ impl MapViewer {
             worker_ctx.request_repaint();
         });
 
-        self.log.insert(
-            0,
-            format!("⏳ {}. {} — working…", stage.index(), stage.title()),
-        );
+        self.notice = Some(format!("⏳ {}. {} — working…", stage.index(), stage.title()));
         self.job = Some(StageJob {
             stage,
             progress: progress_rx,
@@ -1193,14 +1196,11 @@ impl MapViewer {
                 self.world = self.genesis.atlas();
                 self.live = None;
                 self.texture = None;
-                self.log.insert(
-                    0,
-                    format!(
-                        "⚠ {}. {} did not finish — the world is as it was before it started",
-                        stage.index(),
-                        stage.title()
-                    ),
-                );
+                self.notice = Some(format!(
+                    "⚠ {}. {} did not finish — the world is as it was before it started",
+                    stage.index(),
+                    stage.title()
+                ));
             }
         }
     }
@@ -1221,18 +1221,19 @@ impl MapViewer {
         self.live = None;
         self.selected_civ = None;
         self.selected_family = None;
-        self.log.insert(
-            0,
-            format!(
-                "✔ {}. {} — {:.1}s",
-                report.stage.index(),
-                report.stage.title(),
-                report.secs
-            ),
+        // What the act made, in one line: its figures are the panel's own report
+        // of a finished act, and they belong beside the acts, not in a log.
+        let mut line = format!(
+            "✔ {}. {} — {:.1}s",
+            report.stage.index(),
+            report.stage.title(),
+            report.secs
         );
-        for line in &report.summary {
-            self.log.insert(1, format!("      {line}"));
+        if !report.summary.is_empty() {
+            line.push_str(" · ");
+            line.push_str(&report.summary.join(" · "));
         }
+        self.notice = Some(line);
         // A scope the act has just made possible becomes the atlas's subject:
         // the reader watched provinces being drawn, so provinces are what they
         // now see.
@@ -1268,20 +1269,15 @@ impl MapViewer {
             // costs nothing and is exactly what "a new world" means.
             self.world = self.genesis.atlas();
             self.forget_world_view();
-            self.log.clear();
-            self.log.insert(
-                0,
-                format!("🌱 A new world: seed {seed}. Press “1. Geology & Erosion” to grow it."),
-            );
+            self.notice = Some(format!(
+                "🌱 A new world: seed {seed}. Press “1. Geology & Erosion” to grow it."
+            ));
         } else {
             // The acts already grown stay exactly as they are; only the acts ahead
             // will grow from the new seed.
-            self.log.insert(
-                0,
-                format!(
-                    "🔀 Seed is now {seed} — the acts already grown stay; the next act grows from {seed}."
-                ),
-            );
+            self.notice = Some(format!(
+                "🔀 Seed is now {seed} — the acts already grown stay; the next act grows from {seed}."
+            ));
         }
     }
 
@@ -1311,18 +1307,14 @@ impl MapViewer {
                 let stage = self.genesis.stage().unwrap_or(Stage::Geology);
                 self.scope = default_scope(stage);
                 self.cache_notice = None;
-                self.log.clear();
                 // The save that was on disk is the one just adopted, and it says
                 // how much of the world is already done.
                 let (acts, next) = (stage.index(), stage.index() + 1);
-                self.log.insert(
-                    0,
-                    format!(
-                        "✔ Adopted the cached world for seed {} — acts 1–{acts} are already done; \
-                         act {next} is next",
-                        self.genesis.seed()
-                    ),
-                );
+                self.notice = Some(format!(
+                    "✔ Adopted the cached world for seed {} — acts 1–{acts} are already done; \
+                     act {next} is next",
+                    self.genesis.seed()
+                ));
             }
             Err(LoadError::Missing(path)) => {
                 self.cache_notice = Some(format!(
@@ -1378,10 +1370,10 @@ impl MapViewer {
         match outcome {
             Ok(path) => {
                 self.cache_notice = None;
-                self.log.insert(
-                    0,
-                    format!("✔ Saved acts 1–{acts} for seed {seed} to '{}'", path.display()),
-                );
+                self.notice = Some(format!(
+                    "✔ Saved acts 1–{acts} for seed {seed} to '{}'",
+                    path.display()
+                ));
                 self.cached_dirty = true;
             }
             Err(why) => {
@@ -1413,18 +1405,19 @@ impl MapViewer {
     fn reset_world(&mut self) {
         let seed = self.genesis.seed();
         let autosave = self.genesis.autosave();
+        // The world's constants are the reader's, not the world's: they outlive a
+        // reset exactly as the cache choice does, so the next world grows under
+        // the settings they have chosen.
+        let settings = self.genesis.settings().clone();
         self.genesis = Genesis::new(seed);
-        // What the reader chose about the cache outlives the world it was chosen
-        // for: a reset world is still a world that will be saved as it is made.
         self.genesis.set_autosave(autosave);
+        self.genesis.set_settings(settings);
         self.world = None;
         self.forget_world_view();
-        self.log.clear();
         self.cache_notice = None;
-        self.log.insert(
-            0,
-            format!("↺ Seed {seed} cleared — press “1. Geology & Erosion” to grow it again."),
-        );
+        self.notice = Some(format!(
+            "↺ Seed {seed} cleared — press “1. Geology & Erosion” to grow it again."
+        ));
     }
 
     /// Un-do an act and every act after it, so they may be grown again.
@@ -1443,15 +1436,12 @@ impl MapViewer {
             .map(|world| measure_relief(&world.heightmap));
         self.forget_world_view();
         self.cache_notice = None;
-        self.log.insert(
-            0,
-            format!(
-                "↺ Un-done act {} and everything after it — press “{}. {}” to grow it again.",
-                stage.index(),
-                stage.index(),
-                stage.title()
-            ),
-        );
+        self.notice = Some(format!(
+            "↺ Un-done act {} and everything after it — press “{}. {}” to grow it again.",
+            stage.index(),
+            stage.index(),
+            stage.title()
+        ));
     }
 
     /// Forget everything that belonged to the world just replaced.
@@ -1545,9 +1535,15 @@ impl MapViewer {
     // ─── THE GENESIS PANEL ───────────────────────────────────────────────────
     //
     // Every act of creation is a button here, in the only order they can be run,
-    // and the world is grown in front of the reader: a seed, then a load or a
-    // save, then seven presses. Nothing is generated before it is asked for, and
-    // nothing waits to be looked at.
+    // and the world is grown in front of the reader: a seed, then the world's
+    // data, then seven presses — and, folded away underneath, every constant the
+    // engine reads. Nothing is generated before it is asked for, and nothing
+    // waits to be looked at.
+    //
+    // Each part is a fold-out of its own, so the panel can be read at the size of
+    // the thing the reader is doing: a seed and the acts while a world is being
+    // grown, the settings when the planet is being shaped, the saved worlds when
+    // one is being hunted for.
 
     fn genesis_panel(&mut self, ui: &mut egui::Ui, frame: &egui::Frame) {
         let busy = self.job.is_some() || self.save_job.is_some();
@@ -1559,9 +1555,10 @@ impl MapViewer {
             .max_size(GENESIS_PANEL_MAX)
             .show(ui, |ui| {
                 // The panel can hold a seed, three cache controls, eight acts and
-                // the notebook; on a short window it has to scroll rather than
-                // hide the last act behind the bottom edge.
+                // twenty-five constants; on a short window it has to scroll rather
+                // than hide the last act behind the bottom edge.
                 egui::ScrollArea::vertical()
+                    .id_salt("genesis_scroll")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         panel_title(ui, "🧬 Genesis");
@@ -1571,17 +1568,61 @@ impl MapViewer {
                         );
                         ui.separator();
                         self.seed_row(ui, busy);
-                        ui.add_space(4.0);
-                        self.world_data_rows(ui, busy);
-                        ui.add_space(4.0);
-                        ui.separator();
-                        self.act_rows(ui, busy);
-                        ui.separator();
-                        self.act_controls(ui, busy);
-                        ui.add_space(4.0);
-                        self.notebook(ui);
+                        ui.add_space(2.0);
+                        self.world_data_section(ui, busy);
+                        self.act_section(ui, busy);
+                        self.settings_section(ui, busy);
                     });
             });
+    }
+
+    /// World data: loading and saving are commands, auto-save is a setting, and
+    /// the list is what is actually on disk.
+    ///
+    /// Folded away until it is wanted — a reader growing a world presses the acts,
+    /// not the cache — but open it and everything about the save is there.
+    fn world_data_section(&mut self, ui: &mut egui::Ui, busy: bool) {
+        egui::CollapsingHeader::new("💾 World data")
+            .id_salt("world_data")
+            .default_open(true)
+            .show(ui, |ui| {
+                self.world_data_rows(ui, busy);
+            });
+    }
+
+    /// The eight acts, the controls that run them, and the one line about the
+    /// last one that ran.
+    fn act_section(&mut self, ui: &mut egui::Ui, busy: bool) {
+        let grown = Stage::ALL
+            .iter()
+            .filter(|stage| matches!(self.genesis.state(**stage), StageState::Done { .. }))
+            .count();
+        egui::CollapsingHeader::new(format!("🪜 The acts  ·  {grown} of 8 grown"))
+            // The count is in the label, so the id must not be: an act finishing
+            // must not snap the list shut.
+            .id_salt("acts")
+            .default_open(true)
+            .show(ui, |ui| {
+                self.act_rows(ui, busy);
+                ui.separator();
+                self.act_controls(ui, busy);
+                // What the last act made, or why it did not finish: one line, kept
+                // beside the acts it is about.
+                if let Some(notice) = self.notice.as_deref() {
+                    ui.add_space(2.0);
+                    status_line(ui, notice);
+                }
+            });
+    }
+
+    /// Advanced configuration: every constant of the engine, in one fold-out of
+    /// nine groups. The section does its own drawing and its own resets; all this
+    /// has to do is hand the pipeline whatever the reader left behind.
+    fn settings_section(&mut self, ui: &mut egui::Ui, busy: bool) {
+        let mut settings = self.genesis.settings().clone();
+        if settings::advanced_settings(ui, &mut settings, busy) {
+            self.genesis.set_settings(settings);
+        }
     }
 
     /// The seed: typed, drawn at random, and never editable while a world is
@@ -1632,8 +1673,6 @@ impl MapViewer {
     /// below them arms the automatic saves at act 3 and act 6, and every cache on
     /// disk is listed at the bottom.
     fn world_data_rows(&mut self, ui: &mut egui::Ui, busy: bool) {
-        caption(ui, "World data");
-
         // Read the directory once, and again whenever an act may have written
         // to it: one `read_dir` per act, not one per frame.
         if self.cached_dirty || !self.cached_scanned {
@@ -2010,26 +2049,6 @@ impl MapViewer {
                 self.reset_world();
             }
         });
-    }
-
-    /// What the acts have produced so far, newest first.
-    fn notebook(&mut self, ui: &mut egui::Ui) {
-        if self.log.is_empty() {
-            caption(
-                ui,
-                "Nothing has been made yet. Press ▶ 1. Geology & Erosion to begin.",
-            );
-            return;
-        }
-        caption(ui, "What has been made");
-        egui::ScrollArea::vertical()
-            .max_height(220.0)
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
-                for line in &self.log {
-                    caption(ui, line);
-                }
-            });
     }
 
     /// Install the atlas's type scale, once, on the context's styles — and on
@@ -4118,6 +4137,10 @@ mod tests {
         says("💾 Save");
         says("Save automatically when act 3 and act 6 land");
         says("Saved worlds");
+        // The acts are a section of their own, counted, and the constants the
+        // engine reads are folded away beneath them.
+        says("The acts");
+        says("Advanced configuration");
         // The first act is offered, and marked as the one to run next.
         says("▶ 1. Geology & Erosion");
         // Nothing after it is offered at all.
@@ -4127,6 +4150,12 @@ mod tests {
         // And the plate where the world will be is honest about being empty.
         says("No world yet");
         says("Seed 42");
+        // Nothing has been made, so nothing claims to have been: the panel is a
+        // list of acts, not a log of them.
+        assert!(
+            !text.iter().any(|drawn| drawn.contains("What has been made")),
+            "the panel no longer keeps a notebook of the acts it has run"
+        );
     }
 
     /// A world that is already physical — the state `--load` leaves behind —
@@ -4277,11 +4306,22 @@ mod tests {
 
         // Turning it off is a setting on the pipeline, not a mode in the panel.
         viewer.genesis.set_autosave(false);
-        // ... and a world begun again keeps the reader's choice.
+        // The world's own constants are the reader's too, and outlive a reset the
+        // same way: a new world on the same seed grows under the settings chosen.
+        viewer.genesis.set_settings(crate::pipeline::WorldGenSettings {
+            sea_threshold: 0.05,
+            ..Default::default()
+        });
+        // ... and a world begun again keeps both choices.
         viewer.reset_world();
         assert!(
             !viewer.genesis.autosave(),
             "a reset world keeps the cache choice it was grown under"
+        );
+        assert_eq!(
+            viewer.genesis.world_config().sea_threshold,
+            0.05,
+            "and the constants the reader set"
         );
     }
 
@@ -4344,9 +4384,7 @@ mod tests {
             viewer.world.is_some(),
             "the atlas opens on the world act one grew"
         );
-        viewer
-            .log
-            .insert(0, "✔ 1. Geology & Erosion — 8.0s".to_string());
+        viewer.notice = Some("✔ 1. Geology & Erosion — 8.0s".to_string());
 
         viewer.seed_text = "4242".to_string();
         viewer.apply_seed();
@@ -4361,13 +4399,10 @@ mod tests {
             Some(Stage::Climate),
             "only the acts still to run follow the new seed"
         );
+        let notice = viewer.notice.as_deref().unwrap_or_default();
         assert!(
-            viewer.log.iter().any(|line| line.contains("Geology")),
-            "the log of what has been grown survives the change"
-        );
-        assert!(
-            viewer.log.iter().any(|line| line.contains("4242")),
-            "and the panel says the seed changed"
+            notice.contains("4242"),
+            "and the panel says the seed changed: {notice:?}"
         );
     }
 

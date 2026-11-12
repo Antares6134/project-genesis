@@ -70,14 +70,93 @@ pub const POLAR_CAP_ELEV: f32 = 0.53;
 /// raised sheet always breaks the surface and forms a coastline.
 pub const POLAR_CAP_BASE_ELEV: f32 = 0.37;
 
-/// Smooth `0 → 1` ramp of the ice cap across the polar latitudes: `0` equator-
-/// ward of [`POLAR_CAP_START_LAT`] and `1` in the solid interior beyond
-/// [`POLAR_CAP_FULL_LAT`].
-#[inline(always)]
-pub fn polar_cap_blend(abs_lat: f32) -> f32 {
-    let t = ((abs_lat - POLAR_CAP_START_LAT) / (POLAR_CAP_FULL_LAT - POLAR_CAP_START_LAT))
-        .clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
+// ── A world's polar geography, as one value ──────────────────────────────────
+
+/// How wide a latitude band the ice cap spans, in radians: the gap the engine
+/// has always drawn between [`POLAR_CAP_START_LAT`] and [`POLAR_CAP_FULL_LAT`].
+///
+/// A reader who moves the cap edge moves the whole ramp with it: what a slider
+/// chooses is *where* the sheet begins, not how steeply it rises. That is what
+/// keeps a world with the cap pushed equatorward looking like an ice age rather
+/// than like a planet with a different polar geometry.
+pub const POLAR_CAP_SPAN_RAD: f32 = POLAR_CAP_FULL_LAT - POLAR_CAP_START_LAT;
+
+/// The same span for the belt of permanent arctic ice
+/// ([`POLAR_BELT_START_LAT`] → [`POLAR_BELT_FULL_LAT`]).
+pub const POLAR_BELT_SPAN_RAD: f32 = POLAR_BELT_FULL_LAT - POLAR_BELT_START_LAT;
+
+/// Where one world's polar ice lies, in radians of `|latitude|`.
+///
+/// Four latitudes, not four loose arguments: the land ice cap (where it starts
+/// to rise, where it is a solid high sheet) and the belt of permanent arctic ice
+/// (the same two). The terrain generator, the province generator and the atlas's
+/// own ice rules all travel together through this one value, so no reader can
+/// end up with a cap in one place and a belt in another.
+///
+/// The defaults are the engine's own constants, so a world grown with the panel
+/// untouched is the world this program has always drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PolarConfig {
+    /// `|latitude|` at which the permanent land ice cap first rises above the
+    /// water line.
+    pub cap_start_lat: f32,
+    /// `|latitude|` beyond which the cap is a solid, high ice sheet.
+    pub cap_full_lat: f32,
+    /// `|latitude|` at which the belt of permanent arctic ice begins.
+    pub belt_start_lat: f32,
+    /// `|latitude|` beyond which the belt is solid ice whatever the noise.
+    pub belt_full_lat: f32,
+}
+
+impl Default for PolarConfig {
+    fn default() -> Self {
+        Self {
+            cap_start_lat: POLAR_CAP_START_LAT,
+            cap_full_lat: POLAR_CAP_FULL_LAT,
+            belt_start_lat: POLAR_BELT_START_LAT,
+            belt_full_lat: POLAR_BELT_FULL_LAT,
+        }
+    }
+}
+
+impl PolarConfig {
+    /// The polar geography a reader asked for, in **degrees of latitude**.
+    ///
+    /// The two edges a reader chooses are where the land cap begins and where
+    /// the sea ice begins; the solid interior follows at the engine's own span.
+    /// Two rules are enforced here rather than in the panel, because they are
+    /// properties of the planet and not of the widget:
+    ///
+    /// * **The sea freezes first.** Pack ice is water below −3 °C, a glaciated
+    ///   sheet is land under an ice cap, so the sea-ice edge always lies at or
+    ///   equatorward of the land-ice edge. A belt asked for poleward of the cap
+    ///   is pulled back to it.
+    /// * **The ramp always has a width.** An edge asked for at the pole itself
+    ///   still leaves a hair of latitude for the sheet to climb through, so the
+    ///   blend below can never divide by zero.
+    pub fn from_degrees(cap_start_deg: f32, belt_start_deg: f32) -> Self {
+        let pole = std::f32::consts::FRAC_PI_2;
+        // A hair short of the pole: the ramp needs somewhere to climb.
+        let farthest = pole - 0.001;
+        let cap_start = cap_start_deg.to_radians().clamp(0.0, farthest);
+        let belt_start = belt_start_deg.to_radians().clamp(0.0, cap_start);
+        Self {
+            cap_start_lat: cap_start,
+            cap_full_lat: (cap_start + POLAR_CAP_SPAN_RAD).min(farthest),
+            belt_start_lat: belt_start,
+            belt_full_lat: (belt_start + POLAR_BELT_SPAN_RAD).min(farthest),
+        }
+    }
+
+    /// Smooth `0 → 1` ramp of the ice cap across the polar latitudes: `0`
+    /// equatorward of [`PolarConfig::cap_start_lat`] and `1` in the solid
+    /// interior beyond [`PolarConfig::cap_full_lat`].
+    #[inline(always)]
+    pub fn cap_blend(&self, abs_lat: f32) -> f32 {
+        let span = (self.cap_full_lat - self.cap_start_lat).max(1.0e-4);
+        let t = ((abs_lat - self.cap_start_lat) / span).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
 }
 
 // ── Permanent polar land ice ─────────────────────────────────────────────────
@@ -140,17 +219,18 @@ fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
 /// The permanent polar ice of a whole world, as a `true`/`false` grid.
 ///
 /// `true` for every land pixel that is permanent arctic ice: the polar belt
-/// ([`POLAR_BELT_START_LAT`]) with its ragged equatorward edge and — in full —
-/// the belt of any landmass that never reaches a pole. Every downstream stage
-/// that has to agree about where the ice begins reads this one grid: the province
-/// generator turns it into mandatory wasteland, and [`freeze_polar_ice`] writes it
-/// into the temperature so the atlas paints it.
+/// ([`PolarConfig::belt_start_lat`]) with its ragged equatorward edge and — in
+/// full — the belt of any landmass that never reaches a pole. Every downstream
+/// stage that has to agree about where the ice begins reads this one grid: the
+/// province generator turns it into mandatory wasteland, and [`freeze_polar_ice`]
+/// writes it into the temperature so the atlas paints it.
 ///
 /// Each pole carries one landmass that *contains* the pole — the generator raises
 /// the ice sheet above the water line at every longitude beyond
-/// [`POLAR_CAP_FULL_LAT`]. That landmass is *pole-connected*, and there the belt's
-/// edge is allowed to wander, so a continent keeps a ragged handful of provinces
-/// right at the rim of the ice. Land cut off from every pole gets no such rim.
+/// [`PolarConfig::cap_full_lat`]. That landmass is *pole-connected*, and there the
+/// belt's edge is allowed to wander, so a continent keeps a ragged handful of
+/// provinces right at the rim of the ice. Land cut off from every pole gets no
+/// such rim.
 ///
 /// Connectivity is a four-connected flood fill over land, wrapping in longitude
 /// exactly like the terrain, hydrology and province stages do.
@@ -159,6 +239,7 @@ pub fn permanent_polar_ice(
     is_lake: &Grid<bool>,
     sea_level: f32,
     seed: u64,
+    polar: &PolarConfig,
 ) -> Grid<bool> {
     let w = heightmap.width;
     let h = heightmap.height;
@@ -167,12 +248,12 @@ pub fn permanent_polar_ice(
     let edge_noise = OpenSimplex::new(seed as u32 + POLAR_ICE_EDGE_SALT as u32);
 
     // 1. Flood-fill every landmass that holds a polar cap. Beyond
-    //    `POLAR_CAP_FULL_LAT` the generator lifts the sheet above the water line
-    //    at every longitude, so those rows are guaranteed land and seed the fill.
+    //    `cap_full_lat` the generator lifts the sheet above the water line at
+    //    every longitude, so those rows are guaranteed land and seed the fill.
     let mut pole_connected = vec![false; w * h];
     let mut stack: Vec<u32> = Vec::new();
     for y in 0..h {
-        if row_latitude_rad(y as f32, h).abs() < POLAR_CAP_FULL_LAT {
+        if row_latitude_rad(y as f32, h).abs() < polar.cap_full_lat {
             continue;
         }
         let row = y * w;
@@ -216,11 +297,11 @@ pub fn permanent_polar_ice(
         for y in 0..h {
             let lat = row_latitude_rad(y as f32, h);
             let abs_lat = lat.abs();
-            if abs_lat < POLAR_BELT_START_LAT {
+            if abs_lat < polar.belt_start_lat {
                 continue;
             }
             let row = y * w;
-            let base = ramp(abs_lat, POLAR_BELT_START_LAT, POLAR_BELT_FULL_LAT);
+            let base = ramp(abs_lat, polar.belt_start_lat, polar.belt_full_lat);
             for x in 0..w {
                 let i = row + x;
                 if elev[i] <= sea_level || lake[i] {
@@ -294,7 +375,7 @@ mod tests {
         // A cap chunk in the cap latitudes (rows 0–3) with a coast running
         // equatorward from it down to row 40.
         let (heightmap, is_lake) = world(|x, y| (4..=7).contains(&x) && y <= 40);
-        let ice = permanent_polar_ice(&heightmap, &is_lake, SEA_LEVEL, 42);
+        let ice = permanent_polar_ice(&heightmap, &is_lake, SEA_LEVEL, 42, &PolarConfig::default());
 
         assert!(is_ice(&ice, 5, 5), "deep polar land must be permanent ice");
         assert!(is_ice(&ice, 5, 20), "the belt must reach its equatorward edge");
@@ -312,7 +393,7 @@ mod tests {
                 || ((12..=13).contains(&x) && (20..=28).contains(&y))
                 || ((2..=3).contains(&x) && (30..=34).contains(&y))
         });
-        let ice = permanent_polar_ice(&heightmap, &is_lake, SEA_LEVEL, 42);
+        let ice = permanent_polar_ice(&heightmap, &is_lake, SEA_LEVEL, 42, &PolarConfig::default());
 
         // The straddling island: polar half solid ice, sub-polar half spared —
         // even where a pole-connected continent would sit on the ragged edge.
@@ -320,6 +401,61 @@ mod tests {
         assert!(is_ice(&ice, 13, 23), "an island cut off from the pole freezes whole");
         assert!(!is_ice(&ice, 12, 26), "the island's sub-polar half stays habitable");
         assert!(!is_ice(&ice, 2, 32), "land equatorward of the belt is unaffected");
+    }
+
+    // ── THE POLAR CONFIG ─────────────────────────────────────────────────────
+
+    /// A panel that has never been touched must draw the world the engine has
+    /// always drawn: the default config is the constants, to the last bit.
+    #[test]
+    fn the_default_config_is_the_engine_constants() {
+        let polar = PolarConfig::default();
+        assert_eq!(polar.cap_start_lat, POLAR_CAP_START_LAT);
+        assert_eq!(polar.cap_full_lat, POLAR_CAP_FULL_LAT);
+        assert_eq!(polar.belt_start_lat, POLAR_BELT_START_LAT);
+        assert_eq!(polar.belt_full_lat, POLAR_BELT_FULL_LAT);
+    }
+
+    /// The two edges a reader may pick are in degrees; the ramp between them
+    /// keeps the engine's own width, and the sea-ice edge never runs poleward of
+    /// the land-ice edge whatever the reader asks for.
+    #[test]
+    fn a_worlds_edges_follow_its_degrees_and_never_cross() {
+        let polar = PolarConfig::from_degrees(69.9, 65.9);
+        assert!((polar.cap_start_lat.to_degrees() - 69.9).abs() < 1.0e-3);
+        assert!((polar.belt_start_lat.to_degrees() - 65.9).abs() < 1.0e-3);
+        // The spans travel with the edges, so the interior is as wide as ever.
+        assert!((polar.cap_full_lat - polar.cap_start_lat - POLAR_CAP_SPAN_RAD).abs() < 1.0e-5);
+        assert!((polar.belt_full_lat - polar.belt_start_lat - POLAR_BELT_SPAN_RAD).abs() < 1.0e-5);
+
+        // A belt asked for *poleward* of the cap is pulled back to it: the sea
+        // freezes before the land is buried, on every world.
+        let crossed = PolarConfig::from_degrees(60.0, 80.0);
+        assert!(crossed.belt_start_lat <= crossed.cap_start_lat);
+    }
+
+    /// The blend runs 0 → 1 across the cap and never divides by zero, even when
+    /// the reader drags the edge to the pole itself.
+    #[test]
+    fn the_cap_ramp_stays_finite_at_any_edge() {
+        let polar = PolarConfig::from_degrees(89.9, 89.9);
+        assert!(polar.cap_blend(0.0).is_finite());
+        assert_eq!(polar.cap_blend(0.0), 0.0, "the equator is never ice");
+        assert_eq!(polar.cap_blend(std::f32::consts::FRAC_PI_2), 1.0);
+
+        let earth = PolarConfig::default();
+        assert_eq!(earth.cap_blend(0.0), 0.0);
+        assert_eq!(earth.cap_blend(1.0), 0.0, "70° of latitude is inside the ramp's start");
+        assert_eq!(earth.cap_blend(1.5708), 1.0, "the pole is solid sheet");
+    }
+
+    /// An ice age is a cap pushed equatorward, and the world must report it: the
+    /// cap reaches ground that was temperate before.
+    #[test]
+    fn moving_the_cap_equatorward_buries_formerly_temperate_ground() {
+        let temperate_lat = 55.0f32.to_radians();
+        assert_eq!(PolarConfig::default().cap_blend(temperate_lat), 0.0);
+        assert!(PolarConfig::from_degrees(45.0, 40.0).cap_blend(temperate_lat) > 0.9);
     }
 
     #[test]

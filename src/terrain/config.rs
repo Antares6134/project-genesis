@@ -13,6 +13,43 @@ pub struct WorldConfig {
     pub trench_depth: f32,
     pub boundary_spread: f32,
 
+    // ── Continental layout & coastlines ──────────────────────────────────────
+    /// The elevation a pixel of the continental noise field must clear to be
+    /// land. The global water line: lower it and ocean basins drain to reveal
+    /// land bridges and inland seas, raise it and continents sink into
+    /// archipelagos. `0.11` is the Earth-like centre the atlas was tuned at.
+    pub sea_threshold: f32,
+    /// Frequency of the continental fBm field. Low frequencies aggregate the
+    /// crust into one or two supercontinents; high ones shatter it into an
+    /// archipelago.
+    ///
+    /// The three fBm-shape values of this pass are `f64`, not `f32`: the field is
+    /// sampled in `f64`, and the atlas's tuned constants are only reproduced
+    /// exactly when the panel's value reaches the noise field at the same
+    /// precision the engine has always used.
+    pub continental_freq: f64,
+    /// Fractal persistence across the continental field's octaves. Low values
+    /// give smooth, gentle shorelines; high ones craggy coasts and micro-islands.
+    pub continental_persistence: f64,
+    /// Amplitude of the coordinate warp applied to the crust before the
+    /// continental field is read. At `0.0` landmasses are regular and rounded;
+    /// high values fold the coast into fjords, bays and chaotic peninsulas.
+    pub domain_warp_amp: f32,
+
+    // ── Orogeny & tectonics ──────────────────────────────────────────────────
+    /// Maximum vertical uplift along a tectonic fault line, as a share of the
+    /// heightmap. Low values leave low-relief shield plains; high ones raise
+    /// impassable Alpine ridges.
+    pub mountain_lift: f32,
+    /// Frequency of the fault-line field, i.e. how densely the globe is crossed
+    /// by plate boundaries. Low values yield a few isolated mountain belts,
+    /// high values a criss-crossed web of ranges.
+    pub fault_noise_freq: f64,
+    /// Half-width, in fault-field units, of the orogenic collision zone: the
+    /// thickness of a mountain belt. Small values draw sharp narrow spines,
+    /// large values broad highland plateaus.
+    pub fault_band: f32,
+
     // Hydraulic Erosion parameters (NEW)
     pub erosion_droplets: usize, // e.g. 150_000 droplets
     pub erosion_inertia: f32,    // 0.0 (no inertia) to 1.0 (droplet moves in straight line)
@@ -72,6 +109,16 @@ impl Default for WorldConfig {
             mountain_height: 0.35,
             trench_depth: 0.18,
             boundary_spread: 28.0,
+
+            // The continental field the atlas was tuned at: Earth-like sea level,
+            // continent-scale landmasses, rugged-but-not-craggy coasts.
+            sea_threshold: 0.11,
+            continental_freq: 1.05,
+            continental_persistence: 0.52,
+            domain_warp_amp: 0.32,
+            mountain_lift: 0.45,
+            fault_noise_freq: 1.60,
+            fault_band: 0.10,
 
             // Default erosion values for crisp geological weathering
             erosion_droplets: 120_000,

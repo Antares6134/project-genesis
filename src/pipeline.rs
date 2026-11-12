@@ -38,8 +38,11 @@
 //!   seed's planet.
 
 use crate::civilization::{CivilizationConfig, CivilizationWorld, generate_civilizations};
-use crate::climate::{ClimateConfig, simulate_moisture, simulate_temperature, simulate_winds};
+use crate::climate::{
+    ClimateConfig, PlanetaryMode, simulate_moisture, simulate_temperature, simulate_winds,
+};
 use crate::core::fmt::{thousands, thousands_u64};
+use crate::core::polar::PolarConfig;
 use crate::core::progress::{MapRefs, Progress, Sink};
 use crate::core::{Grid, WorldCache, WorldCacheView, cache_stage, polar, relief};
 use crate::geography::{
@@ -47,7 +50,7 @@ use crate::geography::{
     generate_provinces,
 };
 use crate::geopolitics::{
-    GeopoliticalHierarchy, build_geopolitical_hierarchy, build_ocean_hierarchy,
+    GeopoliticalHierarchy, GeopoliticsConfig, build_geopolitical_hierarchy, build_ocean_hierarchy,
     extract_ocean_graph, extract_province_graph,
 };
 use crate::hydrology::{HydrologyConfig, calculate_flow, fill_depressions_and_find_lakes};
@@ -67,6 +70,158 @@ pub const WORLD_HEIGHT: usize = 4096;
 
 /// Directory a world's cache is written to.
 pub const CACHE_DIR: &str = "./saved_seeds";
+
+// ─── THE WORLD'S OWN SETTINGS ────────────────────────────────────────────────
+
+/// Every knob a reader may turn on a world, in the units the panel speaks.
+///
+/// The engine has no single settings object of its own: each act reads its own
+/// config — [`WorldConfig`], [`ClimateConfig`], [`HydrologyConfig`] … — and
+/// [`Genesis`] rebuilds those from these values at the moment the act runs. That
+/// is what makes a change here apply to the acts **not yet grown**, exactly as
+/// the seed already does, and what leaves the world already on the canvas
+/// untouched by a setting typed after it.
+///
+/// The defaults are the engine's own: a world grown with the panel untouched is
+/// bit-for-bit the world this program has always drawn. Each value is the one
+/// the atlas was tuned at, and the safe bounds are the panel's, not the
+/// engine's — a value far outside them is still a legal config, just not a
+/// planet anyone has looked at.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorldGenSettings {
+    // ── Planetary & astronomical ─────────────────────────────────────────────
+    /// A rotating world with Hadley/Ferrel circulation, or an eyeball world
+    /// locked to its sun.
+    pub tidally_locked: bool,
+    /// Sea-level surface temperature at the equator, in °C.
+    pub equator_temp: f32,
+    /// Sea-level surface temperature at the poles, in °C.
+    pub pole_temp: f32,
+
+    // ── Polar glaciation, in degrees of latitude ─────────────────────────────
+    /// Where the permanent land ice cap begins to rise.
+    pub polar_cap_start_lat_deg: f32,
+    /// Where permanent pack ice begins to form over the ocean.
+    pub polar_belt_start_lat_deg: f32,
+
+    // ── Continental layout & coastlines ──────────────────────────────────────
+    /// The continental field's water line: more land below, more ocean above.
+    pub sea_threshold: f32,
+    /// Continental field frequency: supercontinents low, archipelago high.
+    ///
+    /// The three fBm-shape values are `f64` so that the engine's own constant
+    /// reaches the noise field at the precision it was tuned at — see
+    /// [`WorldConfig::continental_freq`].
+    pub continental_freq: f64,
+    /// Fractal persistence of the continental field: smooth shores or craggy.
+    pub continental_persistence: f64,
+    /// Amplitude of the coordinate warp: fjords and folded coasts.
+    pub domain_warp_amp: f32,
+
+    // ── Orogeny & tectonics ──────────────────────────────────────────────────
+    /// Maximum uplift along a fault line.
+    pub mountain_lift: f32,
+    /// Fault-line frequency: how densely the globe is crossed by ranges.
+    pub fault_noise_freq: f64,
+    /// Width of the orogenic collision zone: spine or plateau.
+    pub fault_band: f32,
+
+    // ── Weathering & erosion ─────────────────────────────────────────────────
+    /// Simulated raindrops. The single dominant cost of act one.
+    pub erosion_droplets: usize,
+    /// Talus slumping passes: how far cliffs soften into scree slopes.
+    pub thermal_iterations: usize,
+
+    // ── Climate & moisture ───────────────────────────────────────────────────
+    /// Global baseline rainfall before belts, shadows and continentality.
+    pub base_rainfall: f32,
+    /// Depth of the subtropical dry belt (the Hadley descent, ≈ ±26°).
+    pub hadley_dry_depth: f32,
+    /// Moisture retained in the deepest continental interior.
+    pub inland_factor_floor: f32,
+    /// Multiplier on mountain-induced precipitation.
+    pub orographic_strength: f32,
+
+    // ── Hydrology ────────────────────────────────────────────────────────────
+    /// Share of rainfall that becomes surface discharge.
+    pub runoff_coefficient: f32,
+    /// Smallest discharge, in m³/s, worth drawing as a river.
+    pub min_river_flow: f32,
+
+    // ── Geography & wastelands ───────────────────────────────────────────────
+    /// Land provinces across the planet.
+    pub num_provinces: usize,
+    /// Marine provinces across the world ocean.
+    pub ocean_num_provinces: usize,
+    /// Most ice-free land that may become impassable wilderness.
+    ///
+    /// `f64`, like the wilderness budget the province pass keeps: the share is
+    /// multiplied by a pixel count that runs to tens of millions, and the
+    /// engine's own `0.18` has to arrive intact for a default world to be the
+    /// world it has always been.
+    pub max_waste_share: f64,
+    /// Hostility above which a province is abandoned to the wild.
+    pub waste_cutoff: f32,
+
+    // ── Political hierarchy ──────────────────────────────────────────────────
+    /// Ceiling on the major continental cores.
+    pub max_continents: usize,
+}
+
+impl Default for WorldGenSettings {
+    fn default() -> Self {
+        // Each default is read off the config it came from, so that the panel's
+        // "reset" and the engine's own default can never drift apart.
+        let world = WorldConfig::default();
+        let climate = ClimateConfig::default();
+        let hydro = HydrologyConfig::default();
+        let geography = GeographyConfig::default();
+        let ocean = OceanConfig::default();
+        let geopolitics = GeopoliticsConfig::default();
+        let polar = PolarConfig::default();
+        Self {
+            tidally_locked: !matches!(climate.mode, PlanetaryMode::RotatingStandard { .. }),
+            equator_temp: climate.equator_temp,
+            pole_temp: climate.pole_temp,
+            polar_cap_start_lat_deg: polar.cap_start_lat.to_degrees(),
+            polar_belt_start_lat_deg: polar.belt_start_lat.to_degrees(),
+            sea_threshold: world.sea_threshold,
+            continental_freq: world.continental_freq,
+            continental_persistence: world.continental_persistence,
+            domain_warp_amp: world.domain_warp_amp,
+            mountain_lift: world.mountain_lift,
+            fault_noise_freq: world.fault_noise_freq,
+            fault_band: world.fault_band,
+            // The atlas grows an 8K canvas, and the budget below is *its*
+            // weathering: the crate's own `WorldConfig::default` is a small-world
+            // default (120 000 droplets) and is not what a planet is carved with.
+            erosion_droplets: 3_500_000,
+            thermal_iterations: world.thermal_iterations,
+            base_rainfall: climate.base_rainfall,
+            hadley_dry_depth: climate.hadley_dry_depth,
+            inland_factor_floor: climate.inland_factor_floor,
+            orographic_strength: climate.orographic_strength,
+            runoff_coefficient: hydro.runoff_coefficient,
+            min_river_flow: hydro.min_river_flow,
+            num_provinces: geography.num_provinces,
+            ocean_num_provinces: ocean.num_provinces,
+            max_waste_share: geography.max_waste_share,
+            waste_cutoff: geography.waste_cutoff,
+            max_continents: geopolitics.max_continents,
+        }
+    }
+}
+
+impl WorldGenSettings {
+    /// The polar geography these settings describe, in radians.
+    ///
+    /// The degrees above are what the panel shows; this is the one conversion
+    /// the engine needs, and it also enforces the planet's own rule that the sea
+    /// freezes before the land is buried (see [`PolarConfig::from_degrees`]).
+    pub fn polar_config(&self) -> PolarConfig {
+        PolarConfig::from_degrees(self.polar_cap_start_lat_deg, self.polar_belt_start_lat_deg)
+    }
+}
 
 /// The eight acts of creation, in the only order they can be run.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -289,6 +444,10 @@ pub struct Genesis {
     /// Write the world cache (every act grown so far, up to act six) whenever act
     /// three and again when act six land, overwriting the earlier save.
     autosave: bool,
+    /// The world's own constants, as the panel set them. Read by every act when
+    /// it runs, exactly like the seed, so a change applies to the acts not yet
+    /// grown and never rewrites one already on the canvas.
+    settings: WorldGenSettings,
 }
 
 impl Genesis {
@@ -315,6 +474,7 @@ impl Genesis {
             languages: None,
             timings: [None; 8],
             autosave: false,
+            settings: WorldGenSettings::default(),
         }
     }
 
@@ -348,6 +508,21 @@ impl Genesis {
     /// Whether act three or act six would write the world cache right now.
     pub fn autosave(&self) -> bool {
         self.autosave
+    }
+
+    /// The world's constants as the panel has them.
+    pub fn settings(&self) -> &WorldGenSettings {
+        &self.settings
+    }
+
+    /// Set the world's constants.
+    ///
+    /// Like the seed, these are read by each act *as it runs*, so a change
+    /// applies to the acts not yet grown and leaves the acts already done — and
+    /// every grid they produced — exactly as they are. Press ↺ on an act to grow
+    /// it again under the new settings.
+    pub fn set_settings(&mut self, settings: WorldGenSettings) {
+        self.settings = settings;
     }
 
     /// Throw away every act from `stage` onward, so that it — and all the acts
@@ -443,7 +618,17 @@ impl Genesis {
             seed: self.seed,
             num_plates: 32,
             ocean_ratio: 0.65,
-            erosion_droplets: 3_500_000,
+            // Everything the terrain pass actually reads comes from the panel:
+            // the water line, the continental field and the orogeny that folds it.
+            sea_threshold: self.settings.sea_threshold,
+            continental_freq: self.settings.continental_freq,
+            continental_persistence: self.settings.continental_persistence,
+            domain_warp_amp: self.settings.domain_warp_amp,
+            mountain_lift: self.settings.mountain_lift,
+            fault_noise_freq: self.settings.fault_noise_freq,
+            fault_band: self.settings.fault_band,
+            erosion_droplets: self.settings.erosion_droplets,
+            thermal_iterations: self.settings.thermal_iterations,
             ..Default::default()
         }
     }
@@ -451,6 +636,19 @@ impl Genesis {
     pub fn climate_config(&self) -> ClimateConfig {
         ClimateConfig {
             seed: self.seed,
+            mode: if self.settings.tidally_locked {
+                PlanetaryMode::TidallyLocked
+            } else {
+                PlanetaryMode::RotatingStandard {
+                    axial_tilt_deg: 23.5,
+                }
+            },
+            equator_temp: self.settings.equator_temp,
+            pole_temp: self.settings.pole_temp,
+            base_rainfall: self.settings.base_rainfall,
+            hadley_dry_depth: self.settings.hadley_dry_depth,
+            inland_factor_floor: self.settings.inland_factor_floor,
+            orographic_strength: self.settings.orographic_strength,
             ..Default::default()
         }
     }
@@ -458,18 +656,40 @@ impl Genesis {
     pub fn hydro_config(&self) -> HydrologyConfig {
         HydrologyConfig {
             min_lake_depth: 0.012,
-            min_river_flow: 100.0,      // major rivers and their larger branches — not the capillary web
-            major_river_flow: 3_000.0,  // the Nile: a continental trunk drawn at full width
+            // Only the rivers an atlas would ink: the major ones and their larger
+            // branches, not the capillary web.
+            min_river_flow: self.settings.min_river_flow,
+            // The Nile — a continental trunk drawn at full width.
+            major_river_flow: 3_000.0,
+            runoff_coefficient: self.settings.runoff_coefficient,
             ..Default::default()
         }
     }
 
     pub fn geography_config(&self) -> GeographyConfig {
-        GeographyConfig::default()
+        GeographyConfig {
+            num_provinces: self.settings.num_provinces,
+            max_waste_share: self.settings.max_waste_share,
+            waste_cutoff: self.settings.waste_cutoff,
+        }
     }
 
     pub fn ocean_config(&self) -> OceanConfig {
-        OceanConfig::default()
+        OceanConfig {
+            num_provinces: self.settings.ocean_num_provinces,
+            ..Default::default()
+        }
+    }
+
+    pub fn geopolitics_config(&self) -> GeopoliticsConfig {
+        GeopoliticsConfig {
+            max_continents: self.settings.max_continents,
+        }
+    }
+
+    /// Where this world's polar ice lies, in radians.
+    pub fn polar_config(&self) -> PolarConfig {
+        self.settings.polar_config()
     }
 
     pub fn civilization_config(&self) -> CivilizationConfig {
@@ -844,9 +1064,10 @@ impl Genesis {
 
     fn run_geology(&mut self, sink: &Option<Arc<Sink>>) -> Vec<String> {
         let world_config = self.world_config();
+        let polar_config = self.polar_config();
         let progress = watching(sink);
 
-        let mut result = simulate_tectonics(&world_config, &progress);
+        let mut result = simulate_tectonics(&world_config, &polar_config, &progress);
         apply_fractal_detail(&mut result.heightmap, &world_config);
         simulate_hydraulic_erosion(&mut result.heightmap, &world_config, &progress);
         simulate_thermal_erosion(&mut result.heightmap, &world_config, &progress);
@@ -994,8 +1215,13 @@ impl Genesis {
         // It is pinned into a *copy*: act two's climate stays untouched, so a
         // rewind to act three re-freezes from the same honest grid rather than
         // layering a second belt over the first.
-        let polar_ice =
-            polar::permanent_polar_ice(&heightmap, &is_lake, relief::SEA_LEVEL, self.seed);
+        let polar_ice = polar::permanent_polar_ice(
+            &heightmap,
+            &is_lake,
+            relief::SEA_LEVEL,
+            self.seed,
+            &self.polar_config(),
+        );
         let mut frozen = (*self
             .temperature
             .clone()
@@ -1028,8 +1254,13 @@ impl Genesis {
         ) else {
             return;
         };
-        let polar_ice =
-            polar::permanent_polar_ice(&heightmap, &is_lake, relief::SEA_LEVEL, self.seed);
+        let polar_ice = polar::permanent_polar_ice(
+            &heightmap,
+            &is_lake,
+            relief::SEA_LEVEL,
+            self.seed,
+            &self.polar_config(),
+        );
         let mut frozen = (*temperature).clone();
         polar::freeze_polar_ice(&mut frozen, &polar_ice);
 
@@ -1113,6 +1344,9 @@ impl Genesis {
             &world.heightmap,
             &is_lake,
             relief::SEA_LEVEL,
+            // The ceiling on continental cores is the panel's; the clustering
+            // below turns whatever cores it is given into a hierarchy.
+            self.geopolitics_config().max_continents,
         );
         // The clustering passes never see a pixel, so the pixel grids they are
         // painted from travel with the progress handle.
@@ -1437,6 +1671,135 @@ mod tests {
         assert!(
             genesis.save_cache().is_err(),
             "there is no world yet, so there is nothing to write"
+        );
+    }
+
+    // ─── THE WORLD'S OWN SETTINGS ────────────────────────────────────────────
+
+    /// A world grown with the panel untouched must be the world this program has
+    /// always drawn: every default is the constant the engine was tuned at, and
+    /// each one lands in the config of the act that reads it.
+    #[test]
+    fn the_default_settings_rebuild_the_engine_s_own_configs() {
+        let genesis = Genesis::new(42);
+        assert_eq!(
+            *genesis.settings(),
+            WorldGenSettings::default(),
+            "a fresh world starts at the engine's defaults"
+        );
+
+        let world = genesis.world_config();
+        assert_eq!(world.sea_threshold, 0.11);
+        assert_eq!(world.continental_freq, 1.05);
+        assert_eq!(world.continental_persistence, 0.52);
+        assert_eq!(world.domain_warp_amp, 0.32);
+        assert_eq!(world.mountain_lift, 0.45);
+        assert_eq!(world.fault_noise_freq, 1.60);
+        assert_eq!(world.fault_band, 0.10);
+        assert_eq!(world.erosion_droplets, 3_500_000);
+        assert_eq!(world.thermal_iterations, 4);
+
+        let climate = genesis.climate_config();
+        assert_eq!(climate.mode, PlanetaryMode::RotatingStandard { axial_tilt_deg: 23.5 });
+        assert_eq!(climate.equator_temp, 32.0);
+        assert_eq!(climate.pole_temp, -28.0);
+        assert_eq!(climate.base_rainfall, 0.45);
+        assert_eq!(climate.hadley_dry_depth, 0.48);
+        assert_eq!(climate.inland_factor_floor, 0.40);
+        assert_eq!(climate.orographic_strength, 15.0);
+
+        let hydro = genesis.hydro_config();
+        assert_eq!(hydro.runoff_coefficient, 0.35);
+        assert_eq!(hydro.min_river_flow, 100.0);
+
+        let geography = genesis.geography_config();
+        assert_eq!(geography.num_provinces, 30_000);
+        assert_eq!(geography.max_waste_share, 0.18);
+        assert_eq!(geography.waste_cutoff, 0.68);
+
+        assert_eq!(genesis.ocean_config().num_provinces, 2_500);
+        assert_eq!(genesis.geopolitics_config().max_continents, 7);
+        assert_eq!(genesis.polar_config(), crate::core::polar::PolarConfig::default());
+    }
+
+    /// A constant a reader moves reaches the act that reads it — and only that
+    /// act's config: the settings are rebuilt into each config as the act runs,
+    /// which is what makes a change apply to the acts not yet grown.
+    #[test]
+    fn a_setting_reaches_the_config_of_the_act_that_reads_it() {
+        let mut genesis = Genesis::new(42);
+        let settings = WorldGenSettings {
+            tidally_locked: true,
+            equator_temp: 48.0,
+            polar_cap_start_lat_deg: 50.0,
+            polar_belt_start_lat_deg: 45.0,
+            sea_threshold: 0.05,
+            continental_freq: 3.0,
+            mountain_lift: 0.80,
+            erosion_droplets: 500_000,
+            base_rainfall: 0.80,
+            orographic_strength: 4.0,
+            runoff_coefficient: 0.60,
+            min_river_flow: 250.0,
+            num_provinces: 12_000,
+            ocean_num_provinces: 1_000,
+            max_waste_share: 0.0,
+            waste_cutoff: 0.45,
+            max_continents: 3,
+            ..WorldGenSettings::default()
+        };
+        genesis.set_settings(settings);
+
+        let world = genesis.world_config();
+        assert_eq!(world.sea_threshold, 0.05);
+        assert_eq!(world.continental_freq, 3.0);
+        assert_eq!(world.mountain_lift, 0.80);
+        assert_eq!(world.erosion_droplets, 500_000);
+
+        let climate = genesis.climate_config();
+        assert_eq!(climate.mode, PlanetaryMode::TidallyLocked);
+        assert_eq!(climate.equator_temp, 48.0);
+        assert_eq!(climate.base_rainfall, 0.80);
+        assert_eq!(climate.orographic_strength, 4.0);
+
+        assert_eq!(genesis.hydro_config().runoff_coefficient, 0.60);
+        assert_eq!(genesis.hydro_config().min_river_flow, 250.0);
+
+        let geography = genesis.geography_config();
+        assert_eq!(geography.num_provinces, 12_000);
+        assert_eq!(geography.max_waste_share, 0.0);
+        assert_eq!(geography.waste_cutoff, 0.45);
+
+        assert_eq!(genesis.ocean_config().num_provinces, 1_000);
+        assert_eq!(genesis.geopolitics_config().max_continents, 3);
+
+        let polar = genesis.polar_config();
+        assert!((polar.cap_start_lat.to_degrees() - 50.0).abs() < 1.0e-3);
+        assert!((polar.belt_start_lat.to_degrees() - 45.0).abs() < 1.0e-3);
+    }
+
+    /// The settings are read by each act as it runs, so moving one leaves every
+    /// act already grown — and the world they produced — exactly as it was.
+    #[test]
+    fn changing_a_setting_leaves_the_acts_already_grown_alone() {
+        let mut genesis = Genesis::for_test(42, Stage::Geology);
+        let grown = genesis.atlas().expect("act one has run");
+        let before = grown.heightmap.clone();
+
+        genesis.set_settings(WorldGenSettings {
+            sea_threshold: 0.20,
+            ..WorldGenSettings::default()
+        });
+
+        assert_eq!(
+            genesis.stage(),
+            Some(Stage::Geology),
+            "no act is un-done by a setting"
+        );
+        let after = genesis.atlas().expect("the world is still there");
+        assert!(
+            Arc::ptr_eq(&before, &after.heightmap),
+            "and the heightmap act one made is not rebuilt"
         );
     }
 
