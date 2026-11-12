@@ -53,8 +53,8 @@ use crate::geopolitics::{
 use crate::hydrology::{HydrologyConfig, calculate_flow, fill_depressions_and_find_lakes};
 use crate::language::{LanguageConfig, LanguagesWorld, generate_languages};
 use crate::terrain::{
-    WorldConfig, apply_fractal_detail, simulate_hydraulic_erosion, simulate_tectonics,
-    simulate_thermal_erosion,
+    WorldConfig, apply_fractal_detail, form_sea_straits, simulate_hydraulic_erosion,
+    simulate_tectonics, simulate_thermal_erosion,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -851,11 +851,22 @@ impl Genesis {
         simulate_hydraulic_erosion(&mut result.heightmap, &world_config, &progress);
         simulate_thermal_erosion(&mut result.heightmap, &world_config, &progress);
 
+        // The terrain is finished. Any basin walled off from the world ocean
+        // that is too large to be a lake is now given its Gibraltar, while the
+        // surface is still act one's to change: act two's climate then reads the
+        // sea, and act three's flood finds it already joined to the ocean.
+        let straits = form_sea_straits(
+            &mut result.heightmap,
+            relief::SEA_LEVEL,
+            &world_config,
+            &progress,
+        );
+
         let profile = relief_profile(&result.heightmap);
         report_relief(&profile);
         self.heightmap = Some(Arc::new(result.heightmap));
 
-        vec![
+        let mut summary = vec![
             format!(
                 "Surface: {:.1}% land / {:.1}% ocean",
                 100.0 * profile.land_share,
@@ -866,7 +877,21 @@ impl Genesis {
                 thousands(profile.peak),
                 thousands(-profile.trench).replacen('-', "−", 1)
             ),
-        ]
+        ];
+        if !straits.straits.is_empty() {
+            let channel: usize = straits
+                .straits
+                .iter()
+                .map(|strait| strait.channel_cells)
+                .sum();
+            summary.push(format!(
+                "Opened {} landlocked sea{} · {} px of strait",
+                straits.straits.len(),
+                if straits.straits.len() == 1 { "" } else { "s" },
+                thousands_u64(channel as u64),
+            ));
+        }
+        summary
     }
 
     // ─── 2. ATMOSPHERIC CLIMATE ──────────────────────────────────────────────

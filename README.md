@@ -194,7 +194,10 @@ scaled up because it is one connected, far larger domain.
 
 1. **Terrain** — plates, fractal detail and hydraulic + thermal erosion, evaluated as 3D noise
    on a unit sphere, then sealed under permanent polar ice ([`src/terrain/`](src/terrain/),
-   [`src/core/polar.rs`](src/core/polar.rs)).
+   [`src/core/polar.rs`](src/core/polar.rs)). Any landlocked basin below the water line that is
+   large enough to be a sea rather than a lake is then joined to the world ocean by a natural
+   strait cut through its lowest saddle
+   ([`src/terrain/straits.rs`](src/terrain/straits.rs)).
 2. **Climate** — ITCZ convection, Hadley-cell downwelling, Coriolis trade winds and
    orographic rain shadows, with an altitude lapse rate ([`src/climate/`](src/climate/)).
 3. **Hydrology** — Barnes Priority-Flood depression filling, rift lakes and D8 flow
@@ -293,7 +296,7 @@ older build has no such header and is still listed, but without the acts.
 | Path | Contents |
 | :--- | :--- |
 | [`src/core/`](src/core/) | Grid, spherical geometry, the vertical datum, polar ice, the binary world caches. |
-| [`src/terrain/`](src/terrain/) | Tectonics, fractal detail, hydraulic and thermal erosion. |
+| [`src/terrain/`](src/terrain/) | Tectonics, fractal detail, hydraulic and thermal erosion, sea straits. |
 | [`src/climate/`](src/climate/) | Wind cells, temperature and moisture. |
 | [`src/hydrology/`](src/hydrology/) | Depression fill, lake finding, water flow and rivers. |
 | [`src/geography/`](src/geography/) | Land and ocean province generation. |
