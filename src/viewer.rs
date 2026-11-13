@@ -1,5 +1,8 @@
+mod i18n;
 mod settings;
 mod themes;
+
+pub use i18n::Language;
 
 use crate::civilization::SocietyTier;
 use crate::civilization::{Civilization, CivilizationWorld};
@@ -293,12 +296,17 @@ pub struct MapViewer {
     /// Whether the atlas's type scale has been installed on this frame's style.
     /// A style change makes egui rebuild its font atlas, so it is done once.
     style_installed: bool,
+    /// The language the interface is read in. English until the reader — or the
+    /// desktop's locale — says otherwise.
+    language: Language,
 }
 
 /// The live plate of an act in flight: its label, and the texture it is painted
 /// into, which is replaced as the act reports new ground.
 struct LivePlate {
-    label: String,
+    /// The act's own sub-step label, kept in English so it can be translated
+    /// afresh when the reader changes language mid-run.
+    label: &'static str,
     texture: TextureHandle,
 }
 
@@ -315,17 +323,21 @@ const GENESIS_PANEL_MAX: f32 = 520.0;
 /// One spelling of it, used by the genesis panel, by the strip over the live
 /// plate and by the plate's own caption — so the reader can never be told three
 /// slightly different things about the same act.
-fn stage_progress(job: Option<&StageJob>) -> String {
+fn stage_progress(job: Option<&StageJob>, language: Language) -> String {
     match job {
         Some(job) if job.total > 0 => format!(
             "{} — {:.0}%",
-            job.sub,
+            language.text(job.sub),
             100.0 * job.done as f32 / job.total as f32
         ),
         // A flood fill that pops until its heap is empty has no scale to be a
         // percentage of: it reports what it has drained so far instead.
-        Some(job) => format!("{} — {}", job.sub, thousands(job.done as f32)),
-        None => "working".to_string(),
+        Some(job) => format!(
+            "{} — {}",
+            language.text(job.sub),
+            thousands(job.done as f32)
+        ),
+        None => language.text("working").to_string(),
     }
 }
 
@@ -333,43 +345,43 @@ fn stage_progress(job: Option<&StageJob>) -> String {
 ///
 /// A world cache is hundreds of megabytes, so bytes would be a row of digits
 /// that says less than "544 MB" does.
-fn cache_size(bytes: u64) -> String {
+fn cache_size(bytes: u64, language: Language) -> String {
     const MB: f64 = 1024.0 * 1024.0;
     let megabytes = bytes as f64 / MB;
     if megabytes >= 1024.0 {
-        format!("{:.1} GB", megabytes / 1024.0)
+        language.fill("{} GB", &[&format!("{:.1}", megabytes / 1024.0)])
     } else {
-        format!("{megabytes:.0} MB")
+        language.fill("{} MB", &[&format!("{megabytes:.0}")])
     }
 }
 
 /// How long ago a cache was written, in the few words a row has room for.
-fn cache_age(modified: Option<SystemTime>) -> String {
+fn cache_age(modified: Option<SystemTime>, language: Language) -> String {
     let Some(modified) = modified else {
-        return "at an unknown time".to_string();
+        return language.text("at an unknown time").to_string();
     };
     let Ok(elapsed) = SystemTime::now().duration_since(modified) else {
         // A clock that disagrees with the file's timestamp is not worth a wrong
         // age: say only that it is there.
-        return "just now".to_string();
+        return language.text("just now").to_string();
     };
     let secs = elapsed.as_secs();
     match secs {
-        0..=59 => "just now".to_string(),
-        60..=3_599 => format!("{} min ago", secs / 60),
-        3_600..=86_399 => format!("{} h ago", secs / 3_600),
-        86_400..=2_591_999 => format!("{} d ago", secs / 86_400),
-        _ => format!("{} mo ago", secs / 2_592_000),
+        0..=59 => language.text("just now").to_string(),
+        60..=3_599 => language.fill("{} min ago", &[&(secs / 60)]),
+        3_600..=86_399 => language.fill("{} h ago", &[&(secs / 3_600)]),
+        86_400..=2_591_999 => language.fill("{} d ago", &[&(secs / 86_400)]),
+        _ => language.fill("{} mo ago", &[&(secs / 2_592_000)]),
     }
 }
 
 /// Which acts a save holds, in the few words a row has room for: `acts 1–5`, or
 /// `a saved world` when the file predates the header that names them — the acts
 /// are then knowable only by decoding the payload, which the list does not do.
-fn acts_saved(acts: Option<u8>) -> String {
+fn acts_saved(acts: Option<u8>, language: Language) -> String {
     match acts {
-        Some(acts) => format!("acts 1–{acts}"),
-        None => "a saved world".to_string(),
+        Some(acts) => language.fill("acts 1–{}", &[&acts]),
+        None => language.text("a saved world").to_string(),
     }
 }
 
@@ -534,14 +546,22 @@ fn measure_relief(heightmap: &Grid<f32>) -> ReliefExtremes {
 }
 
 /// `52.3° N · 14.8° E` — a map position, written the way an atlas writes it.
-fn lat_lon_label(lat: f32, lon: f32) -> String {
+fn lat_lon_label(lat: f32, lon: f32, language: Language) -> String {
     format!(
         "{:.1}° {} · {:.1}° {}",
         lat.abs(),
-        if lat >= 0.0 { "N" } else { "S" },
+        language.text(if lat >= 0.0 { "N" } else { "S" }),
         lon.abs(),
-        if lon >= 0.0 { "E" } else { "W" },
+        language.text(if lon >= 0.0 { "E" } else { "W" }),
     )
+}
+
+/// `1. Geology & Erosion` — an act's number and its name, in the reader's tongue.
+///
+/// The name itself lives on [`Stage`], in English, because the console reports
+/// are English; this is the one place the viewer puts the two together.
+fn act_label(language: Language, stage: Stage) -> String {
+    format!("{}. {}", stage.index(), language.text(stage.title()))
 }
 
 /// The ink a political plate is drawn in: a warm near-black, so a frontier reads as
@@ -864,6 +884,7 @@ fn civilization_dossier(
     civ: &Civilization,
     world: &CivilizationWorld,
     languages: &LanguagesWorld,
+    lang: Language,
 ) {
     // A hover card has to stay a card: at 430 px it never swallows the map.
     ui.set_max_width(CARD_WIDTH);
@@ -904,9 +925,9 @@ fn civilization_dossier(
     caption(
         ui,
         if civ.culture.government.is_state() {
-            "A state"
+            lang.text("A state")
         } else {
-            "A pre-state society"
+            lang.text("A pre-state society")
         },
     );
 
@@ -930,30 +951,32 @@ fn civilization_dossier(
                 .strong(),
             );
         });
-        ui.label(format!("Language: {}", language.name));
-        ui.label(format!("Autonym: {}", language.autonym));
+        ui.label(lang.fill("Language: {}", &[&language.name]));
+        ui.label(lang.fill("Autonym: {}", &[&language.autonym]));
         caption(
             ui,
-            format!("Urheimat: {}", languages.urheimat_label(family.id)),
+            lang.fill("Urheimat: {}", &[&languages.urheimat_label(family.id)]),
         );
     }
 
     ui.separator();
-    ui.label(format!(
+    ui.label(lang.fill(
         "{} people · {} provinces · {} km²",
-        thousands_u64(civ.population),
-        civ.provinces.len(),
-        thousands(civ.area_km2)
+        &[
+            &thousands_u64(civ.population),
+            &civ.provinces.len(),
+            &thousands(civ.area_km2),
+        ],
     ));
     if civ.contacts.is_empty() {
-        caption(ui, "No neighbour within reach.");
+        caption(ui, lang.text("No neighbour within reach."));
     } else {
         let neighbours: Vec<&str> = civ
             .contacts
             .iter()
             .map(|contact| world.name_of(contact.other))
             .collect();
-        caption(ui, format!("Neighbours: {}", neighbours.join(", ")));
+        caption(ui, lang.fill("Neighbours: {}", &[&neighbours.join(", ")]));
     }
 }
 
@@ -965,7 +988,13 @@ fn civilization_dossier(
 /// widens the panel's own frame: the map, painted afterwards, then covers the
 /// overhang — and the reader loses the left end of every over-long row behind
 /// the map. Keep every row of a legend inside the width it was given.
-fn society_key_row(ui: &mut egui::Ui, tier: SocietyTier, count: usize, share: f32) {
+fn society_key_row(
+    ui: &mut egui::Ui,
+    tier: SocietyTier,
+    count: usize,
+    share: f32,
+    language: Language,
+) {
     ui.horizontal(|ui| {
         themes::swatch(ui, tier.legend_color());
         // `.wrap()` is the whole point: egui lets a label in a horizontal row
@@ -974,9 +1003,13 @@ fn society_key_row(ui: &mut egui::Ui, tier: SocietyTier, count: usize, share: f3
         // panel its left edge.
         ui.add(
             egui::Label::new(
-                egui::RichText::new(format!(
-                    "{} — {count} societies · {share:.1}% of the land",
-                    tier.label(),
+                egui::RichText::new(language.fill(
+                    "{} — {} societies · {}% of the land",
+                    &[
+                        &language.text(tier.label()),
+                        &count,
+                        &format!("{share:.1}"),
+                    ],
                 ))
                 .small(),
             )
@@ -984,7 +1017,7 @@ fn society_key_row(ui: &mut egui::Ui, tier: SocietyTier, count: usize, share: f3
         );
     })
     .response
-    .on_hover_text(tier.describe());
+    .on_hover_text(language.text(tier.describe()));
 }
 
 /// One society's entry in the dawn legend: its colour and its name, as a button
@@ -994,13 +1027,19 @@ fn society_key_row(ui: &mut egui::Ui, tier: SocietyTier, count: usize, share: f3
 /// A society's name is *data* — the atlas did not choose it — so the button
 /// truncates rather than widen the row. Widening a row widens the panel's frame
 /// (see [`society_key_row`]), and the map then covers the panel's left edge.
-fn society_entry(ui: &mut egui::Ui, color: [u8; 3], name: &str, selected: bool) -> bool {
+fn society_entry(
+    ui: &mut egui::Ui,
+    color: [u8; 3],
+    name: &str,
+    selected: bool,
+    language: Language,
+) -> bool {
     let mut clicked = false;
     ui.horizontal(|ui| {
         themes::swatch(ui, color);
         clicked = ui
             .add(egui::Button::selectable(selected, egui::RichText::new(name).strong()).truncate())
-            .on_hover_text("Click to fly to this society's heartland")
+            .on_hover_text(language.text("Click to fly to this society's heartland"))
             .clicked();
     });
     clicked
@@ -1015,6 +1054,25 @@ impl MapViewer {
     pub fn new(genesis: Genesis) -> Self {
         let world = genesis.atlas();
         Self::with_world(genesis, world)
+    }
+
+    /// The atlas in the reader's own language, chosen once when the window opens.
+    pub fn with_language(mut self, language: Language) -> Self {
+        self.language = language;
+        self
+    }
+
+    /// One interface line in the language the atlas is being read in.
+    ///
+    /// English is the key: the line is written at the call site, and the
+    /// translation table holds the other tongues (see [`i18n`]).
+    fn t(&self, english: &'static str) -> &'static str {
+        self.language.text(english)
+    }
+
+    /// A line with `{}` placeholders, filled in order in the current language.
+    fn tf(&self, template: &'static str, args: &[&dyn std::fmt::Display]) -> String {
+        self.language.fill(template, args)
     }
 
     /// An atlas over a world that is already built.
@@ -1070,6 +1128,9 @@ impl MapViewer {
             selected_civ: None,
             selected_family: None,
             style_installed: false,
+            // Deterministic on purpose: the tests and the headless plates read
+            // English, and `main` decides what the desktop's reader asked for.
+            language: Language::English,
         }
     }
 
@@ -1117,7 +1178,10 @@ impl MapViewer {
             worker_ctx.request_repaint();
         });
 
-        self.notice = Some(format!("⏳ {}. {} — working…", stage.index(), stage.title()));
+        self.notice = Some(self.tf(
+            "⏳ {}. {} — working…",
+            &[&stage.index(), &self.t(stage.title())],
+        ));
         self.job = Some(StageJob {
             stage,
             progress: progress_rx,
@@ -1160,7 +1224,7 @@ impl MapViewer {
                     let image = ColorImage::from_rgba_unmultiplied([width, height], &rgba);
                     let texture = ctx.load_texture("live_preview", image, TextureOptions::NEAREST);
                     self.live = Some(LivePlate {
-                        label: label.to_string(),
+                        label,
                         texture,
                     });
                 }
@@ -1196,10 +1260,9 @@ impl MapViewer {
                 self.world = self.genesis.atlas();
                 self.live = None;
                 self.texture = None;
-                self.notice = Some(format!(
+                self.notice = Some(self.tf(
                     "⚠ {}. {} did not finish — the world is as it was before it started",
-                    stage.index(),
-                    stage.title()
+                    &[&stage.index(), &self.t(stage.title())],
                 ));
             }
         }
@@ -1223,11 +1286,13 @@ impl MapViewer {
         self.selected_family = None;
         // What the act made, in one line: its figures are the panel's own report
         // of a finished act, and they belong beside the acts, not in a log.
-        let mut line = format!(
-            "✔ {}. {} — {:.1}s",
-            report.stage.index(),
-            report.stage.title(),
-            report.secs
+        let mut line = self.tf(
+            "✔ {}. {} — {}s",
+            &[
+                &report.stage.index(),
+                &self.t(report.stage.title()),
+                &format!("{:.1}", report.secs),
+            ],
         );
         if !report.summary.is_empty() {
             line.push_str(" · ");
@@ -1269,14 +1334,16 @@ impl MapViewer {
             // costs nothing and is exactly what "a new world" means.
             self.world = self.genesis.atlas();
             self.forget_world_view();
-            self.notice = Some(format!(
-                "🌱 A new world: seed {seed}. Press “1. Geology & Erosion” to grow it."
+            self.notice = Some(self.tf(
+                "🌱 A new world: seed {}. Press “{}” to grow it.",
+                &[&seed, &act_label(self.language, Stage::Geology)],
             ));
         } else {
             // The acts already grown stay exactly as they are; only the acts ahead
             // will grow from the new seed.
-            self.notice = Some(format!(
-                "🔀 Seed is now {seed} — the acts already grown stay; the next act grows from {seed}."
+            self.notice = Some(self.tf(
+                "🔀 Seed is now {} — the acts already grown stay; the next act grows from {}.",
+                &[&seed, &seed],
             ));
         }
     }
@@ -1310,24 +1377,21 @@ impl MapViewer {
                 // The save that was on disk is the one just adopted, and it says
                 // how much of the world is already done.
                 let (acts, next) = (stage.index(), stage.index() + 1);
-                self.notice = Some(format!(
-                    "✔ Adopted the cached world for seed {} — acts 1–{acts} are already done; \
-                     act {next} is next",
-                    self.genesis.seed()
+                self.notice = Some(self.tf(
+                    "✔ Adopted the cached world for seed {} — acts 1–{} are already done; act {} is next",
+                    &[&self.genesis.seed(), &acts, &next],
                 ));
             }
             Err(LoadError::Missing(path)) => {
-                self.cache_notice = Some(format!(
-                    "No saved world for seed {} — '{}' is not there. Press Save below, \
-                     or pick a world from Saved worlds below.",
-                    self.genesis.seed(),
-                    path.display()
+                self.cache_notice = Some(self.tf(
+                    "No saved world for seed {} — '{}' is not there. Press Save below, or pick a world from Saved worlds below.",
+                    &[&self.genesis.seed(), &path.display().to_string()],
                 ));
             }
             Err(LoadError::Unreadable(path, why)) => {
-                self.cache_notice = Some(format!(
-                    "'{}' could not be read, so there is nothing to load ({why}).",
-                    path.display()
+                self.cache_notice = Some(self.tf(
+                    "'{}' could not be read, so there is nothing to load ({}).",
+                    &[&path.display().to_string(), &why],
                 ));
             }
         }
@@ -1370,14 +1434,17 @@ impl MapViewer {
         match outcome {
             Ok(path) => {
                 self.cache_notice = None;
-                self.notice = Some(format!(
-                    "✔ Saved acts 1–{acts} for seed {seed} to '{}'",
-                    path.display()
+                self.notice = Some(self.tf(
+                    "✔ Saved acts 1–{} for seed {} to '{}'",
+                    &[&acts, &seed, &path.display().to_string()],
                 ));
                 self.cached_dirty = true;
             }
             Err(why) => {
-                self.cache_notice = Some(format!("The world could not be saved ({why:?})."));
+                self.cache_notice = Some(self.tf(
+                    "The world could not be saved ({}).",
+                    &[&format!("{why:?}")],
+                ));
             }
         }
     }
@@ -1415,8 +1482,9 @@ impl MapViewer {
         self.world = None;
         self.forget_world_view();
         self.cache_notice = None;
-        self.notice = Some(format!(
-            "↺ Seed {seed} cleared — press “1. Geology & Erosion” to grow it again."
+        self.notice = Some(self.tf(
+            "↺ Seed {} cleared — press “{}” to grow it again.",
+            &[&seed, &act_label(self.language, Stage::Geology)],
         ));
     }
 
@@ -1436,11 +1504,9 @@ impl MapViewer {
             .map(|world| measure_relief(&world.heightmap));
         self.forget_world_view();
         self.cache_notice = None;
-        self.notice = Some(format!(
+        self.notice = Some(self.tf(
             "↺ Un-done act {} and everything after it — press “{}. {}” to grow it again.",
-            stage.index(),
-            stage.index(),
-            stage.title()
+            &[&stage.index(), &stage.index(), &self.t(stage.title())],
         ));
     }
 
@@ -1493,14 +1559,18 @@ impl MapViewer {
             painter.text(
                 egui::pos2(rect.center().x, at.max.y + 18.0),
                 Align2::CENTER_CENTER,
-                format!("🔴 {} — {}", live.label, stage_progress(self.job.as_ref())),
+                format!(
+                    "🔴 {} — {}",
+                    self.t(live.label),
+                    stage_progress(self.job.as_ref(), self.language)
+                ),
                 FontId::proportional(TEXT_BODY),
                 Color32::from_rgb(196, 204, 224),
             );
             painter.text(
                 egui::pos2(rect.center().x, at.max.y + 40.0),
                 Align2::CENTER_CENTER,
-                format!("Growing a world — seed {}", self.genesis.seed()),
+                self.tf("Growing a world — seed {}", &[&self.genesis.seed()]),
                 FontId::proportional(TEXT_BODY),
                 Color32::from_rgb(150, 164, 190),
             );
@@ -1508,9 +1578,9 @@ impl MapViewer {
         }
 
         let title = if self.job.is_some() {
-            "Growing a world…"
+            self.t("Growing a world…")
         } else {
-            "No world yet"
+            self.t("No world yet")
         };
         painter.text(
             rect.center() - egui::vec2(0.0, 18.0),
@@ -1522,10 +1592,9 @@ impl MapViewer {
         painter.text(
             rect.center() + egui::vec2(0.0, 20.0),
             Align2::CENTER_CENTER,
-            format!(
-                "Seed {}. Every act of creation is a button in the Genesis panel: \
-                 begin with 1. Geology & Erosion.",
-                self.genesis.seed()
+            self.tf(
+                "Seed {}. Every act of creation is a button in the Genesis panel: begin with {}.",
+                &[&self.genesis.seed(), &act_label(self.language, Stage::Geology)],
             ),
             FontId::proportional(TEXT_BODY),
             Color32::from_rgb(150, 164, 190),
@@ -1561,10 +1630,10 @@ impl MapViewer {
                     .id_salt("genesis_scroll")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        panel_title(ui, "🧬 Genesis");
+                        panel_title(ui, self.t("🧬 Genesis"));
                         caption(
                             ui,
-                            "A world is grown one act at a time. Watch each one as it happens.",
+                            self.t("A world is grown one act at a time. Watch each one as it happens."),
                         );
                         ui.separator();
                         self.seed_row(ui, busy);
@@ -1582,7 +1651,7 @@ impl MapViewer {
     /// Folded away until it is wanted — a reader growing a world presses the acts,
     /// not the cache — but open it and everything about the save is there.
     fn world_data_section(&mut self, ui: &mut egui::Ui, busy: bool) {
-        egui::CollapsingHeader::new("💾 World data")
+        egui::CollapsingHeader::new(self.t("💾 World data"))
             .id_salt("world_data")
             .default_open(true)
             .show(ui, |ui| {
@@ -1597,7 +1666,7 @@ impl MapViewer {
             .iter()
             .filter(|stage| matches!(self.genesis.state(**stage), StageState::Done { .. }))
             .count();
-        egui::CollapsingHeader::new(format!("🪜 The acts  ·  {grown} of 8 grown"))
+        egui::CollapsingHeader::new(self.tf("🪜 The acts  ·  {} of 8 grown", &[&grown]))
             // The count is in the label, so the id must not be: an act finishing
             // must not snap the list shut.
             .id_salt("acts")
@@ -1620,7 +1689,7 @@ impl MapViewer {
     /// has to do is hand the pipeline whatever the reader left behind.
     fn settings_section(&mut self, ui: &mut egui::Ui, busy: bool) {
         let mut settings = self.genesis.settings().clone();
-        if settings::advanced_settings(ui, &mut settings, busy) {
+        if settings::advanced_settings(ui, &mut settings, busy, self.language) {
             self.genesis.set_settings(settings);
         }
     }
@@ -1629,7 +1698,7 @@ impl MapViewer {
     /// being grown from it.
     fn seed_row(&mut self, ui: &mut egui::Ui, busy: bool) {
         ui.horizontal(|ui| {
-            ui.label("Seed");
+            ui.label(self.t("Seed"));
             let typed = ui
                 .add_enabled(
                     !busy,
@@ -1638,7 +1707,7 @@ impl MapViewer {
                 .changed();
             if ui
                 .add_enabled(!busy, egui::Button::new("🎲"))
-                .on_hover_text("Draw a seed the world has never seen")
+                .on_hover_text(self.t("Draw a seed the world has never seen"))
                 .clicked()
             {
                 self.random_seed();
@@ -1650,17 +1719,22 @@ impl MapViewer {
         // A seed is any whole number, and the only way to enter something that is
         // not one is to type it.
         if self.seed_text.trim().parse::<u64>().is_err() {
-            caption(ui, "A seed is a whole number — try 42, or press 🎲.");
+            caption(
+                ui,
+                self.t("A seed is a whole number — try 42, or press 🎲."),
+            );
             return;
         }
         let config = self.genesis.world_config();
         caption(
             ui,
-            format!(
-                "Tectonics: {} plates · {:.0}% ocean · {} erosion droplets",
-                config.num_plates,
-                config.ocean_ratio * 100.0,
-                thousands(config.erosion_droplets as f32)
+            self.tf(
+                "Tectonics: {} plates · {}% ocean · {} erosion droplets",
+                &[
+                    &config.num_plates,
+                    &format!("{:.0}", config.ocean_ratio * 100.0),
+                    &thousands(config.erosion_droplets as f32),
+                ],
             ),
         );
     }
@@ -1694,11 +1768,11 @@ impl MapViewer {
         let typed = self.seed_text.trim().parse::<u64>().ok();
         let cache = typed.and_then(cached_world);
         let load_hint = if busy {
-            "Wait for the act in flight to finish"
+            self.t("Wait for the act in flight to finish")
         } else if typed.is_none() {
-            "A seed is a whole number — Load needs one"
+            self.t("A seed is a whole number — Load needs one")
         } else {
-            "There is no cache for this seed yet"
+            self.t("There is no cache for this seed yet")
         };
 
         // A save holds every act grown so far, capped at six, so it is offered
@@ -1706,20 +1780,23 @@ impl MapViewer {
         let stage = self.genesis.stage();
         let saveable = stage.is_some_and(|stage| stage.index() <= Stage::HydroPolitics.index());
         let save_hint = if busy {
-            "Wait for the act in flight to finish"
+            self.t("Wait for the act in flight to finish")
         } else {
-            "Grow the world first — there is nothing to save yet"
+            self.t("Grow the world first — there is nothing to save yet")
         };
 
         ui.horizontal(|ui| {
             let load = ui
-                .add_enabled(cache.is_some() && !busy, egui::Button::new("📂 Load"))
+                .add_enabled(
+                    cache.is_some() && !busy,
+                    egui::Button::new(self.t("📂 Load")),
+                )
                 .on_hover_text(match &cache {
-                    Some(cache) => format!(
+                    Some(cache) => self.tf(
                         "Read {} and pick the panel up where it left off",
-                        cache_path(cache.seed).display()
+                        &[&cache_path(cache.seed).display().to_string()],
                     ),
-                    None => "Read this seed's saved world".to_string(),
+                    None => self.t("Read this seed's saved world").to_string(),
                 })
                 .on_disabled_hover_text(load_hint);
             if load.clicked()
@@ -1730,11 +1807,13 @@ impl MapViewer {
             }
 
             let save = ui
-                .add_enabled(saveable && !busy, egui::Button::new("💾 Save"))
-                .on_hover_text(
-                    "Write every act grown so far, up to act 6, to \
-                     saved_seeds/world_<seed>.bin",
+                .add_enabled(
+                    saveable && !busy,
+                    egui::Button::new(self.t("💾 Save")),
                 )
+                .on_hover_text(self.t(
+                    "Write every act grown so far, up to act 6, to saved_seeds/world_<seed>.bin",
+                ))
                 .on_disabled_hover_text(save_hint);
             if save.clicked() {
                 self.save_world();
@@ -1744,18 +1823,23 @@ impl MapViewer {
         match (&cache, typed) {
             (Some(cache), _) => caption(
                 ui,
-                format!(
+                self.tf(
                     "seed {} · {} · saved {} · Load picks up where it left off",
-                    cache.seed,
-                    cache_size(cache.bytes),
-                    cache_age(cache.modified)
+                    &[
+                        &cache.seed,
+                        &cache_size(cache.bytes, self.language),
+                        &cache_age(cache.modified, self.language),
+                    ],
                 ),
             ),
             (None, Some(seed)) => caption(
                 ui,
-                format!("No saved world for seed {seed} yet — press Save and grow one."),
+                self.tf(
+                    "No saved world for seed {} yet — press Save and grow one.",
+                    &[&seed],
+                ),
             ),
-            (None, None) => caption(ui, "A seed is a whole number — Load needs one."),
+            (None, None) => caption(ui, self.t("A seed is a whole number — Load needs one.")),
         }
 
         if let Some(notice) = &self.cache_notice {
@@ -1776,12 +1860,12 @@ impl MapViewer {
                 !busy,
                 egui::Checkbox::new(
                     &mut autosave,
-                    "💾 Save automatically when act 3 and act 6 land",
+                    self.t("💾 Save automatically when act 3 and act 6 land"),
                 ),
             )
-            .on_hover_text(
-                "Write every act grown so far — up to act 6 — to saved_seeds/world_<seed>.bin",
-            )
+            .on_hover_text(self.t(
+                "Write every act grown so far, up to act 6, to saved_seeds/world_<seed>.bin",
+            ))
             .changed()
         {
             self.genesis.set_autosave(autosave);
@@ -1789,12 +1873,14 @@ impl MapViewer {
         }
 
         if !autosave {
-            caption(ui, "Auto-save — off: the world is written only when you press Save.");
+            caption(
+                ui,
+                self.t("Auto-save — off: the world is written only when you press Save."),
+            );
         } else {
             caption(
                 ui,
-                "Auto-save — on: written the moment act 3 lands, and again at act 6, \
-                 overwriting the earlier save.",
+                self.t("Auto-save — on: written the moment act 3 lands, and again at act 6, overwriting the earlier save."),
             );
         }
     }
@@ -1810,7 +1896,7 @@ impl MapViewer {
         let current = self.genesis.seed();
 
         let response =
-            egui::CollapsingHeader::new(format!("📂 Saved worlds ({})", self.cached.len()))
+            egui::CollapsingHeader::new(self.tf("📂 Saved worlds ({})", &[&self.cached.len()]))
                 // The count is in the label, so the id must not be: otherwise a
                 // newly saved world would change the id and snap the list shut.
                 .id_salt("saved_worlds")
@@ -1818,20 +1904,19 @@ impl MapViewer {
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         if ui
-                            .small_button("⟳ Rescan")
-                            .on_hover_text("Read saved_seeds again")
+                            .small_button(self.t("⟳ Rescan"))
+                            .on_hover_text(self.t("Read saved_seeds again"))
                             .clicked()
                         {
                             refresh = true;
                         }
-                        caption(ui, "Click a world to load it");
+                        caption(ui, self.t("Click a world to load it"));
                     });
 
                     if self.cached.is_empty() {
                         caption(
                             ui,
-                            "Nothing saved yet. Tick Save above and grow a world, and it will \
-                             appear here.",
+                            self.t("Nothing saved yet. Tick Save above and grow a world, and it will appear here."),
                         );
                         return;
                     }
@@ -1844,28 +1929,25 @@ impl MapViewer {
                                 // A save holds whichever acts the world had grown
                                 // when it was written, and its header names the
                                 // deepest of them, so the row says `acts 1–5`.
-                                let acts = acts_saved(cache.acts);
-                                let line = format!(
+                                let acts = acts_saved(cache.acts, self.language);
+                                let size = cache_size(cache.bytes, self.language);
+                                let age = cache_age(cache.modified, self.language);
+                                let line = self.tf(
                                     "{}   {} · {}  · {}",
-                                    cache.seed,
-                                    cache_size(cache.bytes),
-                                    cache_age(cache.modified),
-                                    acts
+                                    &[&cache.seed, &size, &age, &acts],
                                 );
-                                let hover = format!(
-                                    "Load seed {} — {} · {} · {}\nPicks the panel up where the \
-                                     save left off.",
-                                    cache.seed,
-                                    cache_size(cache.bytes),
-                                    cache_age(cache.modified),
-                                    acts
+                                let hover = self.tf(
+                                    "Load seed {} — {} · {} · {}\nPicks the panel up where the save left off.",
+                                    &[&cache.seed, &size, &age, &acts],
                                 );
                                 let button = egui::Button::selectable(cache.seed == current, line)
                                     .truncate();
                                 if ui
                                     .add_enabled(!busy, button)
                                     .on_hover_text(hover)
-                                    .on_disabled_hover_text("Wait for the act in flight to finish")
+                                    .on_disabled_hover_text(
+                                        self.t("Wait for the act in flight to finish"),
+                                    )
                                     .clicked()
                                 {
                                     picked = Some(cache.seed);
@@ -1915,11 +1997,11 @@ impl MapViewer {
                         StageState::Locked => "▢",
                     }
                 };
-                let label = format!("{mark} {}. {}", stage.index(), stage.title());
+                let label = format!("{mark} {}", act_label(self.language, stage));
                 let button = egui::Button::new(label).frame(false);
                 if ui
                     .add_enabled(enabled, button)
-                    .on_hover_text(stage.blurb())
+                    .on_hover_text(self.t(stage.blurb()))
                     .clicked()
                 {
                     pressed = Some(stage);
@@ -1930,11 +2012,11 @@ impl MapViewer {
                         status_line(
                             ui,
                             if secs > 0.0 {
-                                format!("· {secs:.1}s")
+                                self.tf("· {}s", &[&format!("{:.1}", secs)])
                             } else {
                                 // A stage adopted from a cache was not timed: it
                                 // happened in another session.
-                                "· loaded".to_string()
+                                self.t("· loaded").to_string()
                             },
                         );
                         // A finished act can be un-done: this drops it and every
@@ -1942,18 +2024,20 @@ impl MapViewer {
                         // from a new seed typed into the field above.
                         if ui
                             .add_enabled(!busy, egui::Button::new("↺").frame(false))
-                            .on_hover_text(format!(
+                            .on_hover_text(self.tf(
                                 "Redo from act {} — un-do it and everything after it",
-                                stage.index()
+                                &[&stage.index()],
                             ))
-                            .on_disabled_hover_text("Wait for the act in flight to finish")
+                            .on_disabled_hover_text(
+                                self.t("Wait for the act in flight to finish"),
+                            )
                             .clicked()
                         {
                             rewind = Some(stage);
                         }
                     }
                     StageState::Ready if !busy => {
-                        status_line(ui, "· next");
+                        status_line(ui, self.t("· next"));
                     }
                     _ => {}
                 }
@@ -1999,7 +2083,13 @@ impl MapViewer {
         ui.add(bar);
         caption(
             ui,
-            format!("{} · {elapsed:.0} s", stage_progress(self.job.as_ref())),
+            self.tf(
+                "{} · {} s",
+                &[
+                    &stage_progress(self.job.as_ref(), self.language),
+                    &format!("{elapsed:.0}"),
+                ],
+            ),
         );
 
         // A picture of the act, when it has one to show: the live plate is
@@ -2007,7 +2097,10 @@ impl MapViewer {
         if let Some(live) = &self.live {
             caption(
                 ui,
-                format!("🔴 live: {} · {}", live.label, job.stage.title()),
+                self.tf(
+                    "🔴 live: {} · {}",
+                    &[&live.label, &self.t(job.stage.title())],
+                ),
             );
         }
     }
@@ -2019,9 +2112,9 @@ impl MapViewer {
             if ui
                 .add_enabled(
                     !busy && remaining,
-                    egui::Button::new("▶▶ Run all remaining"),
+                    egui::Button::new(self.t("▶▶ Run all remaining")),
                 )
-                .on_hover_text("Grow the whole world, act after act, without stopping")
+                .on_hover_text(self.t("Grow the whole world, act after act, without stopping"))
                 .clicked()
             {
                 self.run_queue = true;
@@ -2034,16 +2127,19 @@ impl MapViewer {
             if busy {
                 if self.run_queue {
                     if ui
-                        .button("⏹ Stop after this act")
-                        .on_hover_text("The queue stops here; this act finishes")
+                        .button(self.t("⏹ Stop after this act"))
+                        .on_hover_text(self.t("The queue stops here; this act finishes"))
                         .clicked()
                     {
                         self.run_queue = false;
                     }
                 }
             } else if ui
-                .add_enabled(self.world.is_some(), egui::Button::new("↺ Reset world"))
-                .on_hover_text("Throw this world away and begin again on the same seed")
+                .add_enabled(
+                    self.world.is_some(),
+                    egui::Button::new(self.t("↺ Reset world")),
+                )
+                .on_hover_text(self.t("Throw this world away and begin again on the same seed"))
                 .clicked()
             {
                 self.reset_world();
@@ -2861,7 +2957,7 @@ impl MapViewer {
             .frame(panel_frame.clone())
             .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                panel_title(ui, "🌍 Atlas Viewer");
+                panel_title(ui, self.t("🌍 Atlas Viewer"));
                 ui.separator();
 
                 // ── Map scope: what the atlas portrays ────────────────────────
@@ -2883,16 +2979,20 @@ impl MapViewer {
                     (MapScope::Everywhere, "🌍 Everywhere"),
                 ] {
                     let ready = scope.available(world.stage);
+                    let label = self.t(label);
                     let response = ui.add_enabled_ui(ready, |ui| {
                         ui.selectable_value(&mut self.scope, scope, label)
                     });
                     let response = response.inner;
                     if !ready {
-                        response.on_hover_text(format!(
+                        let need = scope.min_stage();
+                        response.on_hover_text(self.tf(
                             "Needs “{}. {}” — {}.",
-                            scope.min_stage().index(),
-                            scope.min_stage().title(),
-                            scope.min_stage().blurb()
+                            &[
+                                &need.index(),
+                                &self.t(need.title()),
+                                &self.t(need.blurb()),
+                            ],
                         ));
                     } else if response.clicked() {
                         // Repaint in the new scope, but keep the reader's zoom and
@@ -2909,7 +3009,7 @@ impl MapViewer {
                 // and the internal subdivision of the realms in the Civilizations
                 // scope (a realm's own provinces, areas, regions…).
                 ui.add_enabled_ui(self.scope.is_political() || self.scope.is_civilizations(), |ui| {
-                    ui.label("Tier:");
+                    ui.label(self.t("Tier:"));
                     for (tier, label) in [
                         (MapTier::Provinces, "Provinces"),
                         (MapTier::Areas, "Areas"),
@@ -2917,7 +3017,11 @@ impl MapViewer {
                         (MapTier::Superregions, "Superregions"),
                         (MapTier::Continents, "Continents"),
                     ] {
-                        if ui.selectable_value(&mut self.tier, tier, label).clicked() {
+                        let label = self.t(label);
+                        if ui
+                            .selectable_value(&mut self.tier, tier, label)
+                            .clicked()
+                        {
                             visual_changed = true;
                         }
                     }
@@ -2927,7 +3031,8 @@ impl MapViewer {
 
                 // Border Toggle (in political and civilization scopes)
                 if self.scope.is_political() || self.scope.is_civilizations() {
-                    if ui.checkbox(&mut self.show_borders, "Borders").clicked() {
+                    let borders = self.t("Borders");
+                    if ui.checkbox(&mut self.show_borders, borders).clicked() {
                         visual_changed = true;
                     }
                     ui.separator();
@@ -2938,13 +3043,12 @@ impl MapViewer {
                 // both political hierarchies, not only on its own map mode.
                 if !self.scope.is_civilizations() && !world.civilizations.is_empty() {
                     let world = &world.civilizations;
-                    let label = format!("🏺 Civilizations ({})", world.civilizations.len());
+                    let label = self.tf("🏺 Civilizations ({})", &[&world.civilizations.len()]);
                     if ui
                         .checkbox(&mut self.show_civilizations, label)
-                        .on_hover_text(format!(
+                        .on_hover_text(self.tf(
                             "{}\nAtlas date: {}\nThe overlay tints the provinces each realm holds, on top of whatever this scope already paints.",
-                            world.epoch_label(),
-                            world.map_year_label()
+                            &[&world.epoch_label(), &world.map_year_label()],
                         ))
                         .clicked()
                     {
@@ -2957,21 +3061,32 @@ impl MapViewer {
                 // planet; it is applied after the panels settle, further down.
                 if ui
                     .button("➖")
-                    .on_hover_text("Zoom out")
+                    .on_hover_text(self.t("Zoom out"))
                     .clicked()
                 {
                     self.zoom = (self.zoom * 0.75).clamp(MIN_ZOOM, MAX_ZOOM);
                 }
                 ui.label(format!("{:.0}%", self.zoom * 100.0));
-                if ui.button("➕").on_hover_text("Zoom in").clicked() {
+                if ui.button("➕").on_hover_text(self.t("Zoom in")).clicked() {
                     self.zoom = (self.zoom * 1.33).clamp(MIN_ZOOM, MAX_ZOOM);
                 }
                 if ui
-                    .button("⤢ Fit")
-                    .on_hover_text("Fit the whole world in the window")
+                    .button(self.t("⤢ Fit"))
+                    .on_hover_text(self.t("Fit the whole world in the window"))
                     .clicked()
                 {
                     fit_request = true;
+                }
+
+                // ── The language ──────────────────────────────────────────────
+                // Last on the row and always available: it is a property of the
+                // reader, not of the world, so it is never disabled by an act.
+                ui.separator();
+                if let Some(chosen) = i18n::language_picker(ui, self.language)
+                    && chosen != self.language
+                {
+                    self.language = chosen;
+                    chosen.save_preference(std::path::Path::new(crate::pipeline::CACHE_DIR));
                 }
             });
         });
@@ -2988,43 +3103,49 @@ impl MapViewer {
                 if world.hierarchy.total_provinces > 0 {
                     status_line(
                         ui,
-                        format!(
+                        self.tf(
                             "🏛 LAND — Continents: {} · Superregions: {} · Regions: {} · Areas: {} · Provinces: {}",
-                            world.hierarchy.total_continents,
-                            world.hierarchy.total_superregions,
-                            world.hierarchy.total_regions,
-                            world.hierarchy.total_areas,
-                            world.hierarchy.total_provinces
+                            &[
+                                &world.hierarchy.total_continents,
+                                &world.hierarchy.total_superregions,
+                                &world.hierarchy.total_regions,
+                                &world.hierarchy.total_areas,
+                                &world.hierarchy.total_provinces,
+                            ],
                         ),
                     );
                 }
                 if world.ocean_hierarchy.total_provinces > 0 {
                     status_line(
                         ui,
-                            format!(
-                                "🌊 OCEAN — Basins: {} · Superregions: {} · Regions: {} · Areas: {} · Provinces: {}",
-                                world.ocean_hierarchy.total_continents,
-                                world.ocean_hierarchy.total_superregions,
-                                world.ocean_hierarchy.total_regions,
-                                world.ocean_hierarchy.total_areas,
-                                world.ocean_hierarchy.total_provinces
-                            ),
-                        );
+                        self.tf(
+                            "🌊 OCEAN — Basins: {} · Superregions: {} · Regions: {} · Areas: {} · Provinces: {}",
+                            &[
+                                &world.ocean_hierarchy.total_continents,
+                                &world.ocean_hierarchy.total_superregions,
+                                &world.ocean_hierarchy.total_regions,
+                                &world.ocean_hierarchy.total_areas,
+                                &world.ocean_hierarchy.total_provinces,
+                            ],
+                        ),
+                    );
                 }
                 // ── The dawn of history ───────────────────────────────────────
                 if !world.civilizations.is_empty() {
                     let dawn = &world.civilizations;
                     status_line(
                         ui,
-                        format!(
-                            "🏺 CIVILIZATIONS — {} · Atlas date: {} · {} · {} realms · {} civilized provinces · population {} · {:.1} people/km²",
-                            dawn.epoch_label(),
-                            dawn.map_year_label(),
-                            dawn.age_label(),
-                            dawn.civilizations.len(),
-                            dawn.civilized_provinces,
-                            thousands_u64(dawn.total_population),
-                            dawn.mean_density_per_km2(),
+                        self.tf(
+                            "🏺 CIVILIZATIONS — {} · Atlas date: {} · {} · {} realms · {} civilized provinces · population {} · {} people/km²",
+                            &[
+                                &dawn.epoch_label(),
+                                &dawn.map_year_label(),
+                                &dawn.age_label(),
+                                &dawn.civilizations.len(),
+                                &dawn.civilized_provinces,
+                                &thousands_u64(dawn.total_population),
+                                &format!("{:.1}", dawn.mean_density_per_km2()),
+                            ],
                         ),
                     );
                 }
@@ -3042,22 +3163,31 @@ impl MapViewer {
             // measure, so its extremes are always here to be shown.
             let (peak_lat, peak_lon) = self.pixel_lat_lon(relief.peak_x, relief.peak_y);
             let (trench_lat, trench_lon) = self.pixel_lat_lon(relief.trench_x, relief.trench_y);
-            let peak_where = lat_lon_label(peak_lat, peak_lon);
-            let trench_where = lat_lon_label(trench_lat, trench_lon);
+            let peak_where = lat_lon_label(peak_lat, peak_lon, self.language);
+            let trench_where = lat_lon_label(trench_lat, trench_lon, self.language);
 
             egui::Panel::right("hypsometric_legend")
                 .frame(panel_frame.clone())
                 .resizable(false)
                 .exact_size(LEGEND_WIDTH)
                 .show(ui, |ui| {
-                    panel_title(ui, "⛰ Topographic Scale");
-                    caption(ui, "Tint = elevation above / depth below the sea surface.");
+                    panel_title(ui, self.t("⛰ Topographic Scale"));
+                    caption(
+                        ui,
+                        self.t("Tint = elevation above / depth below the sea surface."),
+                    );
                     ui.separator();
 
-                    let peak_label = format!("🗻 Highest peak   +{:.0} m", relief.peak_metres);
+                    let peak_label = self.tf(
+                        "🗻 Highest peak   +{} m",
+                        &[&format!("{:.0}", relief.peak_metres)],
+                    );
                     if ui
                         .add(egui::Button::new(peak_label).frame(false))
-                        .on_hover_text(format!("{peak_where}\nClick to fly to the summit"))
+                        .on_hover_text(self.tf(
+                            "{}\nClick to fly to the summit",
+                            &[&peak_where],
+                        ))
                         .clicked()
                     {
                         // Never zoom *out* to fly somewhere: a reader who is already
@@ -3067,10 +3197,16 @@ impl MapViewer {
                     }
                     caption(ui, peak_where);
 
-                    let trench_label = format!("🌊 Deepest trench  {:.0} m", relief.trench_metres);
+                    let trench_label = self.tf(
+                        "🌊 Deepest trench  {} m",
+                        &[&format!("{:.0}", relief.trench_metres)],
+                    );
                     if ui
                         .add(egui::Button::new(trench_label).frame(false))
-                        .on_hover_text(format!("{trench_where}\nClick to fly to the deepest point"))
+                        .on_hover_text(self.tf(
+                            "{}\nClick to fly to the deepest point",
+                            &[&trench_where],
+                        ))
                         .clicked()
                     {
                         let zoom = RELIEF_FOCUS_ZOOM.max(self.zoom);
@@ -3078,11 +3214,14 @@ impl MapViewer {
                     }
                     caption(ui, trench_where);
 
-                    ui.label(format!(
-                        "🌍 Surface: {:.0}% ocean",
-                        relief.ocean_share * 100.0
+                    ui.label(self.tf(
+                        "🌍 Surface: {}% ocean",
+                        &[&format!("{:.0}", relief.ocean_share * 100.0)],
                     ));
-                    caption(ui, "Click a figure above to centre the map on it.");
+                    caption(
+                        ui,
+                        self.t("Click a figure above to centre the map on it."),
+                    );
                     ui.separator();
 
                     // The band list is the only part that can overflow a short
@@ -3108,15 +3247,15 @@ impl MapViewer {
                 .resizable(false)
                 .exact_size(LEGEND_WIDTH)
                 .show(ui, |ui| {
-                    panel_title(ui, "🌦 Climate Zones");
+                    panel_title(ui, self.t("🌦 Climate Zones"));
                     caption(
                         ui,
-                        "Land is classified by mean temperature, annual rainfall and altitude; the sea by its surface temperature.",
+                        self.t("Land is classified by mean temperature, annual rainfall and altitude; the sea by its surface temperature."),
                     );
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         for zone in ClimateZone::ALL {
-                            themes::legend_row(ui, zone.color(), zone.label(), "");
+                            themes::legend_row(ui, zone.color(), self.t(zone.label()), "");
                         }
                         ui.separator();
                         for (label, sample_temp) in [
@@ -3130,7 +3269,7 @@ impl MapViewer {
                             themes::legend_row(
                                 ui,
                                 themes::ocean_climate_color(sample_temp),
-                                label,
+                                self.t(label),
                                 "",
                             );
                         }
@@ -3145,10 +3284,10 @@ impl MapViewer {
                 .resizable(false)
                 .exact_size(LEGEND_WIDTH)
                 .show(ui, |ui| {
-                    panel_title(ui, "🌡 Temperature");
+                    panel_title(ui, self.t("🌡 Temperature"));
                     caption(
                         ui,
-                        "Mean annual surface temperature: land station means, sea-surface means over the ocean.",
+                        self.t("Mean annual surface temperature: land station means, sea-surface means over the ocean."),
                     );
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -3162,7 +3301,7 @@ impl MapViewer {
                         }
                     });
                     ui.separator();
-                    caption(ui, "A thin dark line marks every 5 °C isotherm.");
+                    caption(ui, self.t("A thin dark line marks every 5 °C isotherm."));
                 });
         }
 
@@ -3173,10 +3312,10 @@ impl MapViewer {
                 .resizable(false)
                 .exact_size(LEGEND_WIDTH)
                 .show(ui, |ui| {
-                    panel_title(ui, "🪨 Terrain Types");
+                    panel_title(ui, self.t("🪨 Terrain Types"));
                     caption(
                         ui,
-                        "Landform bands from the vertical datum; the ocean floor is classified by depth.",
+                        self.t("Landform bands from the vertical datum; the ocean floor is classified by depth."),
                     );
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -3184,8 +3323,8 @@ impl MapViewer {
                             themes::legend_row(
                                 ui,
                                 class.color(),
-                                class.label(),
-                                &class.range_label(),
+                                self.t(class.label()),
+                                &class.range_label(self.language),
                             );
                         }
                     });
@@ -3203,13 +3342,13 @@ impl MapViewer {
                 .resizable(false)
                 .exact_size(CIV_LEGEND_WIDTH)
                 .show(ui, |ui| {
-                    panel_title(ui, "🏺 The Dawn of Civilization");
+                    panel_title(ui, self.t("🏺 The Dawn of Civilization"));
                     let world = &world.civilizations;
                     if world.is_empty() {
-                        ui.label("No civilization rose on this world.");
+                        ui.label(self.t("No civilization rose on this world."));
                         caption(
                             ui,
-                            "The history stage only runs when it is asked for: pass --civs (it is on automatically with --viewer and --plates).",
+                            self.t("The history stage only runs when it is asked for: pass --civs (it is on automatically with --viewer and --plates)."),
                         );
                         return;
                     }
@@ -3217,10 +3356,9 @@ impl MapViewer {
                     ui.label(egui::RichText::new(world.epoch_label()).small());
                     caption(ui, world.timeline.prehistory_label());
                     ui.label(
-                        egui::RichText::new(format!(
+                        egui::RichText::new(self.tf(
                             "Atlas date: {} · {}",
-                            world.map_year_label(),
-                            world.age_label()
+                            &[&world.map_year_label(), &world.age_label()],
                         ))
                         .small()
                         .weak(),
@@ -3231,8 +3369,10 @@ impl MapViewer {
                         world.age().describe()
                     ));
                     if ui
-                        .button("🏛 Fly to the Common Era site")
-                        .on_hover_text("The province the world's calendar is reckoned from")
+                        .button(self.t("🏛 Fly to the Common Era site"))
+                        .on_hover_text(self.t(
+                            "The province the world's calendar is reckoned from",
+                        ))
                         .clicked()
                     {
                         focus_request = Some((
@@ -3242,19 +3382,23 @@ impl MapViewer {
                         ));
                     }
                     ui.separator();
-                    ui.label(format!(
+                    ui.label(self.tf(
                         "{} societies on {} inhabited provinces",
-                        world.civilizations.len(),
-                        thousands(world.civilized_provinces as f32),
+                        &[
+                            &world.civilizations.len(),
+                            &thousands(world.civilized_provinces as f32),
+                        ],
                     ));
-                    ui.label(format!(
+                    ui.label(self.tf(
                         "{} km² inhabited · world population {}",
-                        thousands(world.civilized_area_km2),
-                        thousands_u64(world.total_population),
+                        &[
+                            &thousands(world.civilized_area_km2),
+                            &thousands_u64(world.total_population),
+                        ],
                     ));
-                    ui.label(format!(
-                        "Mean density {:.2} people/km²",
-                        world.mean_density_per_km2()
+                    ui.label(self.tf(
+                        "Mean density {} people/km²",
+                        &[&format!("{:.2}", world.mean_density_per_km2())],
                     ));
                     ui.separator();
 
@@ -3266,17 +3410,18 @@ impl MapViewer {
                     let counts = world.counts_by_tier();
                     let areas = world.area_by_tier();
                     let inhabited_area: f32 = areas.iter().sum::<f32>().max(1.0);
-                    caption(ui, "How the world is organised");
+                    caption(ui, self.t("How the world is organised"));
                     for (index, tier) in SocietyTier::LADDER.iter().enumerate() {
                         society_key_row(
                             ui,
                             *tier,
                             counts[index],
                             100.0 * areas[index] / inhabited_area,
+                            self.language,
                         );
                     }
                     ui.separator();
-                    caption(ui, "Click a society to fly to its heartland.");
+                    caption(ui, self.t("Click a society to fly to its heartland."));
 
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         for tier in SocietyTier::LADDER {
@@ -3290,9 +3435,9 @@ impl MapViewer {
                             }
                             ui.add_space(4.0);
                             ui.label(
-                                egui::RichText::new(format!(
-                                    "{} ({shown})",
-                                    tier.label()
+                                egui::RichText::new(self.tf(
+                                    "{} ({})",
+                                    &[&self.t(tier.label()), &shown],
                                 ))
                                 .strong(),
                             );
@@ -3304,7 +3449,13 @@ impl MapViewer {
                                 listed += 1;
                                 let id = index as u32 + 1;
                                 let selected = self.selected_civ == Some(id);
-                                if society_entry(ui, civ.color, civ.name.as_str(), selected) {
+                                if society_entry(
+                                    ui,
+                                    civ.color,
+                                    civ.name.as_str(),
+                                    selected,
+                                    self.language,
+                                ) {
                                     clicked_civ = Some(id);
                                 }
                                 ui.label(
@@ -3317,17 +3468,22 @@ impl MapViewer {
                                 );
                                 caption(
                                     ui,
-                                    format!(
+                                    self.tf(
                                         "{} provinces · {} people",
-                                        civ.provinces.len(),
-                                        thousands_u64(civ.population),
+                                        &[
+                                            &civ.provinces.len(),
+                                            &thousands_u64(civ.population),
+                                        ],
                                     ),
                                 );
                             }
                             if shown > listed {
                                 caption(
                                     ui,
-                                    format!("… and {} more, all on the map.", shown - listed),
+                                    self.tf(
+                                        "… and {} more, all on the map.",
+                                        &[&(shown - listed)],
+                                    ),
                                 );
                             }
                         }
@@ -3342,14 +3498,14 @@ impl MapViewer {
                 .resizable(false)
                 .exact_size(CIV_LEGEND_WIDTH)
                 .show(ui, |ui| {
-                    panel_title(ui, "🗣 Languages of the World");
+                    panel_title(ui, self.t("🗣 Languages of the World"));
                     caption(
                         ui,
-                        "Each family is a colour, each language a shade of it. A family holds the provinces its speakers settled, from its Urheimat outward.",
+                        self.t("Each family is a colour, each language a shade of it. A family holds the provinces its speakers settled, from its Urheimat outward."),
                     );
                     ui.separator();
                     if world.languages.is_empty() {
-                        caption(ui, "No tongue has been given to this world yet.");
+                        caption(ui, self.t("No tongue has been given to this world yet."));
                     } else {
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             for family in world.languages.families_by_size() {
@@ -3376,16 +3532,21 @@ impl MapViewer {
                                 );
                                 caption(
                                     ui,
-                                    format!(
+                                    self.tf(
                                         "{} languages · {} provinces · {} people",
-                                        family.languages.len(),
-                                        family.province_count,
-                                        thousands_u64(family.population),
+                                        &[
+                                            &family.languages.len(),
+                                            &family.province_count,
+                                            &thousands_u64(family.population),
+                                        ],
                                     ),
                                 );
                                 caption(
                                     ui,
-                                    format!("Urheimat: {}", world.languages.urheimat_label(family.id)),
+                                    self.tf(
+                                        "Urheimat: {}",
+                                        &[&world.languages.urheimat_label(family.id)],
+                                    ),
                                 );
                                 for language in world.languages.languages_of(family.id).iter().take(6) {
                                     ui.horizontal(|ui| {
@@ -3393,7 +3554,10 @@ impl MapViewer {
                                         ui.label(egui::RichText::new(&language.name).small());
                                         caption(
                                             ui,
-                                            format!("{} provinces", language.province_count),
+                                            self.tf(
+                                                "{} provinces",
+                                                &[&language.province_count],
+                                            ),
                                         );
                                     });
                                 }
@@ -3485,7 +3649,7 @@ impl MapViewer {
             None
         };
         let plate = live
-            .map(|live| (&live.texture, live.label.as_str()))
+            .map(|live| (&live.texture, live.label))
             .or_else(|| self.texture.as_ref().map(|texture| (texture, "")));
         if let Some((texture, live_label)) = plate {
             let map_size = egui::vec2(
@@ -3530,7 +3694,11 @@ impl MapViewer {
                 );
                 let painter = ui.painter().with_clip_rect(rect);
                 painter.rect_filled(strip, 4.0, Color32::from_rgba_unmultiplied(12, 16, 28, 224));
-                let text = format!("🔴 {} — {}", live_label, stage_progress(self.job.as_ref()));
+                let text = format!(
+                    "🔴 {} — {}",
+                    self.t(live_label),
+                    stage_progress(self.job.as_ref(), self.language)
+                );
                 painter.text(
                     strip.left_center() + egui::vec2(12.0, 0.0),
                     Align2::LEFT_CENTER,
@@ -3632,39 +3800,37 @@ impl MapViewer {
                                 civ,
                                 &world.civilizations,
                                 &world.languages,
+                                self.language,
                             );
                         } else if lake {
-                            card_title(ui, "💧 Inland Freshwater Lake");
-                            ui.label("No realm claims the water itself.");
+                            card_title(ui, self.t("💧 Inland Freshwater Lake"));
+                            ui.label(self.t("No realm claims the water itself."));
                             ui.separator();
-                            ui.label(format!("Lake Surface: {:.0} m", relief::altitude_metres(elev)));
-                            ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                            ui.label(self.tf("Lake Surface: {} m", &[&format!("{:.0}", relief::altitude_metres(elev))]));
+                            ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                         } else if is_ocean {
-                            card_title(ui, "🌊 Uncivilized Sea");
-                            ui.label(format!("Depth: {:.0} m", relief::depth_metres(elev)));
+                            card_title(ui, self.t("🌊 Uncivilized Sea"));
+                            ui.label(self.tf("Depth: {} m", &[&format!("{:.0}", relief::depth_metres(elev))]));
                             ui.separator();
-                            ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                            ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                         } else if is_waste {
-                            card_title(ui, "🏔️ Wasteland Beyond History");
-                            ui.strong("Impassable or unclaimed wilderness");
+                            card_title(ui, self.t("🏔️ Wasteland Beyond History"));
+                            ui.strong(self.t("Impassable or unclaimed wilderness"));
                             ui.separator();
-                            ui.label(format!("Environment: {}", get_biome_name(display_temp, precip, altitude)));
-                            ui.label(format!("Elevation: {:.0} m", relief::altitude_metres(elev)));
-                            ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                            ui.label(self.tf("Environment: {}", &[&get_biome_name(display_temp, precip, altitude)]));
+                            ui.label(self.tf("Elevation: {} m", &[&format!("{:.0}", relief::altitude_metres(elev))]));
+                            ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                         } else {
-                            card_title(ui, "🌾 Unclaimed Land");
-                            ui.strong("No civilization has risen here");
-                            caption(
-                                ui,
-                                "Fertile enough to live on, but never the best ground in reach: nothing here outperformed the cradles.",
-                            );
+                            card_title(ui, self.t("🌾 Unclaimed Land"));
+                            ui.strong(self.t("No civilization has risen here"));
+                            caption(ui, self.t("Fertile enough to live on, but never the best ground in reach: nothing here outperformed the cradles."));
                             ui.separator();
-                            ui.label(format!("Environment: {}", get_biome_name(display_temp, precip, altitude)));
-                            ui.label(format!("Elevation: {:.0} m", relief::altitude_metres(elev)));
-                            ui.label(format!("Temperature: {:.1} °C", temp));
-                            ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
+                            ui.label(self.tf("Environment: {}", &[&get_biome_name(display_temp, precip, altitude)]));
+                            ui.label(self.tf("Elevation: {} m", &[&format!("{:.0}", relief::altitude_metres(elev))]));
+                            ui.label(self.tf("Temperature: {} °C", &[&format!("{:.1}", temp)]));
+                            ui.label(self.tf("Precipitation: {} mm/yr", &[&format!("{:.0}", precip * 1200.0)]));
                             ui.separator();
-                            ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                            ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                         }
                     } else if self.scope == MapScope::Languages {
                         // ── The language readout ──────────────────────────────
@@ -3673,15 +3839,15 @@ impl MapViewer {
                             .as_ref()
                             .is_some_and(|lake| *lake.get(map_x, map_y));
                         if is_ocean {
-                            card_title(ui, "🌊 Open Water");
-                            ui.label("No land, and so no tongue of its own.");
+                            card_title(ui, self.t("🌊 Open Water"));
+                            ui.label(self.t("No land, and so no tongue of its own."));
                             ui.separator();
-                            ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                            ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                         } else if lake {
-                            card_title(ui, "💧 Inland Freshwater Lake");
-                            ui.label("The water itself belongs to no language.");
+                            card_title(ui, self.t("💧 Inland Freshwater Lake"));
+                            ui.label(self.t("The water itself belongs to no language."));
                             ui.separator();
-                            ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                            ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                         } else if let (Some(language), Some(family)) = (
                             world.languages.language_of_province(id),
                             world.languages.family_of_province(id),
@@ -3697,56 +3863,52 @@ impl MapViewer {
                             ));
                             caption(ui, family.urheimat.archetype.describe());
                             ui.separator();
-                            ui.label(format!("Autonym: {}", language.autonym));
-                            ui.label(format!(
-                                "Urheimat: {}",
-                                world.languages.urheimat_label(family.id)
-                            ));
+                            ui.label(self.tf("Autonym: {}", &[&language.autonym]));
+                            ui.label(self.tf("Urheimat: {}", &[&world.languages.urheimat_label(family.id)]));
                             if let Some(name) = world
                                 .languages
                                 .province_names
                                 .get(id as usize)
                                 .filter(|name| !name.is_empty())
                             {
-                                ui.label(format!("Province: {name}"));
+                                ui.label(self.tf("Province: {}", &[&name]));
                             }
                             let owner = world.civilizations.owner_of(id);
                             if owner != 0 {
                                 ui.separator();
-                                ui.label(format!(
-                                    "Society: {}",
-                                    world.civilizations.name_of(owner)
-                                ));
+                            ui.label(self.tf(
+                                "Society: {}",
+                                &[&world.civilizations.name_of(owner)],
+                            ));
                                 if let Some(tier) = world.civilizations.tier_of(id) {
                                     ui.label(egui::RichText::new(tier.label()).small());
                                 }
                             }
                             ui.separator();
-                            ui.label(format!("Size: {} px", {
-                                world
-                                    .hierarchy
-                                    .provinces
-                                    .get(id as usize)
-                                    .map_or(0, |node| node.pixel_count)
-                            }));
-                            ui.label(format!(
-                                "Elevation: {:.0} m",
-                                relief::altitude_metres(elev)
+                            let size = world
+                                .hierarchy
+                                .provinces
+                                .get(id as usize)
+                                .map_or(0, |node| node.pixel_count);
+                            ui.label(self.tf("Size: {} px", &[&size]));
+                            ui.label(self.tf(
+                                "Elevation: {} m",
+                                &[&format!("{:.0}", relief::altitude_metres(elev))],
                             ));
-                            ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                            ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                         } else {
-                            card_title(ui, "🏔️ Beyond the Tongues");
-                            ui.strong("No language has settled this ground");
+                            card_title(ui, self.t("🏔️ Beyond the Tongues"));
+                            ui.strong(self.t("No language has settled this ground"));
                             ui.separator();
-                            ui.label(format!(
+                            ui.label(self.tf(
                                 "Environment: {}",
-                                get_biome_name(display_temp, precip, altitude)
+                                &[&get_biome_name(display_temp, precip, altitude)],
                             ));
-                            ui.label(format!(
-                                "Elevation: {:.0} m",
-                                relief::altitude_metres(elev)
+                            ui.label(self.tf(
+                                "Elevation: {} m",
+                                &[&format!("{:.0}", relief::altitude_metres(elev))],
                             ));
-                            ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                            ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                         }
                     } else if self.scope == MapScope::Topographic {
                         // ── Hypsometric survey readout ────────────────────────
@@ -3764,90 +3926,86 @@ impl MapViewer {
                         card_title(ui, format!("⛰ {}", surface));
                         ui.separator();
                         if elev > sea_level {
-                            ui.label(format!("Elevation: {:.0} m above sea level", relief::altitude_metres(elev)));
+                            ui.label(self.tf("Elevation: {} m above sea level", &[&format!("{:.0}", relief::altitude_metres(elev))]));
                         } else {
-                            ui.label(format!("Depth: {:.0} m below sea level", relief::depth_metres(elev)));
+                            ui.label(self.tf("Depth: {} m below sea level", &[&format!("{:.0}", relief::depth_metres(elev))]));
                         }
-                        ui.label(format!(
+                        ui.label(self.tf(
                             "Relief band: {}  ({})",
-                            HYPSOMETRIC_NAMES[band],
-                            hypsometric_range_label(band)
+                            &[&HYPSOMETRIC_NAMES[band], &hypsometric_range_label(band)],
                         ));
                         // Every surface reports a temperature — the land its
                         // station temperature, the sea its surface temperature.
                         if is_ocean {
-                            ui.label(format!("Sea-Surface Temperature: {:.1} °C", temp));
+                            ui.label(self.tf("Sea-Surface Temperature: {} °C", &[&format!("{:.1}", temp)]));
                         } else {
-                            ui.label(format!("Temperature: {:.1} °C", temp));
-                            ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
+                            ui.label(self.tf("Temperature: {} °C", &[&format!("{:.1}", temp)]));
+                            ui.label(self.tf("Precipitation: {} mm/yr", &[&format!("{:.0}", precip * 1200.0)]));
                         }
                         if !is_ocean && flow >= self.genesis.hydro_config().min_river_flow {
-                            ui.label(format!("River Flow: {:.0} m³/s", flow));
+                            ui.label(self.tf("River Flow: {} m³/s", &[&format!("{:.0}", flow)]));
                         }
                         ui.separator();
-                        ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                        ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                     } else if self.scope == MapScope::Climate {
                         // ── Climate readout ────────────────────────────
                         let lake = world.is_lake.as_ref().is_some_and(|lake| *lake.get(map_x, map_y));
                         if lake {
-                            card_title(ui, "🌦 Inland Lake");
-                            ui.label("Fresh water, read with the climate of its shores.");
+                            card_title(ui, self.t("🌦 Inland Lake"));
+                            ui.label(self.t("Fresh water, read with the climate of its shores."));
                         } else if is_ocean {
-                            card_title(ui, format!("🌦 {}", themes::ocean_climate_label(temp)));
+                            card_title(ui, format!("🌦 {}", self.t(themes::ocean_climate_label(temp))));
                             ui.separator();
-                            ui.label(format!("Sea-surface temperature: {:.1} °C", temp));
+                            ui.label(self.tf("Sea-surface temperature: {} °C", &[&format!("{:.1}", temp)]));
                             if frozen_sea {
-                                ui.label("Perennial sea ice.");
+                                ui.label(self.t("Perennial sea ice."));
                             }
                         } else {
                             let zone = ClimateZone::classify(display_temp, precip, altitude);
-                            card_title(ui, format!("🌦 {}", zone.label()));
-                            caption(ui, zone.describe());
+                            card_title(ui, format!("🌦 {}", self.t(zone.label())));
+                            caption(ui, self.t(zone.describe()));
                             ui.separator();
-                            ui.label(format!("Mean temperature: {:.1} °C", temp));
-                            ui.label(format!(
-                                "Annual rainfall: {:.0} mm/yr",
-                                precip * 1200.0
-                            ));
+                            ui.label(self.tf("Mean temperature: {} °C", &[&format!("{:.1}", temp)]));
+                            ui.label(self.tf("Annual rainfall: {} mm/yr", &[&format!("{:.0}", precip * 1200.0)]));
                             ui.label(format!(
                                 "Elevation: {:.0} m",
                                 relief::altitude_metres(elev)
                             ));
                         }
                         ui.separator();
-                        ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                        ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                     } else if self.scope == MapScope::Temperature {
                         // ── Thermal readout ────────────────────────────
                         let band = themes::isotherm_band(temp);
                         let lake = world.is_lake.as_ref().is_some_and(|lake| *lake.get(map_x, map_y));
                         let surface = if is_ocean {
                             if frozen_sea {
-                                "Sea ice"
+                                self.t("Sea ice")
                             } else {
-                                "Sea surface"
+                                self.t("Sea surface")
                             }
                         } else if lake {
-                            "Lake surface"
+                            self.t("Lake surface")
                         } else if display_temp < -3.0 {
-                            "Ice-capped land"
+                            self.t("Ice-capped land")
                         } else {
-                            "Land surface"
+                            self.t("Land surface")
                         };
                         card_title(ui, format!("🌡 {:.1} °C", temp));
                         caption(ui, surface);
                         ui.separator();
-                        ui.label(format!(
+                        ui.label(self.tf(
                             "Isotherm band: {}",
-                            themes::isotherm_band_label(band)
+                            &[&themes::isotherm_band_label(band)],
                         ));
                         if elev > sea_level {
-                            ui.label(format!(
-                                "Elevation: {:.0} m",
-                                relief::altitude_metres(elev)
+                            ui.label(self.tf(
+                                "Elevation: {} m",
+                                &[&format!("{:.0}", relief::altitude_metres(elev))],
                             ));
                         }
                         ui.separator();
-                        ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                        ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                     } else if self.scope == MapScope::Terrain {
                         // ── Terrain readout ────────────────────────────
                         let lake = world.is_lake.as_ref().is_some_and(|lake| *lake.get(map_x, map_y));
@@ -3856,7 +4014,7 @@ impl MapViewer {
                         let (gx, gy) =
                             world.heightmap.gradient(map_x as f32, map_y as f32);
                         let slope = (gx * gx + gy * gy).sqrt();
-                        card_title(ui, format!("🪨 {}", class.label()));
+                        card_title(ui, format!("🪨 {}", self.t(class.label())));
                         ui.separator();
                         if elev > sea_level {
                             ui.label(format!(
@@ -3869,17 +4027,13 @@ impl MapViewer {
                                 relief::depth_metres(elev)
                             ));
                         }
-                        ui.label(format!("Band: {}", class.range_label()));
+                        ui.label(self.tf("Band: {}", &[&class.range_label(self.language)]));
                         if !is_ocean && !lake && class != TerrainClass::Ice {
-                            ui.label(format!(
-                                "Ground: {} ({:.0} m rise per pixel)",
-                                themes::slope_label(slope),
-                                slope * relief::LAND_M_PER_UNIT
-                            ));
+                            ui.label(self.tf("Ground: {} ({} m rise per pixel)", &[&self.t(themes::slope_label(slope)), &format!("{:.0}", slope * relief::LAND_M_PER_UNIT)]));
                         }
-                        ui.label(format!("Temperature: {:.1} °C", temp));
+                        ui.label(self.tf("Temperature: {} °C", &[&format!("{:.1}", temp)]));
                         ui.separator();
-                        ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                        ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                     } else if self.scope == MapScope::Physical {
                         // ── Physical atlas readout ─────────────────────
                         let biome_title = if is_ocean {
@@ -3893,17 +4047,17 @@ impl MapViewer {
                         card_title(ui, format!("🌍 {}", biome_title));
                         ui.separator();
                         if elev > sea_level {
-                            ui.label(format!("Elevation: {:.0} m", relief::altitude_metres(elev)));
+                            ui.label(self.tf("Elevation: {} m", &[&format!("{:.0}", relief::altitude_metres(elev))]));
                         } else {
-                            ui.label(format!("Depth: {:.0} m", relief::depth_metres(elev)));
+                            ui.label(self.tf("Depth: {} m", &[&format!("{:.0}", relief::depth_metres(elev))]));
                         }
-                        ui.label(format!("Temperature: {:.1} °C", temp));
-                        ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
+                        ui.label(self.tf("Temperature: {} °C", &[&format!("{:.1}", temp)]));
+                        ui.label(self.tf("Precipitation: {} mm/yr", &[&format!("{:.0}", precip * 1200.0)]));
                         if flow >= self.genesis.hydro_config().min_river_flow {
-                            ui.label(format!("River Flow: {:.0} m³/s", flow));
+                            ui.label(self.tf("River Flow: {} m³/s", &[&format!("{:.0}", flow)]));
                         }
                         ui.separator();
-                        ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                        ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                     } else if is_ocean
                         && ocean_id != 0
                         && (ocean_id as usize) < world.ocean_hierarchy.provinces.len()
@@ -3911,70 +4065,76 @@ impl MapViewer {
                         // ── Hydro-political marine realm ───────────────
                         let node = &world.ocean_hierarchy.provinces[ocean_id as usize];
                         if frozen_sea {
-                            card_title(ui, format!("🧊 Ocean Province #{}", ocean_id));
-                            ui.strong(format!("{} · Impassable Polar Wasteland", frozen_sea_name(display_temp)));
+                            card_title(ui, self.tf("🧊 Ocean Province #{}", &[&ocean_id]));
+                            ui.strong(self.tf(
+                                "{} · Impassable Polar Wasteland",
+                                &[&frozen_sea_name(display_temp)],
+                            ));
                         } else {
-                            card_title(ui, format!("🌊 Ocean Province #{}", ocean_id));
+                            card_title(ui, self.tf("🌊 Ocean Province #{}", &[&ocean_id]));
                         }
                         ui.separator();
-                        ui.horizontal(|ui| { ui.label("Area:");        ui.strong(format!("#{}", node.area_id)); });
-                        ui.horizontal(|ui| { ui.label("Region:");      ui.strong(format!("#{}", node.region_id)); });
-                        ui.horizontal(|ui| { ui.label("Superregion:"); ui.strong(format!("#{}", node.superregion_id)); });
-                        ui.horizontal(|ui| { ui.label("Ocean Basin:"); ui.strong(format!("#{}", node.continent_id)); });
+                        ui.horizontal(|ui| { ui.label(self.t("Area:"));        ui.strong(format!("#{}", node.area_id)); });
+                        ui.horizontal(|ui| { ui.label(self.t("Region:"));      ui.strong(format!("#{}", node.region_id)); });
+                        ui.horizontal(|ui| { ui.label(self.t("Superregion:")); ui.strong(format!("#{}", node.superregion_id)); });
+                        ui.horizontal(|ui| { ui.label(self.t("Ocean Basin:")); ui.strong(format!("#{}", node.continent_id)); });
                         ui.separator();
-                        ui.label(format!("Size: {} px", node.pixel_count));
-                        ui.label(format!("Sea Floor Depth: {:.0} m", relief::depth_metres(elev)));
-                        ui.label(format!("Temperature: {:.1} °C", temp));
+                        ui.label(self.tf("Size: {} px", &[&node.pixel_count]));
+                        ui.label(self.tf(
+                            "Sea Floor Depth: {} m",
+                            &[&format!("{:.0}", relief::depth_metres(elev))],
+                        ));
+                        ui.label(self.tf("Temperature: {} °C", &[&format!("{:.1}", temp)]));
                         ui.separator();
-                        ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                        ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                     } else if is_waste {
                         if display_temp < PACK_ICE_TEMP {
-                            card_title(ui, "🧊 Polar Ice Wasteland");
-                            ui.strong("Permanent Ice Sheet / Impassable Wilderness");
+                            card_title(ui, self.t("🧊 Polar Ice Wasteland"));
+                            ui.strong(self.t("Permanent Ice Sheet / Impassable Wilderness"));
                         } else {
-                            card_title(ui, "🏔️ Wasteland");
-                            ui.strong("Impassable / Uninhabited Wilderness");
+                            card_title(ui, self.t("🏔️ Wasteland"));
+                            ui.strong(self.t("Impassable / Uninhabited Wilderness"));
                         }
                         ui.separator();
-                        ui.label(format!("Environment: {}", get_biome_name(display_temp, precip, altitude)));
-                        ui.label(format!("Elevation: {:.0} m", relief::altitude_metres(elev)));
-                        ui.label(format!("Temperature: {:.1} °C", temp));
-                        ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
+                        ui.label(self.tf("Environment: {}", &[&get_biome_name(display_temp, precip, altitude)]));
+                        ui.label(self.tf("Elevation: {} m", &[&format!("{:.0}", relief::altitude_metres(elev))]));
+                        ui.label(self.tf("Temperature: {} °C", &[&format!("{:.1}", temp)]));
+                        ui.label(self.tf("Precipitation: {} mm/yr", &[&format!("{:.0}", precip * 1200.0)]));
                         ui.separator();
-                        ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                        ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                     } else if world.is_lake.as_ref().is_some_and(|lake| *lake.get(map_x, map_y)) {
-                        card_title(ui, "💧 Inland Freshwater Lake");
+                        card_title(ui, self.t("💧 Inland Freshwater Lake"));
                         ui.separator();
-                        ui.label(format!("Lake Surface: {:.0} m", relief::altitude_metres(elev)));
-                        ui.label(format!("Temperature: {:.1} °C", temp));
-                        ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
+                        ui.label(self.tf("Lake Surface: {} m", &[&format!("{:.0}", relief::altitude_metres(elev))]));
+                        ui.label(self.tf("Temperature: {} °C", &[&format!("{:.1}", temp)]));
+                        ui.label(self.tf("Precipitation: {} mm/yr", &[&format!("{:.0}", precip * 1200.0)]));
                         ui.separator();
-                        ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                        ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                     } else if id != 0 && (id as usize) < world.hierarchy.provinces.len() {
                         let node = &world.hierarchy.provinces[id as usize];
 
-                        card_title(ui, format!("📍 Province #{}", id));
+                        card_title(ui, self.tf("📍 Province #{}", &[&id]));
                         ui.separator();
                         ui.horizontal(|ui| {
-                            ui.label("Area:");
+                            ui.label(self.t("Area:"));
                             ui.strong(format!("#{}", node.area_id));
                         });
                         ui.horizontal(|ui| {
-                            ui.label("Region:");
+                            ui.label(self.t("Region:"));
                             ui.strong(format!("#{}", node.region_id));
                         });
                         ui.horizontal(|ui| {
-                            ui.label("Superregion:");
+                            ui.label(self.t("Superregion:"));
                             ui.strong(format!("#{}", node.superregion_id));
                         });
                         ui.horizontal(|ui| {
-                            ui.label("Continent:");
+                            ui.label(self.t("Continent:"));
                             ui.strong(format!("#{}", node.continent_id));
                         });
                         if node.anchor_id != 0 && node.anchor_id != node.id {
                             ui.horizontal(|ui| {
-                                ui.label("Anchor Coast:");
-                                ui.strong(format!("Province #{}", node.anchor_id));
+                                ui.label(self.t("Anchor Coast:"));
+                                ui.strong(self.tf("Province #{}", &[&node.anchor_id]));
                             });
                         }
                         // ── The society this province belongs to ──────────────
@@ -3984,7 +4144,7 @@ impl MapViewer {
                         let owner = world.civilizations.owner_of(id);
                         if owner != 0 {
                             ui.horizontal(|ui| {
-                                ui.label("Society:");
+                                ui.label(self.t("Society:"));
                                 ui.strong(world.civilizations.name_of(owner));
                             });
                             if let Some(tier) = world.civilizations.tier_of(id) {
@@ -4002,37 +4162,39 @@ impl MapViewer {
                             }
                         }
                         ui.separator();
-                        ui.label(format!("Size: {} px", node.pixel_count));
+                        ui.label(self.tf("Size: {} px", &[&node.pixel_count]));
                         if owner != 0 {
-                            ui.label(format!(
-                                "Population: {} people ({:.1}/km²)",
-                                thousands_u64(world.civilizations.population_of(id)),
-                                world.civilizations.population_of(id) as f32
-                                    / (node.pixel_count as f32
-                                        * crate::core::sphere::pixel_area_km2(
-                                            map_y as usize,
-                                            world.height,
-                                            world.width
-                                        ))
-                                        .max(1.0),
+                            let population = world.civilizations.population_of(id);
+                            let density = population as f32
+                                / (node.pixel_count as f32
+                                    * crate::core::sphere::pixel_area_km2(
+                                        map_y as usize,
+                                        world.height,
+                                        world.width,
+                                    ))
+                                .max(1.0);
+                            ui.label(self.tf(
+                                "Population: {} people ({}/km²)",
+                                &[&thousands_u64(population), &format!("{:.1}", density)],
                             ));
-                            ui.label(format!(
+                            ui.label(self.tf(
                                 "Society population: {} people",
-                                thousands_u64(
-                                    world.civilizations
+                                &[&thousands_u64(
+                                    world
+                                        .civilizations
                                         .civilization(owner)
-                                        .map_or(0, |civ| civ.population)
-                                )
+                                        .map_or(0, |civ| civ.population),
+                                )],
                             ));
                         }
-                        ui.label(format!("Elevation: {:.0} m", relief::altitude_metres(elev)));
-                        ui.label(format!("Temperature: {:.1} °C", temp));
-                        ui.label(format!("Precipitation: {:.0} mm/yr", precip * 1200.0));
-                        ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                        ui.label(self.tf("Elevation: {} m", &[&format!("{:.0}", relief::altitude_metres(elev))]));
+                        ui.label(self.tf("Temperature: {} °C", &[&format!("{:.1}", temp)]));
+                        ui.label(self.tf("Precipitation: {} mm/yr", &[&format!("{:.0}", precip * 1200.0)]));
+                        ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                     } else {
-                        card_title(ui, "🌊 Ocean");
-                        ui.label(format!("Depth: {:.0} m", relief::depth_metres(elev)));
-                        ui.label(format!("Coordinates: ({}, {})", map_x, map_y));
+                        card_title(ui, self.t("🌊 Ocean"));
+                        ui.label(self.tf("Depth: {} m", &[&format!("{:.0}", relief::depth_metres(elev))]));
+                        ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                     }
                 });
             }
@@ -4351,28 +4513,28 @@ mod tests {
     /// in, not in bytes and nanoseconds.
     #[test]
     fn a_cache_is_described_in_units_a_reader_thinks_in() {
-        assert_eq!(cache_size(570_425_480), "544 MB");
-        assert_eq!(cache_size(2 * 1024 * 1024 * 1024), "2.0 GB");
+        assert_eq!(cache_size(570_425_480, Language::English), "544 MB");
+        assert_eq!(cache_size(2 * 1024 * 1024 * 1024, Language::English), "2.0 GB");
 
         let now = SystemTime::now();
         assert_eq!(
-            cache_age(Some(now - std::time::Duration::from_secs(90))),
+            cache_age(Some(now - std::time::Duration::from_secs(90)), Language::English),
             "1 min ago"
         );
         assert_eq!(
-            cache_age(Some(now - std::time::Duration::from_secs(3 * 86_400))),
+            cache_age(Some(now - std::time::Duration::from_secs(3 * 86_400)), Language::English),
             "3 d ago"
         );
-        assert_eq!(cache_age(None), "at an unknown time");
+        assert_eq!(cache_age(None, Language::English), "at an unknown time");
     }
 
     /// The row for a saved world says which acts it holds, when the file's header
     /// names them; an older save with no header says only that a world is there.
     #[test]
     fn a_saved_world_says_which_acts_it_holds() {
-        assert_eq!(acts_saved(Some(5)), "acts 1–5");
-        assert_eq!(acts_saved(Some(6)), "acts 1–6");
-        assert_eq!(acts_saved(None), "a saved world");
+        assert_eq!(acts_saved(Some(5), Language::English), "acts 1–5");
+        assert_eq!(acts_saved(Some(6), Language::English), "acts 1–6");
+        assert_eq!(acts_saved(None, Language::English), "a saved world");
     }
 
     /// Changing the seed mid-way does not throw the world away: the acts already
@@ -4492,7 +4654,7 @@ mod tests {
                         ui.separator();
                         caption(ui, "How the world is organised");
                         for (index, tier) in SocietyTier::LADDER.iter().enumerate() {
-                            society_key_row(ui, *tier, 9_999 + index, 100.0 / 5.0);
+                            society_key_row(ui, *tier, 9_999 + index, 100.0 / 5.0, Language::English);
                         }
                         ui.separator();
                         // A society's name comes from the world, not from this
@@ -4502,6 +4664,7 @@ mod tests {
                             SocietyTier::States.legend_color(),
                             "The Sunlit Isle Confederacy of the Common Era",
                             false,
+                            Language::English,
                         );
                     });
 
@@ -4793,6 +4956,150 @@ mod tests {
             assert!(
                 *size >= TEXT_SMALL,
                 "{text:?} was painted at {size} pt, below the atlas's floor"
+            );
+        }
+    }
+
+    // ─── THE ATLAS IN OTHER TONGUES ──────────────────────────────────────────
+
+    /// The whole shell of the atlas — its toolbar, its genesis panel, its world
+    /// data, the legend of the scope it opens on and the picker itself — is read
+    /// in the language the reader chose.
+    #[test]
+    fn the_atlas_speaks_the_readers_language() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+        // A world old enough to have a dawn, so the atlas opens with its toolbar
+        // and its Civilizations legend on screen.
+        let genesis = Genesis::for_test(42, Stage::Civilization);
+        let world = genesis.atlas().expect("a world of seven acts");
+        let mut viewer = MapViewer::with_world(genesis, Some(world)).with_language(Language::German);
+        let painted = draw_frames(&ctx, &mut viewer);
+        let text: Vec<&str> = painted.iter().map(|(drawn, _)| drawn.as_str()).collect();
+        let says = |needle: &str| {
+            assert!(
+                text.iter().any(|drawn| drawn.contains(needle)),
+                "the German atlas never painted {needle:?}; it painted {text:?}"
+            );
+        };
+
+        says("🌍 Atlas-Betrachter");
+        says("🌐 Deutsch");
+        says("Stufe:");
+        says("🧬 Genesis");
+        says("💾 Weltdaten");
+        says("📂 Gespeicherte Welten");
+        says("Startwert");
+        says("📂 Laden");
+        says("💾 Speichern");
+        says("🏺 Die Morgenröte der Zivilisation");
+        says("Auf dieser Welt ist keine Zivilisation entstanden.");
+        says("↺ Welt zurücksetzen");
+        // And nothing of the English shell is left standing beside it.
+        for english in [
+            "World data",
+            "Saved worlds",
+            "Dawn of Civilization",
+            "Borders",
+        ] {
+            assert!(
+                !text.iter().any(|drawn| drawn.contains(english)),
+                "the German atlas still painted {english:?}"
+            );
+        }
+    }
+
+    /// The picker offers every language in its own name, with the current one
+    /// shown on the button itself.
+    #[test]
+    fn the_language_picker_names_each_language_in_itself() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            i18n::language_picker(ui, Language::Portuguese);
+        });
+        let drawn = drawn_text(&output);
+        output.textures_delta.clear();
+
+        assert!(
+            drawn.iter().any(|(text, _)| text.contains("🌐 Português")),
+            "the picker never painted its current language: {drawn:?}"
+        );
+    }
+
+    /// Every act's name and its hover sentence are translated, not merely the
+    /// panel around them. A line whose key drifts from its call site would fall
+    /// back to English, so this pins them together.
+    #[test]
+    fn every_act_is_named_and_described_in_every_language() {
+        for language in Language::ALL {
+            for stage in Stage::ALL {
+                let title = language.text(stage.title());
+                let blurb = language.text(stage.blurb());
+                assert!(!title.is_empty(), "{language:?} has no name for {stage:?}");
+                assert!(!blurb.is_empty(), "{language:?} has no blurb for {stage:?}");
+                if language != Language::English {
+                    assert_ne!(
+                        title,
+                        stage.title(),
+                        "{language:?} left {:?} in English",
+                        stage.title()
+                    );
+                    assert_ne!(
+                        blurb,
+                        stage.blurb(),
+                        "{language:?} left the sentence of {stage:?} in English"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The five-way society key is vocabulary too: its names and its sentences
+    /// are translated, not left as English data in a localised legend.
+    #[test]
+    fn the_society_key_is_translated_in_every_language() {
+        for language in Language::ALL {
+            if language == Language::English {
+                continue;
+            }
+            for tier in SocietyTier::LADDER {
+                assert_ne!(
+                    language.text(tier.label()),
+                    tier.label(),
+                    "{language:?} left the society tier {:?} in English",
+                    tier.label()
+                );
+                assert_ne!(
+                    language.text(tier.describe()),
+                    tier.describe(),
+                    "{language:?} left the description of {:?} in English",
+                    tier.label()
+                );
+            }
+        }
+    }
+
+    /// Every language the picker offers can name the atlas, and none of them
+    /// simply repeats the English title except English itself.
+    #[test]
+    fn every_language_has_its_own_words_for_the_shell() {
+        let english = Language::English.text("🌍 Atlas Viewer");
+        for language in Language::ALL {
+            if language == Language::English {
+                continue;
+            }
+            let title = language.text("🌍 Atlas Viewer");
+            assert_ne!(title, english, "{language:?} left the title in English");
+            assert!(!title.trim().is_empty());
+
+            let filled = language.fill(
+                "Tectonics: {} plates · {}% ocean · {} erosion droplets",
+                &[&1, &2, &3],
+            );
+            assert!(
+                !filled.contains("Tectonics"),
+                "{language:?} left a templated caption in English"
             );
         }
     }

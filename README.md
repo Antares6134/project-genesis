@@ -54,6 +54,7 @@ live low-resolution plate of the world appearing on the canvas as it is made.
 | `--civs-all` | The same, with a full dossier for every society — hundreds of them. |
 | `--langs` | Run Act 8, print the language families and their lexicons, and export the Languages map. |
 | `--plates` | Export the 17 `./exports/atlas_*.png` scope and tier plates used below. |
+| `--lang <code>` | The atlas's interface language — `en`, `es`, `fr`, `de`, `pt` or `tr` (default: the last choice, else the desktop's locale). |
 
 The world cache is a single file, `saved_seeds/world_<seed>.bin`, holding whichever acts the world
 had grown when it was written — every save overwrites the last, so it always holds the deepest one.
@@ -82,6 +83,12 @@ world's own constants:
 | **▶▶ Run all remaining** | Grows the rest of the world without stopping (⏹ stops it after the act in flight). |
 | **↺ Reset world** | Throws the world away and starts over on the same seed — with the constants you chose. |
 | **⚙ Advanced configuration** | A fold-out of every constant the engine reads: twenty-five of them in nine groups — the planet's spin and its sea-level temperatures, the polar ice, the continental field and its coastlines, the orogeny that folds them, weathering and erosion, the moist atmosphere, the rivers, the provinces and wastelands, and the ceiling on continents. Every slider carries the specification's sentence as a hover card and a **↺** back to the engine's default; a group whose values have been moved says `edited`, and each group has a reset of its own. Constants are read by an act **when it runs**, so a change applies to the acts not yet grown — press ↺ on an act to grow it again — and the world already on the canvas is never rewritten. While an act is in flight the constants are greyed: the pipeline is on a worker thread and could not hear the drag. |
+
+The atlas's own voice — its panels, legends, hover cards and configuration — can be read in six
+languages: **English, Español, Français, Deutsch, Português and Türkçe**. Pick one with the 🌐
+control at the end of the toolbar, or start the atlas with `--lang de`; the choice is remembered in
+`saved_seeds/viewer_language.txt`, and a first run follows the desktop's locale. What the world
+invents — its realms, language families and biomes — keeps the names the world gave it.
 
 | Act | What it makes |
 | :--- | :--- |

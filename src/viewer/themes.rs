@@ -16,6 +16,7 @@ use eframe::egui::{self, Color32};
 
 use crate::core::fmt::thousands;
 use crate::core::relief;
+use crate::viewer::i18n::Language;
 
 // ─── SHARED ──────────────────────────────────────────────────────────────────
 
@@ -415,19 +416,25 @@ impl TerrainClass {
     }
 
     /// The vertical range this class covers, in metres.
-    pub fn range_label(self) -> String {
+    pub fn range_label(self, language: Language) -> String {
         match self {
-            TerrainClass::DeepOcean => "below −3 000 m".to_string(),
-            TerrainClass::OceanFloor => "−3 000 … −200 m".to_string(),
-            TerrainClass::Shelf => "−200 … 0 m".to_string(),
-            TerrainClass::Lake => "lake surface".to_string(),
-            TerrainClass::Ice => "frozen ground or sea".to_string(),
-            TerrainClass::CoastalLowland => "0 … 150 m".to_string(),
-            TerrainClass::Lowland => format!("150 … {} m", thousands(600.0)),
-            TerrainClass::Hill => format!("{} … {} m", thousands(600.0), thousands(1200.0)),
-            TerrainClass::Upland => format!("{} … {} m", thousands(1200.0), thousands(2000.0)),
-            TerrainClass::Mountain => format!("{} … {} m", thousands(2000.0), thousands(3200.0)),
-            TerrainClass::HighMountain => format!("{} m +", thousands(3200.0)),
+            TerrainClass::DeepOcean => language.text("below −3 000 m").to_string(),
+            TerrainClass::OceanFloor => language.text("−3 000 … −200 m").to_string(),
+            TerrainClass::Shelf => language.text("−200 … 0 m").to_string(),
+            TerrainClass::Lake => language.text("lake surface").to_string(),
+            TerrainClass::Ice => language.text("frozen ground or sea").to_string(),
+            TerrainClass::CoastalLowland => language.text("0 … 150 m").to_string(),
+            TerrainClass::Lowland => language.fill("150 … {} m", &[&thousands(600.0)]),
+            TerrainClass::Hill => {
+                language.fill("{} … {} m", &[&thousands(600.0), &thousands(1200.0)])
+            }
+            TerrainClass::Upland => {
+                language.fill("{} … {} m", &[&thousands(1200.0), &thousands(2000.0)])
+            }
+            TerrainClass::Mountain => {
+                language.fill("{} … {} m", &[&thousands(2000.0), &thousands(3200.0)])
+            }
+            TerrainClass::HighMountain => language.fill("{} m +", &[&thousands(3200.0)]),
         }
     }
 
@@ -559,7 +566,7 @@ mod tests {
     fn every_terrain_class_has_a_readable_band() {
         for class in TerrainClass::ALL {
             assert!(!class.label().is_empty());
-            assert!(!class.range_label().is_empty());
+            assert!(!class.range_label(Language::English).is_empty());
             assert!(class.color() != [0, 0, 0]);
         }
     }
@@ -584,6 +591,80 @@ mod tests {
         // The warm bands are darker than the polar band, so the legend reads as a
         // depth of colour rather than a clash with the land palette.
         assert!(colours[4][0] < colours[1][0]);
+    }
+
+    #[test]
+    fn the_world_vocabulary_is_translated_in_every_language() {
+        // Tundra is the same word in all six languages, and is allowed to be.
+        const SAME_BY_DESIGN: [&str; 1] = ["Tundra"];
+
+        for language in Language::ALL {
+            if language == Language::English {
+                continue;
+            }
+            for zone in ClimateZone::ALL {
+                assert_eq!(
+                    language.text(zone.label()).is_empty(),
+                    false,
+                    "{language:?} has no name for {:?}",
+                    zone.label()
+                );
+                if !SAME_BY_DESIGN.contains(&zone.label()) {
+                    assert_ne!(
+                        language.text(zone.label()),
+                        zone.label(),
+                        "{language:?} left the climate zone {:?} in English",
+                        zone.label()
+                    );
+                }
+                assert_ne!(
+                    language.text(zone.describe()),
+                    zone.describe(),
+                    "{language:?} left the climate description of {:?} in English",
+                    zone.label()
+                );
+            }
+            for class in TerrainClass::ALL {
+                assert_ne!(
+                    language.text(class.label()),
+                    class.label(),
+                    "{language:?} left the terrain class {:?} in English",
+                    class.label()
+                );
+                // A purely numeric band (`−200 … 0 m`) is the same in every
+                // language; the ones with words in them are not. A unit letter
+                // (`m`) is not a word.
+                let english_range = class.range_label(Language::English);
+                let translated = class.range_label(language);
+                assert!(!translated.is_empty());
+                let has_word = |text: &str| {
+                    text.split(|c: char| !c.is_alphabetic())
+                        .any(|word| word.chars().count() >= 2)
+                };
+                if has_word(&english_range) {
+                    assert_ne!(
+                        translated,
+                        english_range,
+                        "{language:?} left the band of {:?} in English",
+                        class.label()
+                    );
+                }
+            }
+            for sample in [-8.0, 0.0, 9.0, 19.0, 26.0, 30.0] {
+                assert_ne!(
+                    language.text(ocean_climate_label(sample)),
+                    ocean_climate_label(sample),
+                    "{language:?} left an ocean climate band in English"
+                );
+            }
+            for slope in [0.0, 0.02, 0.04, 0.10] {
+                assert_ne!(
+                    language.text(slope_label(slope)),
+                    slope_label(slope),
+                    "{language:?} left a slope word in English"
+                );
+            }
+        }
     }
 
     #[test]

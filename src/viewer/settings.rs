@@ -28,6 +28,7 @@ use crate::pipeline::WorldGenSettings;
 use eframe::egui::{self, RichText, SliderClamping};
 use std::ops::RangeInclusive;
 
+use super::i18n::Language;
 use super::{TEXT_BODY, caption};
 
 /// The width a combo box gets in this panel: the panel is narrow, and the mode
@@ -38,8 +39,13 @@ const SETTING_SLIDER_WIDTH: f32 = 190.0;
 ///
 /// Returns `true` when the reader changed something, so the caller can hand the
 /// new settings to the pipeline — which is the only place they are stored.
-pub fn advanced_settings(ui: &mut egui::Ui, settings: &mut WorldGenSettings, busy: bool) -> bool {
-    draw_section(ui, settings, busy, None)
+pub fn advanced_settings(
+    ui: &mut egui::Ui,
+    settings: &mut WorldGenSettings,
+    busy: bool,
+    language: Language,
+) -> bool {
+    draw_section(ui, settings, busy, None, language)
 }
 
 /// The section itself, with the fold-outs optionally forced open.
@@ -53,11 +59,12 @@ fn draw_section(
     settings: &mut WorldGenSettings,
     busy: bool,
     force_open: Option<bool>,
+    language: Language,
 ) -> bool {
     let mut changed = false;
     let edited = *settings != WorldGenSettings::default();
 
-    egui::CollapsingHeader::new(section_title(edited))
+    egui::CollapsingHeader::new(section_title(edited, language))
         // The badge is part of the label, so the id must not be: a group
         // becoming `edited` must not snap the section shut (the same rule the
         // saved-worlds list follows).
@@ -67,25 +74,29 @@ fn draw_section(
         .show(ui, |ui| {
             caption(
                 ui,
-                "Every constant of the engine, in the order the acts apply it. A value \
-                 applies to the acts not yet grown — press ↺ on an act to grow it again.",
+                language.text(
+                    "Every constant of the engine, in the order the acts apply it. A value applies to the acts not yet grown — press ↺ on an act to grow it again.",
+                ),
             );
 
             ui.horizontal(|ui| {
                 let reset = ui
-                    .add_enabled(edited && !busy, egui::Button::new("↺ Reset all").small())
-                    .on_hover_text("Every constant back to the engine's default")
+                    .add_enabled(
+                        edited && !busy,
+                        egui::Button::new(language.text("↺ Reset all")).small(),
+                    )
+                    .on_hover_text(language.text("Every constant back to the engine's default"))
                     .on_disabled_hover_text(if busy {
-                        "Wait for the act in flight to finish"
+                        language.text("Wait for the act in flight to finish")
                     } else {
-                        "Everything is already at the engine's defaults"
+                        language.text("Everything is already at the engine's defaults")
                     });
                 if reset.clicked() {
                     *settings = WorldGenSettings::default();
                     changed = true;
                 }
                 if busy {
-                    caption(ui, "· an act is running");
+                    caption(ui, language.text("· an act is running"));
                 }
             });
 
@@ -94,7 +105,7 @@ fn draw_section(
             // readable — greyed — rather than lying about what they did.
             ui.add_enabled_ui(!busy, |ui| {
                 for group in Group::ALL {
-                    draw_group(ui, group, settings, &mut changed, force_open);
+                    draw_group(ui, group, settings, &mut changed, force_open, language);
                 }
             });
         });
@@ -103,11 +114,13 @@ fn draw_section(
 }
 
 /// The section's header, with its badge when the planet has been changed.
-fn section_title(edited: bool) -> String {
+fn section_title(edited: bool, language: Language) -> String {
     if edited {
-        "⚙ Advanced configuration  ·  edited".to_string()
+        language
+            .text("⚙ Advanced configuration  ·  edited")
+            .to_string()
     } else {
-        "⚙ Advanced configuration".to_string()
+        language.text("⚙ Advanced configuration").to_string()
     }
 }
 
@@ -253,12 +266,14 @@ fn draw_group(
     settings: &mut WorldGenSettings,
     changed: &mut bool,
     force_open: Option<bool>,
+    language: Language,
 ) {
     let edited = group.edited(settings);
+    let title = language.text(group.title());
     let header = if edited {
-        format!("{}  ·  edited", group.title())
+        language.fill("{}  ·  edited", &[&title])
     } else {
-        group.title().to_string()
+        title.to_string()
     };
 
     egui::CollapsingHeader::new(header)
@@ -266,16 +281,21 @@ fn draw_group(
         .open(force_open)
         .default_open(false)
         .show(ui, |ui| {
-            caption(ui, group.blurb());
+            caption(ui, language.text(group.blurb()));
             let d = WorldGenSettings::default();
-            draw_constants(ui, group, settings, changed, &d);
+            draw_constants(ui, group, settings, changed, &d, language);
 
             // The way back, offered only where there is something to go back
             // from — a reset button on an untouched group is a dead control.
             if group.edited(settings) {
                 ui.add_space(2.0);
                 if ui
-                    .add(egui::Button::new("↺ Reset these to the engine's defaults").small())
+                    .add(
+                        egui::Button::new(language.text(
+                            "↺ Reset these to the engine's defaults",
+                        ))
+                        .small(),
+                    )
                     .clicked()
                 {
                     group.reset(settings);
@@ -292,16 +312,16 @@ fn draw_constants(
     settings: &mut WorldGenSettings,
     changed: &mut bool,
     d: &WorldGenSettings,
+    language: Language,
 ) {
     match group {
         Group::Planetary => {
-            mode_setting(ui, changed, settings);
+            mode_setting(ui, changed, settings, language);
             float_setting(
                 ui,
                 changed,
-                "Equatorial temperature",
-                "Sea-level surface temperature at the equator. Higher values expand \
-                 the tropical belt; lower values begin a global cooling.",
+                language.text("Equatorial temperature"),
+                language.text("Sea-level surface temperature at the equator. Higher values expand the tropical belt; lower values begin a global cooling."),
                 &format!("{:.0} °C", d.equator_temp),
                 &mut settings.equator_temp,
                 d.equator_temp,
@@ -309,13 +329,13 @@ fn draw_constants(
                 1.0,
                 " °C",
                 0,
+                language,
             );
             float_setting(
                 ui,
                 changed,
-                "Polar temperature",
-                "Sea-level surface temperature at the poles. Above 0 °C the world is \
-                 a greenhouse without permanent ice.",
+                language.text("Polar temperature"),
+                language.text("Sea-level surface temperature at the poles. Above 0 °C the world is a greenhouse without permanent ice."),
                 &format!("{:.0} °C", d.pole_temp),
                 &mut settings.pole_temp,
                 d.pole_temp,
@@ -323,6 +343,7 @@ fn draw_constants(
                 1.0,
                 " °C",
                 0,
+                language,
             );
         }
 
@@ -330,10 +351,8 @@ fn draw_constants(
             float_setting(
                 ui,
                 changed,
-                "Land ice cap edge",
-                "The latitude where the thick continental ice caps begin to form. Lower \
-                 it for an ice age; raise it to keep the glaciers at the poles. The sheet \
-                 reaches solid ice 0.18 rad (≈ 10°) further poleward.",
+                language.text("Land ice cap edge"),
+                language.text("The latitude where the thick continental ice caps begin to form. Lower it for an ice age; raise it to keep the glaciers at the poles. The sheet reaches solid ice 0.18 rad (≈ 10°) further poleward."),
                 &format!("{:.1}°", d.polar_cap_start_lat_deg),
                 &mut settings.polar_cap_start_lat_deg,
                 d.polar_cap_start_lat_deg,
@@ -341,14 +360,13 @@ fn draw_constants(
                 0.5,
                 "°",
                 1,
+                language,
             );
             float_setting(
                 ui,
                 changed,
-                "Permanent sea ice edge",
-                "The latitude where permanent pack ice forms over the ocean. The sea \
-                 freezes slightly equatorward of the land ice, so this edge is held at or \
-                 below the ice cap's.",
+                language.text("Permanent sea ice edge"),
+                language.text("The latitude where permanent pack ice forms over the ocean. The sea freezes slightly equatorward of the land ice, so this edge is held at or below the ice cap's."),
                 &format!("{:.1}°", d.polar_belt_start_lat_deg),
                 &mut settings.polar_belt_start_lat_deg,
                 d.polar_belt_start_lat_deg,
@@ -356,12 +374,12 @@ fn draw_constants(
                 0.5,
                 "°",
                 1,
+                language,
             );
             if settings.polar_belt_start_lat_deg > settings.polar_cap_start_lat_deg {
                 warning(
                     ui,
-                    "The sea-ice edge is poleward of the ice cap: the sea freezes first, \
-                     so the belt is pulled back to the cap when the act runs.",
+                    language.text("The sea-ice edge is poleward of the ice cap: the sea freezes first, so the belt is pulled back to the cap when the act runs."),
                 );
             }
         }
@@ -370,10 +388,8 @@ fn draw_constants(
             float_setting(
                 ui,
                 changed,
-                "Sea level / ocean balance",
-                "Shifts the continental datum against the water line: 0.02 drains the \
-                 ocean basins to reveal land bridges and inland seas, 0.11 is Earth, \
-                 0.22 drowns the continents into archipelagos.",
+                language.text("Sea level / ocean balance"),
+                language.text("Shifts the continental datum against the water line: 0.02 drains the ocean basins to reveal land bridges and inland seas, 0.11 is Earth, 0.22 drowns the continents into archipelagos."),
                 &format!("{:.3}", d.sea_threshold),
                 &mut settings.sea_threshold,
                 d.sea_threshold,
@@ -381,14 +397,13 @@ fn draw_constants(
                 0.005,
                 "",
                 3,
+                language,
             );
             float_setting(
                 ui,
                 changed,
-                "Landmass scale",
-                "Frequency of the continental field: 0.40 aggregates the crust into one \
-                 or two supercontinents, 1.05 is Earth's continents, 4.50 shatters the \
-                 land into hundreds of islands.",
+                language.text("Landmass scale"),
+                language.text("Frequency of the continental field: 0.40 aggregates the crust into one or two supercontinents, 1.05 is Earth's continents, 4.50 shatters the land into hundreds of islands."),
                 &format!("{:.2}", d.continental_freq),
                 &mut settings.continental_freq,
                 d.continental_freq,
@@ -396,14 +411,13 @@ fn draw_constants(
                 0.05,
                 "",
                 2,
+                language,
             );
             float_setting(
                 ui,
                 changed,
-                "Coastline roughness",
-                "Fractal persistence across the continental field's octaves. Low values \
-                 give smooth, gentle shorelines; high values craggy, rugged coasts with \
-                 abundant micro-islands.",
+                language.text("Coastline roughness"),
+                language.text("Fractal persistence across the continental field's octaves. Low values give smooth, gentle shorelines; high values craggy, rugged coasts with abundant micro-islands."),
                 &format!("{:.2}", d.continental_persistence),
                 &mut settings.continental_persistence,
                 d.continental_persistence,
@@ -411,14 +425,13 @@ fn draw_constants(
                 0.01,
                 "",
                 2,
+                language,
             );
             float_setting(
                 ui,
                 changed,
-                "Coastline distortion / fjords",
-                "Strength of the coordinate warp on the crust. At 0.00 the landmasses are \
-                 regular and rounded; at high values coastlines fold into deep fjords, \
-                 sweeping bays and chaotic peninsulas.",
+                language.text("Coastline distortion / fjords"),
+                language.text("Strength of the coordinate warp on the crust. At 0.00 the landmasses are regular and rounded; at high values coastlines fold into deep fjords, sweeping bays and chaotic peninsulas."),
                 &format!("{:.2}", d.domain_warp_amp),
                 &mut settings.domain_warp_amp,
                 d.domain_warp_amp,
@@ -426,6 +439,7 @@ fn draw_constants(
                 0.01,
                 "",
                 2,
+                language,
             );
         }
 
@@ -433,10 +447,8 @@ fn draw_constants(
             float_setting(
                 ui,
                 changed,
-                "Mountain uplift height",
-                "Maximum vertical uplift along a fault line. Low values leave weathered, \
-                 low-relief shield plains; high values thrust up towering, impassable \
-                 Alpine ridges.",
+                language.text("Mountain uplift height"),
+                language.text("Maximum vertical uplift along a fault line. Low values leave weathered, low-relief shield plains; high values thrust up towering, impassable Alpine ridges."),
                 &format!("{:.2}", d.mountain_lift),
                 &mut settings.mountain_lift,
                 d.mountain_lift,
@@ -444,14 +456,13 @@ fn draw_constants(
                 0.01,
                 "",
                 2,
+                language,
             );
             float_setting(
                 ui,
                 changed,
-                "Mountain chain spacing",
-                "Density of the tectonic fault lines across the globe. Low values yield a \
-                 few isolated mountain belts; high values a dense, criss-crossed web of \
-                 ranges.",
+                language.text("Mountain chain spacing"),
+                language.text("Density of the tectonic fault lines across the globe. Low values yield a few isolated mountain belts; high values a dense, criss-crossed web of ranges."),
                 &format!("{:.2}", d.fault_noise_freq),
                 &mut settings.fault_noise_freq,
                 d.fault_noise_freq,
@@ -459,13 +470,13 @@ fn draw_constants(
                 0.05,
                 "",
                 2,
+                language,
             );
             float_setting(
                 ui,
                 changed,
-                "Mountain belt width",
-                "Thickness of the orogenic collision zone. Small values draw sharp, narrow \
-                 mountain spines; large values build broad, sprawling highland plateaus.",
+                language.text("Mountain belt width"),
+                language.text("Thickness of the orogenic collision zone. Small values draw sharp, narrow mountain spines; large values build broad, sprawling highland plateaus."),
                 &format!("{:.3}", d.fault_band),
                 &mut settings.fault_band,
                 d.fault_band,
@@ -473,6 +484,7 @@ fn draw_constants(
                 0.005,
                 "",
                 3,
+                language,
             );
         }
 
@@ -480,29 +492,28 @@ fn draw_constants(
             count_setting(
                 ui,
                 changed,
-                "Hydraulic erosion droplets",
-                "Number of simulated raindrops running downhill. Low values leave freshly \
-                 uplifted, jagged crags; high values carve deep canyons, sediment basins \
-                 and mature dendritic valleys. This is the dominant cost of act 1.",
+                language.text("Hydraulic erosion droplets"),
+                language.text("Number of simulated raindrops running downhill. Low values leave freshly uplifted, jagged crags; high values carve deep canyons, sediment basins and mature dendritic valleys. This is the dominant cost of act 1."),
                 &thousands(d.erosion_droplets as f32),
                 &mut settings.erosion_droplets,
                 d.erosion_droplets,
                 50_000..=7_000_000,
                 50_000,
                 true,
+                language,
             );
             count_setting(
                 ui,
                 changed,
-                "Thermal weathering passes",
-                "Iterations of talus slumping downhill. At 0 the cliffs stay near-vertical \
-                 and jagged; higher values soften them into stable, natural scree slopes.",
+                language.text("Thermal weathering passes"),
+                language.text("Iterations of talus slumping downhill. At 0 the cliffs stay near-vertical and jagged; higher values soften them into stable, natural scree slopes."),
                 &d.thermal_iterations.to_string(),
                 &mut settings.thermal_iterations,
                 d.thermal_iterations,
                 0..=10,
                 1,
                 false,
+                language,
             );
         }
 
@@ -510,9 +521,8 @@ fn draw_constants(
             float_setting(
                 ui,
                 changed,
-                "Global baseline rainfall",
-                "Baseline precipitation before latitude belts, rain shadows and distance \
-                 from the sea are accounted for. Sets how lush or dry the planet is.",
+                language.text("Global baseline rainfall"),
+                language.text("Baseline precipitation before latitude belts, rain shadows and distance from the sea are accounted for. Sets how lush or dry the planet is."),
                 &format!("{:.2}", d.base_rainfall),
                 &mut settings.base_rainfall,
                 d.base_rainfall,
@@ -520,14 +530,13 @@ fn draw_constants(
                 0.01,
                 "",
                 2,
+                language,
             );
             float_setting(
                 ui,
                 changed,
-                "Subtropical desert severity",
-                "How deeply the descending limb of the Hadley cell dries the subtropics \
-                 (around ±26°). At 0.00 subtropical deserts disappear; high values girdle \
-                 the globe in Sahara-like belts.",
+                language.text("Subtropical desert severity"),
+                language.text("How deeply the descending limb of the Hadley cell dries the subtropics (around ±26°). At 0.00 subtropical deserts disappear; high values girdle the globe in Sahara-like belts."),
                 &format!("{:.2}", d.hadley_dry_depth),
                 &mut settings.hadley_dry_depth,
                 d.hadley_dry_depth,
@@ -535,14 +544,13 @@ fn draw_constants(
                 0.02,
                 "",
                 2,
+                language,
             );
             float_setting(
                 ui,
                 changed,
-                "Interior aridity floor",
-                "Share of oceanic moisture retained in the deepest continental interior. \
-                 Low values dry out supercontinent hearts into steppes and salt flats; high \
-                 values let the sea's rain reach far inland.",
+                language.text("Interior aridity floor"),
+                language.text("Share of oceanic moisture retained in the deepest continental interior. Low values dry out supercontinent hearts into steppes and salt flats; high values let the sea's rain reach far inland."),
                 &format!("{:.2}", d.inland_factor_floor),
                 &mut settings.inland_factor_floor,
                 d.inland_factor_floor,
@@ -550,13 +558,13 @@ fn draw_constants(
                 0.01,
                 "",
                 2,
+                language,
             );
             float_setting(
                 ui,
                 changed,
-                "Rain shadow intensity",
-                "Multiplier on mountain-induced precipitation. High values create heavy \
-                 deluges on the windward slopes and severe rain-shadow deserts on the lee.",
+                language.text("Rain shadow intensity"),
+                language.text("Multiplier on mountain-induced precipitation. High values create heavy deluges on the windward slopes and severe rain-shadow deserts on the lee."),
                 &format!("{:.1}×", d.orographic_strength),
                 &mut settings.orographic_strength,
                 d.orographic_strength,
@@ -564,6 +572,7 @@ fn draw_constants(
                 0.5,
                 "×",
                 1,
+                language,
             );
         }
 
@@ -571,9 +580,8 @@ fn draw_constants(
             float_setting(
                 ui,
                 changed,
-                "Surface runoff fraction",
-                "Share of rainfall that becomes surface river discharge rather than soaking \
-                 away or evaporating. Higher values mean fuller, wider rivers.",
+                language.text("Surface runoff fraction"),
+                language.text("Share of rainfall that becomes surface river discharge rather than soaking away or evaporating. Higher values mean fuller, wider rivers."),
                 &format!("{:.2}", d.runoff_coefficient),
                 &mut settings.runoff_coefficient,
                 d.runoff_coefficient,
@@ -581,14 +589,13 @@ fn draw_constants(
                 0.01,
                 "",
                 2,
+                language,
             );
             float_setting(
                 ui,
                 changed,
-                "River network cutoff",
-                "Smallest discharge, in m³/s, worth drawing as a river. Lower values reveal \
-                 fine capillary tributaries; higher values display only the great arterial \
-                 rivers.",
+                language.text("River network cutoff"),
+                language.text("Smallest discharge, in m³/s, worth drawing as a river. Lower values reveal fine capillary tributaries; higher values display only the great arterial rivers."),
                 &format!("{:.0} m³/s", d.min_river_flow),
                 &mut settings.min_river_flow,
                 d.min_river_flow,
@@ -596,6 +603,7 @@ fn draw_constants(
                 10.0,
                 " m³/s",
                 0,
+                language,
             );
         }
 
@@ -603,45 +611,43 @@ fn draw_constants(
             count_setting(
                 ui,
                 changed,
-                "Land provinces",
-                "Land provinces across the planet. Drives cell spacing, polygon detail and \
-                 the fineness of the political boundaries.",
+                language.text("Land provinces"),
+                language.text("Land provinces across the planet. Drives cell spacing, polygon detail and the fineness of the political boundaries."),
                 &thousands(d.num_provinces as f32),
                 &mut settings.num_provinces,
                 d.num_provinces,
                 5_000..=60_000,
                 1_000,
                 false,
+                language,
             );
             count_setting(
                 ui,
                 changed,
-                "Marine provinces",
-                "Sea zones partitioned across oceans and gulfs for naval and trade routing.",
+                language.text("Marine provinces"),
+                language.text("Sea zones partitioned across oceans and gulfs for naval and trade routing."),
                 &thousands(d.ocean_num_provinces as f32),
                 &mut settings.ocean_num_provinces,
                 d.ocean_num_provinces,
                 500..=8_000,
                 250,
                 false,
+                language,
             );
             share_setting(
                 ui,
                 changed,
-                "Impassable wilderness cap",
-                "Most of the ice-free land that may become impassable wasteland — the deep \
-                 desert hearts, the glaciated crags, the interior jungle. Set it to 0% for \
-                 a completely settled planet. Polar ice is not counted: it is geography, \
-                 not a choice.",
+                language.text("Impassable wilderness cap"),
+                language.text("Most of the ice-free land that may become impassable wasteland — the deep desert hearts, the glaciated crags, the interior jungle. Set it to 0% for a completely settled planet. Polar ice is not counted: it is geography, not a choice."),
                 &mut settings.max_waste_share,
                 d.max_waste_share,
+                language,
             );
             float_setting(
                 ui,
                 changed,
-                "Wasteland hostility cutoff",
-                "Environmental hostility above which a province is abandoned to the wild. \
-                 Lowering it makes the planet harsher and harder to colonise.",
+                language.text("Wasteland hostility cutoff"),
+                language.text("Environmental hostility above which a province is abandoned to the wild. Lowering it makes the planet harsher and harder to colonise."),
                 &format!("{:.2}", d.waste_cutoff),
                 &mut settings.waste_cutoff,
                 d.waste_cutoff,
@@ -649,6 +655,7 @@ fn draw_constants(
                 0.01,
                 "",
                 2,
+                language,
             );
         }
 
@@ -656,17 +663,15 @@ fn draw_constants(
             count_setting(
                 ui,
                 changed,
-                "Max continents",
-                "Ceiling on the major continental cores found by the topological clustering. \
-                 1 gives a single Pangaean hierarchy, 7 an Earth-like fractured world. \
-                 Landmasses beyond the ceiling are anchored to the nearest core, exactly as \
-                 an island is.",
+                language.text("Max continents"),
+                language.text("Ceiling on the major continental cores found by the topological clustering. 1 gives a single Pangaean hierarchy, 7 an Earth-like fractured world. Landmasses beyond the ceiling are anchored to the nearest core, exactly as an island is."),
                 &d.max_continents.to_string(),
                 &mut settings.max_continents,
                 d.max_continents,
                 1..=16,
                 1,
                 false,
+                language,
             );
         }
     }
@@ -706,8 +711,9 @@ fn float_setting<Num: egui::emath::Numeric>(
     step: f64,
     suffix: &str,
     decimals: usize,
+    language: Language,
 ) {
-    if parameter_name(ui, name, *value == default, default_text) {
+    if parameter_name(ui, name, *value == default, default_text, language) {
         *value = default;
         *changed = true;
     }
@@ -721,7 +727,7 @@ fn float_setting<Num: egui::emath::Numeric>(
                 .trailing_fill(true)
                 .clamping(SliderClamping::Edits),
         )
-        .on_hover_text(hover_card(hover, default_text));
+        .on_hover_text(hover_card(hover, default_text, language));
     if response.changed() {
         *changed = true;
     }
@@ -746,8 +752,9 @@ fn count_setting(
     range: RangeInclusive<usize>,
     step: usize,
     logarithmic: bool,
+    language: Language,
 ) {
-    if parameter_name(ui, name, *value == default, default_text) {
+    if parameter_name(ui, name, *value == default, default_text, language) {
         *value = default;
         *changed = true;
     }
@@ -759,7 +766,7 @@ fn count_setting(
                 .clamping(SliderClamping::Edits)
                 .custom_formatter(|n, _| thousands(n as f32)),
         )
-        .on_hover_text(hover_card(hover, default_text));
+        .on_hover_text(hover_card(hover, default_text, language));
     if response.changed() {
         *changed = true;
     }
@@ -775,9 +782,10 @@ fn share_setting(
     hover: &str,
     value: &mut f64,
     default: f64,
+    language: Language,
 ) {
     let default_text = format!("{:.0}%", default * 100.0);
-    if parameter_name(ui, name, *value == default, &default_text) {
+    if parameter_name(ui, name, *value == default, &default_text, language) {
         *value = default;
         *changed = true;
     }
@@ -788,7 +796,7 @@ fn share_setting(
                 .clamping(SliderClamping::Edits)
                 .custom_formatter(|n, _| format!("{:.0}%", n * 100.0)),
         )
-        .on_hover_text(hover_card(hover, &default_text));
+        .on_hover_text(hover_card(hover, &default_text, language));
     if response.changed() {
         *changed = true;
     }
@@ -796,40 +804,45 @@ fn share_setting(
 }
 
 /// The planetary mode: a rotating globe, or an eyeball world locked to its sun.
-fn mode_setting(ui: &mut egui::Ui, changed: &mut bool, settings: &mut WorldGenSettings) {
-    let default_text = "Rotating";
+fn mode_setting(
+    ui: &mut egui::Ui,
+    changed: &mut bool,
+    settings: &mut WorldGenSettings,
+    language: Language,
+) {
+    let default_text = language.text("Rotating");
     if parameter_name(
         ui,
-        "Planetary rotation mode",
+        language.text("Planetary rotation mode"),
         !settings.tidally_locked,
         default_text,
+        language,
     ) {
         settings.tidally_locked = false;
         *changed = true;
     }
     let hover = hover_card(
-        "Controls the planetary dynamic: a conventional rotating globe with \
-         Hadley/Ferrel circulation, or an eyeball world tidally locked to its sun, \
-         with a permanent day face and a permanent night face.",
+        language.text("Controls the planetary dynamic: a conventional rotating globe with Hadley/Ferrel circulation, or an eyeball world tidally locked to its sun, with a permanent day face and a permanent night face."),
         default_text,
+        language,
     );
     let selected = if settings.tidally_locked {
-        "Tidally locked (eyeball)"
+        language.text("Tidally locked (eyeball)")
     } else {
-        "Rotating (day & night)"
+        language.text("Rotating (day & night)")
     };
     egui::ComboBox::from_id_salt("planetary_mode")
         .selected_text(selected)
         .width(SETTING_SLIDER_WIDTH)
         .show_ui(ui, |ui| {
             if ui
-                .selectable_value(&mut settings.tidally_locked, false, "Rotating (day & night)")
+                .selectable_value(&mut settings.tidally_locked, false, language.text("Rotating (day & night)"))
                 .changed()
             {
                 *changed = true;
             }
             if ui
-                .selectable_value(&mut settings.tidally_locked, true, "Tidally locked (eyeball)")
+                .selectable_value(&mut settings.tidally_locked, true, language.text("Tidally locked (eyeball)"))
                 .changed()
             {
                 *changed = true;
@@ -846,15 +859,27 @@ fn mode_setting(ui: &mut egui::Ui, changed: &mut bool, settings: &mut WorldGenSe
 /// Returns `true` when the reader asked for the default back. A parameter that
 /// *is* the default keeps its arrow, greyed: a control that vanishes is a
 /// control a reader has to hunt for.
-fn parameter_name(ui: &mut egui::Ui, name: &str, at_default: bool, default_text: &str) -> bool {
+fn parameter_name(
+    ui: &mut egui::Ui,
+    name: &str,
+    at_default: bool,
+    default_text: &str,
+    language: Language,
+) -> bool {
     let mut reset = false;
     ui.horizontal(|ui| {
         ui.label(RichText::new(name).size(TEXT_BODY));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
                 .add_enabled(!at_default, egui::Button::new("↺").frame(false))
-                .on_hover_text(format!("Back to the engine's default ({default_text})"))
-                .on_disabled_hover_text(format!("Already the engine's default ({default_text})"))
+                .on_hover_text(language.fill(
+                    "Back to the engine's default ({})",
+                    &[&default_text],
+                ))
+                .on_disabled_hover_text(language.fill(
+                    "Already the engine's default ({})",
+                    &[&default_text],
+                ))
                 .clicked()
             {
                 reset = true;
@@ -865,8 +890,8 @@ fn parameter_name(ui: &mut egui::Ui, name: &str, at_default: bool, default_text:
 }
 
 /// A parameter's hover card: the spec's sentence, and the default it returns to.
-fn hover_card(hover: &str, default_text: &str) -> String {
-    format!("{hover}\n\nEngine default: {default_text}")
+fn hover_card(hover: &str, default_text: &str, language: Language) -> String {
+    language.fill("{}\n\nEngine default: {}", &[&hover, &default_text])
 }
 
 /// A caution under the parameter that raised it, in the same amber the panel
@@ -1093,7 +1118,7 @@ mod tests {
         let mut changed = false;
         for _ in 0..3 {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                changed = draw_section(ui, settings, busy, Some(true));
+                changed = draw_section(ui, settings, busy, Some(true), Language::English);
             });
             // Nothing is painting a headless frame, so the font atlas it built has
             // nowhere to go — but egui insists it be acknowledged rather than
@@ -1108,9 +1133,26 @@ mod tests {
     /// The panel is `GENESIS_PANEL_WIDTH` wide and the map keeps everything else:
     /// a widget that asks for more than the panel offers widens the panel's frame,
     /// and a panel that grows takes the canvas with it. Twenty-five sliders and a
-    /// combo box are exactly the kind of content that does it.
+    /// combo box are exactly the kind of content that does it — and a translation
+    /// is longer than its English original, so every language is measured.
     #[test]
     fn an_open_section_never_paints_past_its_panel() {
+        for language in Language::ALL {
+            let (ink, panel) = section_bounds(language);
+            assert!(
+                ink.max.x <= panel.max.x + 1.0,
+                "the {language:?} section paints to x = {:.1} but the panel ends at \
+                 x = {:.1}: the map would lose the width it was promised",
+                ink.max.x,
+                panel.max.x,
+            );
+            assert!(ink.width() > 0.0, "{language:?} painted nothing at all");
+        }
+    }
+
+    /// The ink and the panel rectangle of one language's open section, taken from
+    /// the last of three headless frames.
+    fn section_bounds(language: Language) -> (egui::Rect, egui::Rect) {
         use super::super::{GENESIS_PANEL_WIDTH, atlas_panel_frame, configure_style};
 
         let ctx = egui::Context::default();
@@ -1132,7 +1174,7 @@ mod tests {
                     .exact_size(GENESIS_PANEL_WIDTH)
                     .show(ui, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| {
-                            draw_section(ui, &mut settings, false, Some(true));
+                            draw_section(ui, &mut settings, false, Some(true), language);
                         });
                     });
                 panel_rect = panel.response.rect;
@@ -1146,13 +1188,7 @@ mod tests {
             output.textures_delta.clear();
         }
 
-        assert!(
-            ink.max.x <= panel_rect.max.x + 1.0,
-            "the section paints to x = {:.1} but the panel ends at x = {:.1}: \
-             the map would lose the width it was promised",
-            ink.max.x,
-            panel_rect.max.x,
-        );
+        (ink, panel_rect)
     }
 }
 

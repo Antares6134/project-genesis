@@ -31,8 +31,10 @@ fn main() {
     let mut run_civilizations = false;
     let mut report_all_societies = false;
     let mut run_languages = false;
+    let mut lang_flag: Option<String> = None;
 
-    for arg in env::args().skip(1) {
+    let mut args = env::args().skip(1);
+    while let Some(arg) = args.next() {
         if arg == "--save" {
             save_cache = true;
         } else if arg == "--load" {
@@ -48,6 +50,10 @@ fn main() {
             report_all_societies = true;
         } else if arg == "--langs" {
             run_languages = true;
+        } else if arg == "--lang" {
+            // The atlas's interface language: `--lang de`. Unknown codes fall
+            // through to the saved preference, then to the desktop's locale.
+            lang_flag = args.next();
         } else if let Ok(parsed_seed) = arg.parse::<u64>() {
             seed = parsed_seed;
         }
@@ -71,6 +77,16 @@ fn main() {
     // write the world cache (`--save`), and whether to adopt the world already on
     // disk (`--load`) instead of growing one.
     if run_viewer {
+        // The interface language: what the reader asked for on the command line,
+        // else what they chose last time, else what the desktop is set to.
+        let language = lang_flag
+            .as_deref()
+            .and_then(viewer::Language::from_known_tag)
+            .or_else(|| {
+                viewer::Language::load_preference(std::path::Path::new(pipeline::CACHE_DIR))
+            })
+            .unwrap_or_else(viewer::Language::from_env);
+
         let mut genesis = Genesis::new(seed);
         genesis.set_autosave(save_cache);
         if load_cache {
@@ -98,7 +114,11 @@ fn main() {
         eframe::run_native(
             "Project Genesis - Atlas Viewer",
             options,
-            Box::new(|_cc| Ok(Box::new(viewer::MapViewer::new(genesis)))),
+            Box::new(|_cc| {
+                Ok(Box::new(
+                    viewer::MapViewer::new(genesis).with_language(language),
+                ))
+            }),
         )
         .unwrap();
         return;
