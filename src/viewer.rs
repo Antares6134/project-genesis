@@ -299,6 +299,10 @@ pub struct MapViewer {
     /// The language the interface is read in. English until the reader — or the
     /// desktop's locale — says otherwise.
     language: Language,
+    /// Whether the genesis panel is on screen. The map may claim the whole window
+    /// once a world exists; the top bar stays either way, so the toggle is always
+    /// within reach.
+    show_genesis_panel: bool,
 }
 
 /// The live plate of an act in flight: its label, and the texture it is painted
@@ -1131,6 +1135,7 @@ impl MapViewer {
             // Deterministic on purpose: the tests and the headless plates read
             // English, and `main` decides what the desktop's reader asked for.
             language: Language::English,
+            show_genesis_panel: true,
         }
     }
 
@@ -1570,7 +1575,7 @@ impl MapViewer {
             painter.text(
                 egui::pos2(rect.center().x, at.max.y + 40.0),
                 Align2::CENTER_CENTER,
-                self.tf("Growing a world — seed {}", &[&self.genesis.seed()]),
+                self.tf("Seed {}", &[&self.genesis.seed()]),
                 FontId::proportional(TEXT_BODY),
                 Color32::from_rgb(150, 164, 190),
             );
@@ -1583,22 +1588,42 @@ impl MapViewer {
             self.t("No world yet")
         };
         painter.text(
-            rect.center() - egui::vec2(0.0, 18.0),
+            rect.center() - egui::vec2(0.0, 64.0),
             Align2::CENTER_CENTER,
             title,
             FontId::proportional(TEXT_HEADING + 8.0),
             Color32::from_rgb(214, 224, 242),
         );
         painter.text(
-            rect.center() + egui::vec2(0.0, 20.0),
+            rect.center() - egui::vec2(0.0, 26.0),
             Align2::CENTER_CENTER,
-            self.tf(
-                "Seed {}. Every act of creation is a button in the Genesis panel: begin with {}.",
-                &[&self.genesis.seed(), &act_label(self.language, Stage::Geology)],
-            ),
+            self.tf("Seed {}", &[&self.genesis.seed()]),
             FontId::proportional(TEXT_BODY),
             Color32::from_rgb(150, 164, 190),
         );
+
+        // One press is all the first act needs, and it is the only thing a
+        // reader can want from an empty world. It is offered on the plate
+        // itself, so the first act is never hunted for in the panel.
+        if self.job.is_none() {
+            let label = self.tf(
+                "▶ Begin — {}",
+                &[&act_label(self.language, Stage::Geology)],
+            );
+            let button_rect = egui::Rect::from_center_size(
+                rect.center() + egui::vec2(0.0, 40.0),
+                egui::vec2(360.0, 40.0),
+            );
+            if ui
+                .put(
+                    button_rect,
+                    egui::Button::new(egui::RichText::new(label).size(TEXT_BODY).strong()),
+                )
+                .clicked()
+            {
+                self.start_stage(Stage::Geology, ui.ctx());
+            }
+        }
     }
 
     // ─── THE GENESIS PANEL ───────────────────────────────────────────────────
@@ -1631,10 +1656,6 @@ impl MapViewer {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         panel_title(ui, self.t("🧬 Genesis"));
-                        caption(
-                            ui,
-                            self.t("A world is grown one act at a time. Watch each one as it happens."),
-                        );
                         ui.separator();
                         self.seed_row(ui, busy);
                         ui.add_space(2.0);
@@ -1723,20 +1744,7 @@ impl MapViewer {
                 ui,
                 self.t("A seed is a whole number — try 42, or press 🎲."),
             );
-            return;
         }
-        let config = self.genesis.world_config();
-        caption(
-            ui,
-            self.tf(
-                "Tectonics: {} plates · {}% ocean · {} erosion droplets",
-                &[
-                    &config.num_plates,
-                    &format!("{:.0}", config.ocean_ratio * 100.0),
-                    &thousands(config.erosion_droplets as f32),
-                ],
-            ),
-        );
     }
 
     /// World data: loading and saving are commands, auto-save is a setting, and
@@ -1824,7 +1832,7 @@ impl MapViewer {
             (Some(cache), _) => caption(
                 ui,
                 self.tf(
-                    "seed {} · {} · saved {} · Load picks up where it left off",
+                    "seed {} · {} · saved {}",
                     &[
                         &cache.seed,
                         &cache_size(cache.bytes, self.language),
@@ -1835,7 +1843,7 @@ impl MapViewer {
             (None, Some(seed)) => caption(
                 ui,
                 self.tf(
-                    "No saved world for seed {} yet — press Save and grow one.",
+                    "No saved world for seed {}.",
                     &[&seed],
                 ),
             ),
@@ -1871,18 +1879,6 @@ impl MapViewer {
             self.genesis.set_autosave(autosave);
             self.cache_notice = None;
         }
-
-        if !autosave {
-            caption(
-                ui,
-                self.t("Auto-save — off: the world is written only when you press Save."),
-            );
-        } else {
-            caption(
-                ui,
-                self.t("Auto-save — on: written the moment act 3 lands, and again at act 6, overwriting the earlier save."),
-            );
-        }
     }
 
     /// Every world cache on disk, newest first, as a list to pick from.
@@ -1910,14 +1906,10 @@ impl MapViewer {
                         {
                             refresh = true;
                         }
-                        caption(ui, self.t("Click a world to load it"));
                     });
 
                     if self.cached.is_empty() {
-                        caption(
-                            ui,
-                            self.t("Nothing saved yet. Tick Save above and grow a world, and it will appear here."),
-                        );
+                        caption(ui, self.t("No saved worlds."));
                         return;
                     }
 
@@ -2905,10 +2897,18 @@ impl MapViewer {
         let ctx = ui.ctx().clone();
         self.poll_worker(&ctx);
 
-        // Every panel wears the atlas's own frame: the stock one is padded for a
-        // 13 pt interface, and this atlas reads at 15 pt.
+        // The chrome comes first and is always there: the top bar spans the whole
+        // window — before a world exists as well as after — so the language can
+        // be chosen, the scopes can be read, and the world can be watched without
+        // the frame around it ever going missing.
         let panel_frame = atlas_panel_frame(ui.style());
-        self.genesis_panel(ui, &panel_frame);
+        self.top_bar(ui, &panel_frame);
+        // The census is a footer, not a section of the map: it spans the window
+        // like the top bar does, and the genesis panel sits between the two.
+        self.bottom_census(ui, &panel_frame);
+        if self.show_genesis_panel {
+            self.genesis_panel(ui, &panel_frame);
+        }
 
         // The world is taken for the length of the frame rather than borrowed:
         // painting it needs `&self` for the view state and `&AtlasWorld` for the
@@ -2922,184 +2922,220 @@ impl MapViewer {
             None => self.cold_start(ui),
         }
     }
-}
 
-impl MapViewer {
-    /// Paint the world, and the atlas that describes it.
-    fn atlas_ui(&mut self, ui: &mut egui::Ui, world: &AtlasWorld) {
-        if !self.style_installed {
-            self.install_style(ui);
-        }
-        // Every panel wears the atlas's own frame: the stock one is padded for a
-        // 13 pt interface, and this atlas reads at 15 pt.
-        let panel_frame = atlas_panel_frame(ui.style());
+    /// The atlas's chrome: the brand, the world's age, every map scope, the
+    /// controls that dress the map, and the language.
+    ///
+    /// Both rows are always drawn, whatever the world's age or the scope on
+    /// screen. A control is disabled when it cannot apply — not hidden — so the
+    /// atlas never changes shape under the reader's hand and nothing it offers is
+    /// a surprise.
+    fn top_bar(&mut self, ui: &mut egui::Ui, frame: &egui::Frame) {
+        let stage = self.world.as_ref().map(|world| world.stage);
+        let has_world = self.world.is_some();
+        let has_civs = self
+            .world
+            .as_ref()
+            .is_some_and(|world| !world.civilizations.is_empty());
+        let civ_count = self
+            .world
+            .as_ref()
+            .map_or(0, |world| world.civilizations.civilizations.len());
+        let seed = self.genesis.seed();
 
-        // The province bundles, when the acts that made them have run. A world
-        // that has not reached act four has no provinces, and none of the
-        // scopes that would read them are offered (see `MapScope::min_stage`).
-        let province_ids = world.provinces.as_ref().map(|p| &p.province_ids);
-        let ocean_province_ids = world.ocean.as_ref().map(|o| &o.ocean_province_ids);
-        let is_wasteland = world.provinces.as_ref().map(|p| &p.is_wasteland);
-
-        let mut visual_changed = false;
-        // Panel clicks cannot move the map directly: the canvas rectangle for
-        // this frame is only known once the panels have been laid out. Requests
-        // are collected here and applied right after the canvas is allocated.
-        let mut fit_request = false;
-        let mut focus_request: Option<(f32, f32, f32)> = None;
-        let mut clicked_civ: Option<u32> = None;
-        let mut clicked_family: Option<u16> = None;
-
-        // ── TOP CONTROLS BAR ──────────────────────────────────────────────────
-        // Two rows, because the atlas now has ten map modes: what it shows, then
-        // how it shows it. Both rows wrap, so a narrow window never clips a button.
-        egui::Panel::top("top_controls")
-            .frame(panel_frame.clone())
+        egui::Panel::top("top_bar")
+            .frame(frame.clone())
             .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                panel_title(ui, self.t("🌍 Atlas Viewer"));
-                ui.separator();
-
-                // ── Map scope: what the atlas portrays ────────────────────────
-                // A scope is offered exactly when the world is old enough to have
-                // what it portrays: relief needs only the land, biomes and climate
-                // need the atmosphere, the provinces and the two hierarchies each
-                // need their own act. Nothing is ever a map of something that has
-                // not been made yet.
-                for (scope, label) in [
-                    (MapScope::Physical, "🗺 Physical"),
-                    (MapScope::Topographic, "⛰ Topographic"),
-                    (MapScope::Climate, "🌦 Climate"),
-                    (MapScope::Temperature, "🌡 Temperature"),
-                    (MapScope::Terrain, "🪨 Terrain"),
-                    (MapScope::Civilizations, "🏺 Civilizations"),
-                    (MapScope::Languages, "🗣 Languages"),
-                    (MapScope::Land, "🏛 Land"),
-                    (MapScope::Water, "🌊 Water"),
-                    (MapScope::Everywhere, "🌍 Everywhere"),
-                ] {
-                    let ready = scope.available(world.stage);
-                    let label = self.t(label);
-                    let response = ui.add_enabled_ui(ready, |ui| {
-                        ui.selectable_value(&mut self.scope, scope, label)
-                    });
-                    let response = response.inner;
-                    if !ready {
-                        let need = scope.min_stage();
-                        response.on_hover_text(self.tf(
-                            "Needs “{}. {}” — {}.",
-                            &[
-                                &need.index(),
-                                &self.t(need.title()),
-                                &self.t(need.blurb()),
-                            ],
-                        ));
-                    } else if response.clicked() {
-                        // Repaint in the new scope, but keep the reader's zoom and
-                        // pan: a map mode is a change of what is shown, not of where
-                        // the reader is looking. **Fit** is there when the whole
-                        // world is wanted again.
-                        visual_changed = true;
+                ui.horizontal_wrapped(|ui| {
+                    panel_title(ui, self.t("🌍 Atlas Viewer"));
+                    ui.separator();
+                    ui.label(egui::RichText::new(self.tf("Seed {}", &[&seed])).strong());
+                    if !has_world {
+                        caption(ui, self.t("No world yet"));
                     }
-                }
-            });
+                    ui.separator();
 
-            ui.horizontal_wrapped(|ui| {
-                // Tier selector: the political tiers when a political scope is on,
-                // and the internal subdivision of the realms in the Civilizations
-                // scope (a realm's own provinces, areas, regions…).
-                ui.add_enabled_ui(self.scope.is_political() || self.scope.is_civilizations(), |ui| {
-                    ui.label(self.t("Tier:"));
-                    for (tier, label) in [
-                        (MapTier::Provinces, "Provinces"),
-                        (MapTier::Areas, "Areas"),
-                        (MapTier::Regions, "Regions"),
-                        (MapTier::Superregions, "Superregions"),
-                        (MapTier::Continents, "Continents"),
+                    // ── Map scope: what the atlas portrays ────────────────────
+                    // A scope is offered exactly when the world is old enough to
+                    // have what it portrays: relief needs only the land, biomes
+                    // and climate need the atmosphere, the provinces and the two
+                    // hierarchies each need their own act. Before a world exists
+                    // every scope is disabled, and the bar says why.
+                    for (scope, label) in [
+                        (MapScope::Physical, "🗺 Physical"),
+                        (MapScope::Topographic, "⛰ Topographic"),
+                        (MapScope::Climate, "🌦 Climate"),
+                        (MapScope::Temperature, "🌡 Temperature"),
+                        (MapScope::Terrain, "🪨 Terrain"),
+                        (MapScope::Civilizations, "🏺 Civilizations"),
+                        (MapScope::Languages, "🗣 Languages"),
+                        (MapScope::Land, "🏛 Land"),
+                        (MapScope::Water, "🌊 Water"),
+                        (MapScope::Everywhere, "🌍 Everywhere"),
                     ] {
+                        let ready = stage.is_some_and(|stage| scope.available(stage));
                         let label = self.t(label);
-                        if ui
-                            .selectable_value(&mut self.tier, tier, label)
-                            .clicked()
-                        {
-                            visual_changed = true;
+                        let response = ui
+                            .add_enabled_ui(ready, |ui| {
+                                ui.selectable_value(&mut self.scope, scope, label)
+                            })
+                            .inner;
+                        if !ready {
+                            let hint = match stage {
+                                None => self.t("Grow a world first").to_string(),
+                                Some(_) => {
+                                    let need = scope.min_stage();
+                                    self.tf(
+                                        "Needs “{}. {}” — {}.",
+                                        &[
+                                            &need.index(),
+                                            &self.t(need.title()),
+                                            &self.t(need.blurb()),
+                                        ],
+                                    )
+                                }
+                            };
+                            response.on_disabled_hover_text(hint);
+                        } else if response.clicked() {
+                            // Repaint in the new scope, but keep the reader's zoom
+                            // and pan: a map mode is a change of what is shown,
+                            // not of where the reader is looking. **Fit** is there
+                            // when the whole world is wanted again.
+                            self.texture = None;
                         }
+                    }
+
+                    ui.separator();
+                    if ui
+                        .button("☰")
+                        .on_hover_text(self.t("Show/hide the Genesis panel"))
+                        .clicked()
+                    {
+                        self.show_genesis_panel = !self.show_genesis_panel;
+                    }
+
+                    // ── The language ──────────────────────────────────────────
+                    // A property of the reader, not of the world: it is offered
+                    // before the first act as well as after the last, and no act
+                    // can ever disable it.
+                    if let Some(chosen) = i18n::language_picker(ui, self.language)
+                        && chosen != self.language
+                    {
+                        self.language = chosen;
+                        chosen.save_preference(std::path::Path::new(crate::pipeline::CACHE_DIR));
                     }
                 });
 
-                ui.separator();
+                ui.horizontal_wrapped(|ui| {
+                    // Tier selector: the political tiers when a political scope is
+                    // on, and the internal subdivision of the realms in the
+                    // Civilizations scope (a realm's own provinces, areas, regions…).
+                    let tier_ready = has_world
+                        && (self.scope.is_political() || self.scope.is_civilizations());
+                    let tier_heading = self.t("Tier:");
+                    ui.add_enabled_ui(tier_ready, |ui| {
+                        ui.label(tier_heading);
+                        for (tier, label) in [
+                            (MapTier::Provinces, "Provinces"),
+                            (MapTier::Areas, "Areas"),
+                            (MapTier::Regions, "Regions"),
+                            (MapTier::Superregions, "Superregions"),
+                            (MapTier::Continents, "Continents"),
+                        ] {
+                            let label = self.t(label);
+                            if ui.selectable_value(&mut self.tier, tier, label).clicked() {
+                                self.texture = None;
+                            }
+                        }
+                    });
 
-                // Border Toggle (in political and civilization scopes)
-                if self.scope.is_political() || self.scope.is_civilizations() {
-                    let borders = self.t("Borders");
-                    if ui.checkbox(&mut self.show_borders, borders).clicked() {
-                        visual_changed = true;
-                    }
                     ui.separator();
-                }
 
-                // ── Civilizations overlay ─────────────────────────────────────
-                // The dawn is viewable on the physical atlas, the survey sheet and
-                // both political hierarchies, not only on its own map mode.
-                if !self.scope.is_civilizations() && !world.civilizations.is_empty() {
-                    let world = &world.civilizations;
-                    let label = self.tf("🏺 Civilizations ({})", &[&world.civilizations.len()]);
+                    // Border Toggle (in political and civilization scopes)
+                    let borders_label = self.t("Borders");
+                    let borders_ready = has_world
+                        && (self.scope.is_political() || self.scope.is_civilizations());
                     if ui
-                        .checkbox(&mut self.show_civilizations, label)
-                        .on_hover_text(self.tf(
-                            "{}\nAtlas date: {}\nThe overlay tints the provinces each realm holds, on top of whatever this scope already paints.",
-                            &[&world.epoch_label(), &world.map_year_label()],
-                        ))
-                        .clicked()
+                        .add_enabled_ui(borders_ready, |ui| {
+                            ui.checkbox(&mut self.show_borders, borders_label)
+                        })
+                        .inner
+                        .changed()
                     {
-                        visual_changed = true;
+                        self.texture = None;
                     }
                     ui.separator();
-                }
 
-                // Zoom controls. **Fit** measures the canvas and shows the whole
-                // planet; it is applied after the panels settle, further down.
-                if ui
-                    .button("➖")
-                    .on_hover_text(self.t("Zoom out"))
-                    .clicked()
-                {
-                    self.zoom = (self.zoom * 0.75).clamp(MIN_ZOOM, MAX_ZOOM);
-                }
-                ui.label(format!("{:.0}%", self.zoom * 100.0));
-                if ui.button("➕").on_hover_text(self.t("Zoom in")).clicked() {
-                    self.zoom = (self.zoom * 1.33).clamp(MIN_ZOOM, MAX_ZOOM);
-                }
-                if ui
-                    .button(self.t("⤢ Fit"))
-                    .on_hover_text(self.t("Fit the whole world in the window"))
-                    .clicked()
-                {
-                    fit_request = true;
-                }
+                    // ── Civilizations overlay ─────────────────────────────────
+                    // The dawn is viewable on the physical atlas, the survey sheet
+                    // and both political hierarchies, not only on its own map mode.
+                    // It is on none of the scopes that portray people by another
+                    // name, so there it is shown disabled rather than taken away.
+                    let civ_label = self.tf("🏺 Civilizations ({})", &[&civ_count]);
+                    let overlay_ready = has_civs
+                        && !self.scope.is_civilizations()
+                        && !self.scope.is_languages();
+                    let mut response = ui
+                        .add_enabled_ui(overlay_ready, |ui| {
+                            ui.checkbox(&mut self.show_civilizations, civ_label)
+                        })
+                        .inner;
+                    if !has_civs {
+                        response = response.on_disabled_hover_text(self.t("No civilizations yet"));
+                    } else if !overlay_ready {
+                        response =
+                            response.on_disabled_hover_text(self.t("Not shown in this scope"));
+                    }
+                    if response.changed() {
+                        self.texture = None;
+                    }
+                    ui.separator();
 
-                // ── The language ──────────────────────────────────────────────
-                // Last on the row and always available: it is a property of the
-                // reader, not of the world, so it is never disabled by an act.
-                ui.separator();
-                if let Some(chosen) = i18n::language_picker(ui, self.language)
-                    && chosen != self.language
-                {
-                    self.language = chosen;
-                    chosen.save_preference(std::path::Path::new(crate::pipeline::CACHE_DIR));
-                }
+                    // Zoom controls. **Fit** measures the canvas and shows the
+                    // whole planet; it is applied after the panels settle, in the
+                    // canvas's own frame.
+                    ui.add_enabled_ui(has_world, |ui| {
+                        if ui
+                            .button("➖")
+                            .on_hover_text(self.t("Zoom out"))
+                            .clicked()
+                        {
+                            self.zoom = (self.zoom * 0.75).clamp(MIN_ZOOM, MAX_ZOOM);
+                        }
+                        ui.label(format!("{:.0}%", self.zoom * 100.0));
+                        if ui.button("➕").on_hover_text(self.t("Zoom in")).clicked() {
+                            self.zoom = (self.zoom * 1.33).clamp(MIN_ZOOM, MAX_ZOOM);
+                        }
+                        if ui
+                            .button(self.t("⤢ Fit"))
+                            .on_hover_text(self.t("Fit the whole world in the window"))
+                            .clicked()
+                        {
+                            self.pending_fit = true;
+                        }
+                    });
+                });
             });
-        });
+    }
 
-        // ── BOTTOM STATUS BAR ─────────────────────────────────────────────────
-        egui::Panel::bottom("bottom_status")
-            .frame(panel_frame.clone())
+    /// The world's census, in the three lines it has always been: the land
+    /// hierarchy, the ocean hierarchy and the dawn. A hierarchy that has not been
+    /// built yet is not printed as a row of zeroes — it is simply not there to
+    /// count.
+    fn bottom_census(&self, ui: &mut egui::Ui, frame: &egui::Frame) {
+        let Some(world) = self.world.as_ref() else {
+            return;
+        };
+        if world.hierarchy.total_provinces == 0
+            && world.ocean_hierarchy.total_provinces == 0
+            && world.civilizations.is_empty()
+        {
+            return;
+        }
+
+        egui::Panel::bottom("bottom_census")
+            .frame(frame.clone())
             .show(ui, |ui| {
-                // Three lines of plain figures, each one allowed to wrap: the
-                // footer is a status bar, not a place where a narrow window
-                // quietly loses the right-hand half of the world's census. A
-                // hierarchy that has not been built yet is not printed as a row
-                // of zeroes either: it is simply not there to count.
                 if world.hierarchy.total_provinces > 0 {
                     status_line(
                         ui,
@@ -3130,7 +3166,6 @@ impl MapViewer {
                         ),
                     );
                 }
-                // ── The dawn of history ───────────────────────────────────────
                 if !world.civilizations.is_empty() {
                     let dawn = &world.civilizations;
                     status_line(
@@ -3150,6 +3185,32 @@ impl MapViewer {
                     );
                 }
             });
+    }
+}
+
+impl MapViewer {
+    /// Paint the world, and the atlas that describes it.
+    fn atlas_ui(&mut self, ui: &mut egui::Ui, world: &AtlasWorld) {
+        if !self.style_installed {
+            self.install_style(ui);
+        }
+        // Every panel wears the atlas's own frame: the stock one is padded for a
+        // 13 pt interface, and this atlas reads at 15 pt.
+        let panel_frame = atlas_panel_frame(ui.style());
+
+        // The province bundles, when the acts that made them have run. A world
+        // that has not reached act four has no provinces, and none of the
+        // scopes that would read them are offered (see `MapScope::min_stage`).
+        let province_ids = world.provinces.as_ref().map(|p| &p.province_ids);
+        let ocean_province_ids = world.ocean.as_ref().map(|o| &o.ocean_province_ids);
+        let is_wasteland = world.provinces.as_ref().map(|p| &p.is_wasteland);
+
+        // Legend clicks cannot move the map directly: the canvas rectangle for
+        // this frame is only known once the panels have been laid out. Requests
+        // are collected here and applied right after the canvas is allocated.
+        let mut focus_request: Option<(f32, f32, f32)> = None;
+        let mut clicked_civ: Option<u32> = None;
+        let mut clicked_family: Option<u16> = None;
 
         // ── HYPSOMETRIC LEGEND (Topographic scope only) ───────────────────────
         // The survey sheet is only readable with its scale at hand, so the
@@ -3172,10 +3233,6 @@ impl MapViewer {
                 .exact_size(LEGEND_WIDTH)
                 .show(ui, |ui| {
                     panel_title(ui, self.t("⛰ Topographic Scale"));
-                    caption(
-                        ui,
-                        self.t("Tint = elevation above / depth below the sea surface."),
-                    );
                     ui.separator();
 
                     let peak_label = self.tf(
@@ -3218,10 +3275,6 @@ impl MapViewer {
                         "🌍 Surface: {}% ocean",
                         &[&format!("{:.0}", relief.ocean_share * 100.0)],
                     ));
-                    caption(
-                        ui,
-                        self.t("Click a figure above to centre the map on it."),
-                    );
                     ui.separator();
 
                     // The band list is the only part that can overflow a short
@@ -3248,10 +3301,6 @@ impl MapViewer {
                 .exact_size(LEGEND_WIDTH)
                 .show(ui, |ui| {
                     panel_title(ui, self.t("🌦 Climate Zones"));
-                    caption(
-                        ui,
-                        self.t("Land is classified by mean temperature, annual rainfall and altitude; the sea by its surface temperature."),
-                    );
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         for zone in ClimateZone::ALL {
@@ -3285,10 +3334,6 @@ impl MapViewer {
                 .exact_size(LEGEND_WIDTH)
                 .show(ui, |ui| {
                     panel_title(ui, self.t("🌡 Temperature"));
-                    caption(
-                        ui,
-                        self.t("Mean annual surface temperature: land station means, sea-surface means over the ocean."),
-                    );
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         for row in 0..TEMPERATURE_LEGEND_ROWS {
@@ -3300,8 +3345,6 @@ impl MapViewer {
                             );
                         }
                     });
-                    ui.separator();
-                    caption(ui, self.t("A thin dark line marks every 5 °C isotherm."));
                 });
         }
 
@@ -3313,10 +3356,6 @@ impl MapViewer {
                 .exact_size(LEGEND_WIDTH)
                 .show(ui, |ui| {
                     panel_title(ui, self.t("🪨 Terrain Types"));
-                    caption(
-                        ui,
-                        self.t("Landform bands from the vertical datum; the ocean floor is classified by depth."),
-                    );
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         for class in TerrainClass::ALL {
@@ -3346,10 +3385,6 @@ impl MapViewer {
                     let world = &world.civilizations;
                     if world.is_empty() {
                         ui.label(self.t("No civilization rose on this world."));
-                        caption(
-                            ui,
-                            self.t("The history stage only runs when it is asked for: pass --civs (it is on automatically with --viewer and --plates)."),
-                        );
                         return;
                     }
 
@@ -3410,7 +3445,6 @@ impl MapViewer {
                     let counts = world.counts_by_tier();
                     let areas = world.area_by_tier();
                     let inhabited_area: f32 = areas.iter().sum::<f32>().max(1.0);
-                    caption(ui, self.t("How the world is organised"));
                     for (index, tier) in SocietyTier::LADDER.iter().enumerate() {
                         society_key_row(
                             ui,
@@ -3421,7 +3455,6 @@ impl MapViewer {
                         );
                     }
                     ui.separator();
-                    caption(ui, self.t("Click a society to fly to its heartland."));
 
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         for tier in SocietyTier::LADDER {
@@ -3499,10 +3532,6 @@ impl MapViewer {
                 .exact_size(CIV_LEGEND_WIDTH)
                 .show(ui, |ui| {
                     panel_title(ui, self.t("🗣 Languages of the World"));
-                    caption(
-                        ui,
-                        self.t("Each family is a colour, each language a shade of it. A family holds the provinces its speakers settled, from its Urheimat outward."),
-                    );
                     ui.separator();
                     if world.languages.is_empty() {
                         caption(ui, self.t("No tongue has been given to this world yet."));
@@ -3589,7 +3618,7 @@ impl MapViewer {
         // The 8K plate is only regenerated when the world or the scope has
         // changed — never per frame — and never while an act is running, because
         // while an act is running the *live* plate is what the canvas shows.
-        if self.job.is_none() && (self.texture.is_none() || visual_changed) {
+        if self.job.is_none() && self.texture.is_none() {
             let img = self.generate_texture(world);
             self.texture = Some(
                 ui.ctx()
@@ -3604,7 +3633,7 @@ impl MapViewer {
         // The canvas is the only thing that knows how big the map area really is,
         // so both "fit" and "fly to" are resolved here, in the same frame the
         // click happened.
-        if fit_request || self.pending_fit {
+        if self.pending_fit {
             if rect.width() >= 64.0 && rect.height() >= 64.0 {
                 self.fit_to(rect, world.width as f32, world.height as f32);
                 self.pending_fit = false;
@@ -4320,6 +4349,137 @@ mod tests {
         );
     }
 
+    /// The language is a property of the reader, not of the world: it must be
+    /// choosable before the first act has been run. The picker lives in the top
+    /// bar, so its rectangle is near the top of the window even on the cold
+    /// start.
+    #[test]
+    fn the_language_can_be_chosen_before_a_world_exists() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+        let mut viewer = MapViewer::new(Genesis::new(42));
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1720.0, 1040.0));
+        let mut picker = None;
+
+        for frame in 0..3 {
+            let mut input = egui::RawInput::default();
+            input.screen_rect = Some(screen);
+            input.time = Some(1.0 + f64::from(frame));
+            let mut output = ctx.run_ui(input, |ui| viewer.frame_ui(ui));
+            for (text, rect) in drawn_text_rects(&output) {
+                if text.contains("🌐 English") {
+                    picker = Some(rect);
+                }
+            }
+            output.textures_delta.clear();
+        }
+
+        let rect = picker.expect("the cold-start atlas never painted the language picker");
+        assert!(
+            rect.min.y < 160.0,
+            "the picker belongs to the top bar, not the empty map: {rect:?}"
+        );
+    }
+
+    /// The chrome is painted before a world exists as well as after: the brand,
+    /// both rows of controls, and the one press that begins the world.
+    #[test]
+    fn the_top_bar_and_the_first_act_are_there_before_there_is_a_world() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+        let mut viewer = MapViewer::new(Genesis::new(42));
+        let painted = draw_frames(&ctx, &mut viewer);
+        let text: Vec<&str> = painted.iter().map(|(drawn, _)| drawn.as_str()).collect();
+        let says = |needle: &str| {
+            assert!(
+                text.iter().any(|drawn| drawn.contains(needle)),
+                "the cold-start atlas never painted {needle:?}"
+            );
+        };
+
+        says("🌍 Atlas Viewer");
+        says("No world yet");
+        says("Tier:");
+        says("▶ Begin — 1. Geology & Erosion");
+    }
+
+    /// The engine's own constants belong in the configuration panel, not in a
+    /// caption beside the seed: a reader who wants them opens the fold-out.
+    #[test]
+    fn the_engine_constants_are_not_printed_beside_the_seed() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+        let mut viewer = MapViewer::new(Genesis::new(42));
+        let painted = draw_frames(&ctx, &mut viewer);
+        for (drawn, _) in &painted {
+            assert!(
+                !drawn.contains("Tectonics") && !drawn.contains("erosion droplets"),
+                "the panel still prints the engine's constants beside the seed: {drawn:?}"
+            );
+        }
+    }
+
+    /// The genesis panel can be folded away so the map claims the window; the
+    /// chrome stays, which is what keeps the language and the scopes in reach.
+    #[test]
+    fn the_genesis_panel_can_be_folded_away_for_the_map() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+        let mut viewer = MapViewer::new(Genesis::new(42));
+        viewer.show_genesis_panel = false;
+        let painted = draw_frames(&ctx, &mut viewer);
+        let text: Vec<&str> = painted.iter().map(|(drawn, _)| drawn.as_str()).collect();
+
+        assert!(
+            text.iter().any(|drawn| drawn.contains("🌍 Atlas Viewer")),
+            "the top bar must outlive the panel it toggles"
+        );
+        assert!(
+            !text.iter().any(|drawn| drawn.contains("🧬 Genesis")),
+            "the folded panel is still being painted"
+        );
+    }
+
+    /// The census is data, not prose: it survives the redesign, in the footer,
+    /// with its three lines intact.
+    #[test]
+    fn the_bottom_census_survives_the_redesign() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+        // The test pipeline's own hierarchies are empty; the footer is about a
+        // world that has actually been cut into provinces, so give it some.
+        let genesis = Genesis::for_test(42, Stage::HydroPolitics);
+        let mut world = genesis.atlas().expect("a world of six acts");
+        world.hierarchy = std::sync::Arc::new(GeopoliticalHierarchy {
+            total_provinces: 3,
+            total_areas: 2,
+            total_regions: 2,
+            total_superregions: 1,
+            total_continents: 1,
+            ..GeopoliticalHierarchy::empty()
+        });
+        world.ocean_hierarchy = std::sync::Arc::new(GeopoliticalHierarchy {
+            total_provinces: 2,
+            total_areas: 2,
+            total_regions: 1,
+            total_superregions: 1,
+            total_continents: 1,
+            ..GeopoliticalHierarchy::empty()
+        });
+        let mut viewer = MapViewer::with_world(genesis, Some(world));
+        let painted = draw_frames(&ctx, &mut viewer);
+        let text: Vec<&str> = painted.iter().map(|(drawn, _)| drawn.as_str()).collect();
+        let says = |needle: &str| {
+            assert!(
+                text.iter().any(|drawn| drawn.contains(needle)),
+                "the footer never painted {needle:?}"
+            );
+        };
+
+        says("🏛 LAND — Continents:");
+        says("🌊 OCEAN — Basins:");
+    }
+
     /// A world that is already physical — the state `--load` leaves behind —
     /// opens with its three acts done, its next act waiting, and the rest locked.
     #[test]
@@ -4445,8 +4605,8 @@ mod tests {
         says("42%");
         says("🔴 live: Continents rising");
         // The act has not finished, so the world is not there yet — and the plate
-        // on the canvas is captioned as a world *being* grown.
-        says("Growing a world");
+        // on the canvas is captioned with the seed it is growing.
+        says("Seed 42");
         assert!(viewer.live.is_some(), "the plate became a texture");
     }
 
@@ -5093,12 +5253,9 @@ mod tests {
             assert_ne!(title, english, "{language:?} left the title in English");
             assert!(!title.trim().is_empty());
 
-            let filled = language.fill(
-                "Tectonics: {} plates · {}% ocean · {} erosion droplets",
-                &[&1, &2, &3],
-            );
+            let filled = language.fill("Seed {}", &[&42]);
             assert!(
-                !filled.contains("Tectonics"),
+                !filled.contains("Seed"),
                 "{language:?} left a templated caption in English"
             );
         }

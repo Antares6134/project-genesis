@@ -8,7 +8,7 @@
 //! # The three rules that keep this honest
 //!
 //! 1. **English is the key.** Every translatable line is written at its call site
-//!    — `caption(ui, self.t("Tint = elevation above / depth below the sea surface."))`
+//!    — `caption(ui, self.t("No world yet"))`
 //!    — and this module holds only the *other* languages. A line with no entry
 //!    here simply stays English, so the atlas can never show a missing-text marker,
 //!    and adding a translation never means touching a call site.
@@ -319,15 +319,50 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Ajustar o mundo inteiro à janela",
             "Tüm dünyayı pencereye sığdır",
         ],
+        "Seed {}" => [
+            "Semilla {}",
+            "Graine {}",
+            "Startwert {}",
+            "Semente {}",
+            "Tohum {}",
+        ],
+        "▶ Begin — {}" => [
+            "▶ Comenzar — {}",
+            "▶ Commencer — {}",
+            "▶ Beginnen — {}",
+            "▶ Começar — {}",
+            "▶ Başla — {}",
+        ],
+        "Grow a world first" => [
+            "Primero crea un mundo",
+            "Créez d'abord un monde",
+            "Erschaffe zuerst eine Welt",
+            "Crie um mundo primeiro",
+            "Önce bir dünya oluştur",
+        ],
+        "No civilizations yet" => [
+            "Aún no hay civilizaciones",
+            "Pas encore de civilisations",
+            "Noch keine Zivilisationen",
+            "Ainda não há civilizações",
+            "Henüz uygarlık yok",
+        ],
+        "Not shown in this scope" => [
+            "No se muestra en este modo",
+            "Non affiché dans ce mode",
+            "In dieser Ansicht nicht angezeigt",
+            "Não é mostrado neste modo",
+            "Bu görünümde gösterilmez",
+        ],
+        "Show/hide the Genesis panel" => [
+            "Mostrar/ocultar el panel Génesis",
+            "Afficher/masquer le panneau Genèse",
+            "Genesis-Panel ein-/ausblenden",
+            "Mostrar/ocultar o painel Génesis",
+            "Yaratılış panelini göster/gizle",
+        ],
         // ── The genesis panel ────────────────────────────────────────────────
         "🧬 Genesis" => ["🧬 Génesis", "🧬 Genèse", "🧬 Genesis", "🧬 Génesis", "🧬 Yaratılış"],
-        "A world is grown one act at a time. Watch each one as it happens." => [
-            "Un mundo crece acto a acto. Observa cada uno mientras ocurre.",
-            "Un monde grandit un acte à la fois. Regardez chacun se dérouler.",
-            "Eine Welt wächst Akt für Akt. Beobachten Sie jeden, während er geschieht.",
-            "Um mundo cresce ato a ato. Veja cada um a acontecer.",
-            "Bir dünya her seferinde bir perde büyür. Her birini olurken izleyin.",
-        ],
         "💾 World data" => [
             "💾 Datos del mundo",
             "💾 Données du monde",
@@ -357,12 +392,26 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Uma semente é um número inteiro — experimente 42 ou prima 🎲.",
             "Tohum bir tam sayıdır — 42 deneyin ya da 🎲 düğmesine basın.",
         ],
-        "Tectonics: {} plates · {}% ocean · {} erosion droplets" => [
-            "Tectónica: {} placas · {}% de océano · {} gotas de erosión",
-            "Tectonique : {} plaques · {} % d'océan · {} gouttes d'érosion",
-            "Tektonik: {} Platten · {} % Ozean · {} Erosionstropfen",
-            "Tectónica: {} placas · {}% de oceano · {} gotas de erosão",
-            "Tektonik: {} levha · %{} okyanus · {} erozyon damlası",
+        "No saved worlds." => [
+            "No hay mundos guardados.",
+            "Aucun monde enregistré.",
+            "Keine gespeicherten Welten.",
+            "Nenhum mundo guardado.",
+            "Kayıtlı dünya yok.",
+        ],
+        "No saved world for seed {}." => [
+            "No hay ningún mundo guardado para la semilla {}.",
+            "Aucun monde enregistré pour la graine {}.",
+            "Keine gespeicherte Welt für Startwert {}.",
+            "Nenhum mundo guardado para a semente {}.",
+            "{} tohumu için kayıtlı dünya yok.",
+        ],
+        "seed {} · {} · saved {}" => [
+            "semilla {} · {} · guardado {}",
+            "graine {} · {} · enregistré {}",
+            "Startwert {} · {} · gespeichert {}",
+            "semente {} · {} · guardado {}",
+            "tohum {} · {} · kayıtlı {}",
         ],
         "Wait for the act in flight to finish" => [
             "Espera a que termine el acto en curso",
@@ -415,20 +464,6 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Escreve cada ato já gerado, até ao ato 6, em saved_seeds/world_<seed>.bin",
             "Şimdiye kadar oluşan her perdeyi, 6. perdeye kadar saved_seeds/world_<seed>.bin dosyasına yazar",
         ],
-        "seed {} · {} · saved {} · Load picks up where it left off" => [
-            "semilla {} · {} · guardado {} · Cargar retoma donde se quedó",
-            "graine {} · {} · enregistré {} · Charger reprend où cela s'est arrêté",
-            "Startwert {} · {} · gespeichert {} · Laden setzt dort fort, wo es aufgehört hat",
-            "semente {} · {} · guardado {} · Carregar retoma onde parou",
-            "tohum {} · {} · kayıt {} · Yükle kaldığı yerden sürer",
-        ],
-        "No saved world for seed {} yet — press Save and grow one." => [
-            "Aún no hay un mundo guardado para la semilla {}. Pulsa Guardar y genera uno.",
-            "Pas encore de monde enregistré pour la graine {} — appuyez sur Enregistrer et générez-en un.",
-            "Noch keine gespeicherte Welt für Startwert {} — drücken Sie Speichern und lassen Sie eine wachsen.",
-            "Ainda não há um mundo guardado para a semente {} — prima Guardar e gere um.",
-            "{} tohumu için henüz kayıtlı dünya yok — Kaydet'e basın ve bir dünya oluşturun.",
-        ],
         "A seed is a whole number — Load needs one." => [
             "Una semilla es un número entero: Cargar necesita una.",
             "Une graine est un nombre entier — Charger en a besoin.",
@@ -442,20 +477,6 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "💾 Automatisch speichern, wenn Akt 3 und Akt 6 fertig sind",
             "💾 Guardar automaticamente ao concluir os atos 3 e 6",
             "💾 3. ve 6. perde tamamlanınca otomatik kaydet",
-        ],
-        "Auto-save — off: the world is written only when you press Save." => [
-            "Guardado automático: desactivado. El mundo solo se escribe al pulsar Guardar.",
-            "Enregistrement auto — désactivé : le monde n'est écrit que si vous appuyez sur Enregistrer.",
-            "Automatisch speichern — aus: Die Welt wird nur geschrieben, wenn Sie Speichern drücken.",
-            "Guardado automático — desligado: o mundo só é escrito quando prime Guardar.",
-            "Otomatik kayıt — kapalı: dünya yalnızca Kaydet'e basınca yazılır.",
-        ],
-        "Auto-save — on: written the moment act 3 lands, and again at act 6, overwriting the earlier save." => [
-            "Guardado automático: activado. Se escribe al completar el acto 3 y de nuevo en el acto 6, sobrescribiendo el anterior.",
-            "Enregistrement auto — activé : écrit dès la fin de l'acte 3, puis à l'acte 6, en écrasant le précédent.",
-            "Automatisch speichern — an: wird geschrieben, sobald Akt 3 fertig ist, und wieder bei Akt 6, wobei der frühere Stand überschrieben wird.",
-            "Guardado automático — ligado: é escrito assim que o ato 3 termina, e de novo no ato 6, substituindo o anterior.",
-            "Otomatik kayıt — açık: 3. perde biter bitmez, 6. perdede yeniden yazılır ve önceki kaydın üzerine geçer.",
         ],
         "📂 Saved worlds ({})" => [
             "📂 Mundos guardados ({})",
@@ -471,20 +492,6 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "saved_seeds erneut lesen",
             "Ler saved_seeds novamente",
             "saved_seeds klasörünü yeniden oku",
-        ],
-        "Click a world to load it" => [
-            "Haz clic en un mundo para cargarlo",
-            "Cliquez sur un monde pour le charger",
-            "Klicken Sie auf eine Welt, um sie zu laden",
-            "Clique num mundo para o carregar",
-            "Yüklemek için bir dünyaya tıklayın",
-        ],
-        "Nothing saved yet. Tick Save above and grow a world, and it will appear here." => [
-            "Aún no hay nada guardado. Marca Guardar arriba y genera un mundo, y aparecerá aquí.",
-            "Rien n'est encore enregistré. Cochez Enregistrer ci-dessus et générez un monde : il apparaîtra ici.",
-            "Noch nichts gespeichert. Setzen Sie oben ein Häkchen bei Speichern und lassen Sie eine Welt wachsen — sie erscheint dann hier.",
-            "Ainda nada guardado. Marque Guardar acima e gere um mundo, e ele aparecerá aqui.",
-            "Henüz hiçbir şey kaydedilmedi. Yukarıda Kaydet'i işaretleyin ve bir dünya oluşturun; burada görünecek.",
         ],
         "{}   {} · {}  · {}" => [
             "{}   {} · {}  · {}",
@@ -682,13 +689,6 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Tohum {}. Her yaratılış perdesi Yaratılış panelinde bir düğmedir: {} ile başlayın.",
         ],
         "🔴 {} — {}" => ["🔴 {} — {}", "🔴 {} — {}", "🔴 {} — {}", "🔴 {} — {}", "🔴 {} — {}"],
-        "Growing a world — seed {}" => [
-            "Generando un mundo: semilla {}",
-            "Un monde pousse — graine {}",
-            "Eine Welt wächst — Startwert {}",
-            "A gerar um mundo — semente {}",
-            "Bir dünya oluşuyor — tohum {}",
-        ],
         "🔴 live: {} · {}" => [
             "🔴 en vivo: {} · {}",
             "🔴 en direct : {} · {}",
@@ -726,13 +726,6 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "⛰ Escala topográfica",
             "⛰ Topografik Ölçek",
         ],
-        "Tint = elevation above / depth below the sea surface." => [
-            "El tono indica la altitud sobre el mar o la profundidad bajo él.",
-            "La teinte indique l'altitude au-dessus ou la profondeur sous la mer.",
-            "Der Farbton zeigt Höhe über bzw. Tiefe unter dem Meeresspiegel.",
-            "O tom indica a altitude acima ou a profundidade abaixo do mar.",
-            "Renk, deniz yüzeyinin üstündeki yüksekliği ya da altındaki derinliği gösterir.",
-        ],
         "🗻 Highest peak   +{} m" => [
             "🗻 Cumbre más alta   +{} m",
             "🗻 Plus haut sommet   +{} m",
@@ -768,26 +761,12 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "🌍 Superfície: {}% de oceano",
             "🌍 Yüzey: %{} okyanus",
         ],
-        "Click a figure above to centre the map on it." => [
-            "Haz clic en una cifra de arriba para centrar el mapa en ella.",
-            "Cliquez sur un chiffre ci-dessus pour centrer la carte dessus.",
-            "Klicken Sie oben auf eine Zahl, um die Karte darauf zu zentrieren.",
-            "Clique numa cifra acima para centrar o mapa nela.",
-            "Haritayı ortalayacağınız bir sayıya yukarıdan tıklayın.",
-        ],
         "🌦 Climate Zones" => [
             "🌦 Zonas climáticas",
             "🌦 Zones climatiques",
             "🌦 Klimazonen",
             "🌦 Zonas climáticas",
             "🌦 İklim Bölgeleri",
-        ],
-        "Land is classified by mean temperature, annual rainfall and altitude; the sea by its surface temperature." => [
-            "La tierra se clasifica por temperatura media, lluvia anual y altitud; el mar, por su temperatura superficial.",
-            "La terre est classée selon la température moyenne, les précipitations annuelles et l'altitude ; la mer selon sa température de surface.",
-            "Land wird nach Mitteltemperatur, Jahresniederschlag und Höhenlage klassifiziert, das Meer nach seiner Oberflächentemperatur.",
-            "A terra é classificada pela temperatura média, precipitação anual e altitude; o mar pela sua temperatura à superfície.",
-            "Kara, ortalama sıcaklık, yıllık yağış ve yüksekliğe göre; deniz ise yüzey sıcaklığına göre sınıflandırılır.",
         ],
         "Frozen sea" => ["Mar helado", "Mer gelée", "Gefrorenes Meer", "Mar gelado", "Donmuş deniz"],
         "Polar sea" => ["Mar polar", "Mer polaire", "Polarmeer", "Mar polar", "Kutup denizi"],
@@ -813,33 +792,12 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Mar equatorial",
             "Ekvator denizi",
         ],
-        "Mean annual surface temperature: land station means, sea-surface means over the ocean." => [
-            "Temperatura superficial media anual: medias de estaciones en tierra y de la superficie del mar.",
-            "Température de surface moyenne annuelle : moyennes des stations terrestres, moyennes de surface en mer.",
-            "Mittlere Jahres-Oberflächentemperatur: Stationsmittel über Land, Oberflächenmittel über dem Meer.",
-            "Temperatura média anual à superfície: médias de estações em terra, médias da superfície do mar.",
-            "Yıllık ortalama yüzey sıcaklığı: karada istasyon ortalamaları, denizde yüzey ortalamaları.",
-        ],
-        "A thin dark line marks every 5 °C isotherm." => [
-            "Una fina línea oscura marca cada isoterma de 5 °C.",
-            "Une fine ligne sombre marque chaque isotherme de 5 °C.",
-            "Eine dünne dunkle Linie markiert jede 5-°C-Isotherme.",
-            "Uma linha escura fina marca cada isoterma de 5 °C.",
-            "Her 5 °C izotermi ince koyu bir çizgiyle işaretlenir.",
-        ],
         "🪨 Terrain Types" => [
             "🪨 Tipos de relieve",
             "🪨 Types de relief",
             "🪨 Geländeformen",
             "🪨 Tipos de relevo",
             "🪨 Arazi Türleri",
-        ],
-        "Landform bands from the vertical datum; the ocean floor is classified by depth." => [
-            "Franjas de relieve desde el datum vertical; el fondo marino se clasifica por profundidad.",
-            "Bandes de relief depuis le datum vertical ; le fond marin est classé par profondeur.",
-            "Reliefbänder ab dem vertikalen Datum; der Meeresboden wird nach Tiefe klassifiziert.",
-            "Faixas de relevo desde o datum vertical; o fundo do mar é classificado por profundidade.",
-            "Düşey datumdan itibaren yer şekli kuşakları; okyanus tabanı derinliğe göre sınıflandırılır.",
         ],
         "🏺 The Dawn of Civilization" => [
             "🏺 El amanecer de la civilización",
@@ -854,13 +812,6 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Auf dieser Welt ist keine Zivilisation entstanden.",
             "Nenhuma civilização surgiu neste mundo.",
             "Bu dünyada hiçbir uygarlık doğmadı.",
-        ],
-        "The history stage only runs when it is asked for: pass --civs (it is on automatically with --viewer and --plates)." => [
-            "La etapa de historia solo se ejecuta cuando se pide: usa --civs (se activa automáticamente con --viewer y --plates).",
-            "L'étape d'histoire ne s'exécute que si on la demande : passez --civs (activée automatiquement avec --viewer et --plates).",
-            "Der Geschichtsakt läuft nur auf Anforderung: verwenden Sie --civs (bei --viewer und --plates automatisch an).",
-            "A etapa de história só corre quando é pedida: use --civs (ativa automaticamente com --viewer e --plates).",
-            "Tarih perdesi yalnızca istendiğinde çalışır: --civs kullanın (--viewer ve --plates ile otomatik açılır).",
         ],
         "Atlas date: {} · {}" => [
             "Fecha del atlas: {} · {}",
@@ -904,20 +855,6 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Densidade média {} hab./km²",
             "Ortalama yoğunluk {} kişi/km²",
         ],
-        "How the world is organised" => [
-            "Cómo está organizado el mundo",
-            "Comment le monde est organisé",
-            "Wie die Welt gegliedert ist",
-            "Como o mundo está organizado",
-            "Dünya nasıl örgütlenmiş",
-        ],
-        "Click a society to fly to its heartland." => [
-            "Haz clic en una sociedad para volar a su corazón.",
-            "Cliquez sur une société pour voler vers son cœur.",
-            "Klicken Sie auf eine Gesellschaft, um zu ihrem Kernland zu fliegen.",
-            "Clique em cada sociedade para voar até ao seu coração.",
-            "Bir topluma tıklayarak onun kalbine uçun.",
-        ],
         "{} ({})" => ["{} ({})", "{} ({})", "{} ({})", "{} ({})", "{} ({})"],
         "Click to fly to this society's heartland" => [
             "Haz clic para volar al corazón de esta sociedad",
@@ -946,13 +883,6 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "🗣 Sprachen der Welt",
             "🗣 Línguas do mundo",
             "🗣 Dünya Dilleri",
-        ],
-        "Each family is a colour, each language a shade of it. A family holds the provinces its speakers settled, from its Urheimat outward." => [
-            "Cada familia es un color y cada idioma un tono suyo. Una familia abarca las provincias donde se asentaron sus hablantes, desde su Urheimat hacia fuera.",
-            "Chaque famille est une couleur, chaque langue une nuance de celle-ci. Une famille occupe les provinces où ses locuteurs se sont installés, depuis son Urheimat.",
-            "Jede Familie ist eine Farbe, jede Sprache ein Farbton davon. Eine Familie umfasst die Provinzen, in denen sich ihre Sprecher niederließen, von ihrer Urheimat aus.",
-            "Cada família é uma cor e cada língua um tom dela. Uma família reúne as províncias onde os seus falantes se fixaram, desde a sua Urheimat para fora.",
-            "Her dil ailesi bir renk, her dil o rengin bir tonudur. Bir aile, konuşurlarının yerleştiği illeri Urheimat'ından dışarıya doğru kapsar.",
         ],
         "No tongue has been given to this world yet." => [
             "Este mundo aún no tiene lenguas.",
@@ -2424,13 +2354,13 @@ mod tests {
 
     #[test]
     fn a_template_places_its_values_where_the_translation_puts_the_braces() {
-        let filled = Language::German.fill(
-            "Tectonics: {} plates · {}% ocean · {} erosion droplets",
-            &[&12, &71, &3_500_000],
-        );
+        // German keeps the figures where its own grammar wants them.
         assert_eq!(
-            filled,
-            "Tektonik: 12 Platten · 71 % Ozean · 3500000 Erosionstropfen"
+            Language::German.fill(
+                "seed {} · {} · saved {}",
+                &[&12, &"544 MB", &"3 d ago"],
+            ),
+            "Startwert 12 · 544 MB · gespeichert 3 d ago"
         );
 
         // Turkish moves the per-cent sign in front of the figure.

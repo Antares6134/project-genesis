@@ -71,14 +71,20 @@ contoured elevation survey) and `world_political_map.png` (the land hierarchy). 
 
 ### Growing a world in the atlas
 
-`--viewer` opens the window first and grows nothing until it is asked. The genesis panel on the
-left is the whole pipeline, in fold-out sections — the seed, the world's data, the acts, and the
-world's own constants:
+`--viewer` opens the window first and grows nothing until it is asked. The **top bar** is always
+there — before a world exists as well as after — carrying the seed, the map scopes, the dressing
+controls (tier, borders, civilizations overlay, zoom) and the interface language. Controls that
+cannot apply yet are disabled rather than hidden, so the atlas never changes shape under your hand.
+The collapsible **🧬 Genesis** panel on the left is the whole pipeline, in fold-out sections — the
+seed, the world's data, the acts, and the world's own constants — and **☰** in the top bar folds it
+away when the map should have the whole window. On an empty canvas a single
+**▶ Begin — 1. Geology & Erosion** press starts the world. The census stays in the footer, three
+lines of plain figures under the canvas:
 
 | Step | What it does |
 | :--- | :--- |
 | **Seed** | Type a whole number, or press 🎲 to draw one. A seed is read by each act as it runs, so changing it between acts keeps the acts already grown and re-points only the acts still to come; before act 1 it simply starts a fresh world. |
-| **World data** | 📂 **Load** and 💾 **Save** are the two commands for the seed above. **Save** writes the world as it stands to `saved_seeds/world_<seed>.bin`, from act 1 up to act 6 — the land, the climate, the water and as far up the hierarchies as the world has climbed; acts 7 and 8 are never written. Every save overwrites the last, so the file always holds the deepest checkpoint. **Load** adopts it in one press and picks the panel up at the act after the one it holds. 💾 **Save automatically when act 3 and act 6 land** is the setting behind them: while it is ticked, act 3 writes the cache and act 6 writes it again, overwriting the earlier save. The expandable **📂 Saved worlds** list under it shows every cache on disk, newest first, with its age and size, and each row names the acts that save holds — `acts 1–6` — read from the file's one-byte header (a save from an older build, which has no header, says only that a world is there); click a world to load it. A seed with no cache says so, and says what would put one there. |
+| **World data** | 📂 **Load** and 💾 **Save** are the two commands for the seed above. **Save** writes the world as it stands to `saved_seeds/world_<seed>.bin`, from act 1 up to act 6 — the land, the climate, the water and as far up the hierarchies as the world has climbed; acts 7 and 8 are never written. Every save overwrites the last, so the file always holds the deepest checkpoint. **Load** adopts it in one press and picks the panel up at the act after the one it holds. 💾 **Save automatically when act 3 and act 6 land** is the setting behind them: while it is ticked, act 3 writes the cache and act 6 writes it again, overwriting the earlier save. The expandable **📂 Saved worlds** list under it shows every cache on disk, newest first, with its age and size, and each row names the acts that save holds — `acts 1–6` — read from the file's one-byte header (a save from an older build, which has no header, says only that a world is there); click a world to load it. A seed with no cache says so plainly, in one line. |
 | **The eight acts** | A fold-out of its own, counting how many are grown. Only the next act is pressable; the ones behind it are ✔ and the ones ahead are greyed out. Every ✔ act also carries a small **↺** button that un-does that act and everything after it, so the whole tail may be grown again — optionally from a new seed or new constants. |
 | **▶▶ Run all remaining** | Grows the rest of the world without stopping (⏹ stops it after the act in flight). |
 | **↺ Reset world** | Throws the world away and starts over on the same seed — with the constants you chose. |
@@ -86,9 +92,10 @@ world's own constants:
 
 The atlas's own voice — its panels, legends, hover cards and configuration — can be read in six
 languages: **English, Español, Français, Deutsch, Português and Türkçe**. Pick one with the 🌐
-control at the end of the toolbar, or start the atlas with `--lang de`; the choice is remembered in
-`saved_seeds/viewer_language.txt`, and a first run follows the desktop's locale. What the world
-invents — its realms, language families and biomes — keeps the names the world gave it.
+control in the top bar — it is available before a world is grown, not only after — or start the
+atlas with `--lang de`; the choice is remembered in `saved_seeds/viewer_language.txt`, and a first
+run follows the desktop's locale. What the world invents — its realms, language families and
+biomes — keeps the names the world gave it.
 
 | Act | What it makes |
 | :--- | :--- |
