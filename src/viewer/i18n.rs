@@ -485,7 +485,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "📂 Mundos guardados ({})",
             "📂 Kayıtlı dünyalar ({})",
         ],
-        "⟳ Rescan" => ["⟳ Reexplorar", "⟳ Rescanner", "⟳ Neu suchen", "⟳ Reexaminar", "⟳ Yeniden tara"],
+        "🔄 Rescan" => [
+            "🔄 Reexplorar",
+            "🔄 Rescanner",
+            "🔄 Neu suchen",
+            "🔄 Reexaminar",
+            "🔄 Yeniden tara",
+        ],
         "Read saved_seeds again" => [
             "Volver a leer saved_seeds",
             "Relire saved_seeds",

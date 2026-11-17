@@ -325,6 +325,18 @@ older build has no such header and is still listed, but without the acts.
 Built with Rust (edition 2024) and a small dependency set: `eframe`/`egui`, `noise`,
 `rand_chacha`, `rayon`, `bincode`, `image` and `serde`.
 
+### Third-party assets
+
+The atlas draws every icon in its interface with two bundled, subset fonts — an
+[OpenMoji](https://openmoji.org) Color face for the pictograms and a three-glyph
+[Adwaita Mono](https://gitlab.gnome.org/GNOME/adwaita-fonts) face for the
+typographic marks (`☰ ↺ →`) — so the interface reads the same on every desktop
+instead of borrowing whatever emoji and symbol fonts the system happens to have.
+Both subsets, their provenance and the script that rebuilds them live in
+[`assets/fonts/`](assets/fonts/); OpenMoji is © the OpenMoji authors under
+[CC BY-SA 4.0](assets/fonts/LICENSE-OpenMoji.txt), Adwaita Mono © Renzhi Li under
+the [SIL OFL 1.1](assets/fonts/LICENSE-AdwaitaMono.txt).
+
 ---
 
 Every plate above is produced by `--plates` from seed `3286592765982`; the 8K `world_*.png`

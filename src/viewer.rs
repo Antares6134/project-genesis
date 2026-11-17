@@ -74,6 +74,71 @@ const CARD_WIDTH: f32 = 430.0;
 const LEGEND_WIDTH: f32 = 330.0;
 const CIV_LEGEND_WIDTH: f32 = 350.0;
 
+/// The atlas's icons come from two faces, both bundled and both subset to
+/// exactly the characters the interface uses.
+///
+/// [`ICON_FONT`] is the **picture** face. The interface's pictograms are emoji
+/// codepoints written straight into its lines — and into all six translations of
+/// them — so a font, not a call site, decides how they look. OpenMoji gives every
+/// one of them the same flat, outlined drawing on every platform, instead of
+/// whatever the desktop's font fallback happens to pick (see
+/// `assets/fonts/README.md`).
+///
+/// [`SYMBOL_FONT`] is the **mark** face. The three typographic symbols of the
+/// chrome — `☰` the panel toggle, `↺` reset, `→` "to" in a tooltip — are not
+/// pictures and must not be painted as though they were; but they must not be
+/// borrowed from the desktop either, or the atlas would look different on every
+/// machine. A monochrome face with the same clean stroke keeps them consistent
+/// with the type and tinted by the theme.
+const ICON_FONT: &str = "openmoji";
+const SYMBOL_FONT: &str = "atlas-marks";
+/// OpenMoji draws in a 1.29 em advance; this brings an icon back to about one
+/// em, so `🌊 Water` stays a row of text and not a banner. egui shrinks its own
+/// default emoji the same way (0.81 for Noto Emoji).
+const ICON_SCALE: f32 = 0.85;
+
+/// Install the atlas's two faces once: the picture face and the mark face,
+/// appended to both families as their last *configured* fallbacks.
+///
+/// Both deliberately go at [`egui::FontPriority::Lowest`], not `Highest`: egui
+/// measures a row, and places its baseline, with the family's **primary** face,
+/// so a font at the front would re-metric every line of the atlas. Being the last
+/// configured fallbacks keeps Ubuntu-Light primary and still beats the desktop:
+/// egui tries every installed font before it asks the system's font provider for
+/// one, so a pictogram or a mark is answered by one of these faces rather than by
+/// whatever fonts the machine happens to have.
+///
+/// The picture face is a COLRv0/CPAL colour font, which is why `Cargo.toml`
+/// enables epaint's `color_fonts` feature: without it the layers would not be
+/// painted. The mark face is an ordinary monochrome face and is tinted by the
+/// text colour like any other glyph.
+fn install_icon_fonts(ctx: &egui::Context) {
+    let lowest = |family: egui::FontFamily| egui::InsertFontFamily {
+        family,
+        priority: egui::FontPriority::Lowest,
+    };
+    ctx.add_font(egui::FontInsert::new(
+        ICON_FONT,
+        egui::FontData::from_static(include_bytes!("../assets/fonts/OpenMoji-color-subset.ttf"))
+            .tweak(egui::FontTweak {
+                scale: ICON_SCALE,
+                ..Default::default()
+            }),
+        vec![
+            lowest(egui::FontFamily::Proportional),
+            lowest(egui::FontFamily::Monospace),
+        ],
+    ));
+    ctx.add_font(egui::FontInsert::new(
+        SYMBOL_FONT,
+        egui::FontData::from_static(include_bytes!("../assets/fonts/AtlasMarks-subset.ttf")),
+        vec![
+            lowest(egui::FontFamily::Proportional),
+            lowest(egui::FontFamily::Monospace),
+        ],
+    ));
+}
+
 /// Install the atlas's type scale, spacing and metrics on one [`egui::Style`].
 ///
 /// This is pushed to *both* themes (see `MapViewer::install_style`), because
@@ -1885,7 +1950,7 @@ impl MapViewer {
     ///
     /// A click is a load: the seed field follows the pick and the cache is
     /// adopted at once. The list refreshes by itself after any act that may
-    /// have written a cache, and on demand with **⟳ Rescan**.
+    /// have written a cache, and on demand with **🔄 Rescan**.
     fn saved_worlds_list(&mut self, ui: &mut egui::Ui, busy: bool) {
         let mut refresh = false;
         let mut picked = None;
@@ -1900,7 +1965,7 @@ impl MapViewer {
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         if ui
-                            .small_button(self.t("⟳ Rescan"))
+                            .small_button(self.t("🔄 Rescan"))
                             .on_hover_text(self.t("Read saved_seeds again"))
                             .clicked()
                         {
@@ -1981,12 +2046,12 @@ impl MapViewer {
 
             ui.horizontal(|ui| {
                 let mark = if is_running {
-                    "⟳"
+                    "🔄"
                 } else {
                     match state {
                         StageState::Done { .. } => "✔",
                         StageState::Ready => "▶",
-                        StageState::Locked => "▢",
+                        StageState::Locked => "🔒",
                     }
                 };
                 let label = format!("{mark} {}", act_label(self.language, stage));
@@ -2150,6 +2215,10 @@ impl MapViewer {
     /// out at egui's defaults while the panels came out at ours.
     fn install_style(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        // The icon faces are part of the style in everything but name: they are
+        // what the pictograms and marks in these sizes, panels and cards are
+        // drawn with, and `add_font` is idempotent, so this installs them once.
+        install_icon_fonts(&ctx);
         ctx.all_styles_mut(configure_style);
         let style = ctx.global_style();
         *ui.style_mut() = style.as_ref().clone();
@@ -4336,7 +4405,7 @@ mod tests {
         says("▶ 1. Geology & Erosion");
         // Nothing after it is offered at all.
         for stage in &Stage::ALL[1..] {
-            says(&format!("▢ {}. {}", stage.index(), stage.title()));
+            says(&format!("🔒 {}. {}", stage.index(), stage.title()));
         }
         // And the plate where the world will be is honest about being empty.
         says("No world yet");
@@ -4500,7 +4569,7 @@ mod tests {
         // Nothing in this session timed those acts: they came from the cache.
         says("· loaded");
         says("▶ 4. Geography & Provinces");
-        says("▢ 5. Geopolitical Hierarchy");
+        says("🔒 5. Geopolitical Hierarchy");
         // Its climate exists, so the atlas opens on the physical world itself.
         assert_eq!(viewer.scope, MapScope::Physical);
     }
@@ -4523,7 +4592,7 @@ mod tests {
 
         says("✔ 6. Hydro-Political Hierarchy");
         says("▶ 7. Dawn of Civilization");
-        says("▢ 8. Languages & Phonetics");
+        says("🔒 8. Languages & Phonetics");
     }
 
     /// A finished act can be un-done from the panel: rewinding re-offers that act
@@ -4600,7 +4669,7 @@ mod tests {
             );
         };
 
-        says("⟳ 1. Geology & Erosion");
+        says("🔄 1. Geology & Erosion");
         says("Valley carving");
         says("42%");
         says("🔴 live: Continents rising");
@@ -5259,5 +5328,154 @@ mod tests {
                 "{language:?} left a templated caption in English"
             );
         }
+    }
+
+    // ─── ONE ICON STYLE ──────────────────────────────────────────────────────
+
+    /// The icon face is a fallback, never the primary face.
+    ///
+    /// egui measures a row of text — its height and its baseline — from the
+    /// family's first font, so making the icon face primary would quietly
+    /// re-metric every panel, card and toolbar in the atlas even though it holds
+    /// no Latin glyph. This is the guard on that: the four type sizes must come
+    /// out exactly as tall with the icon face installed as without it.
+    #[test]
+    fn the_icon_face_does_not_re_metric_a_row() {
+        fn row_heights(ctx: &egui::Context) -> Vec<(f32, f32)> {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.label("🌊 The atlas");
+            });
+            // A delta nobody applies panics when dropped; a test must hand it back.
+            output.textures_delta.clear();
+            [TEXT_SMALL, TEXT_BODY, TEXT_CARD_TITLE, TEXT_HEADING]
+                .into_iter()
+                .map(|size| {
+                    let proportional = ctx.fonts_mut(|fonts| {
+                        fonts.row_height(&egui::FontId::new(size, egui::FontFamily::Proportional))
+                    });
+                    let monospace = ctx.fonts_mut(|fonts| {
+                        fonts.row_height(&egui::FontId::new(size, egui::FontFamily::Monospace))
+                    });
+                    (proportional, monospace)
+                })
+                .collect()
+        }
+
+        let plain = egui::Context::default();
+        let with_icons = egui::Context::default();
+        install_icon_fonts(&with_icons);
+
+        assert_eq!(
+            row_heights(&with_icons),
+            row_heights(&plain),
+            "the icon face moved the type scale's baseline: it must stay a fallback"
+        );
+    }
+
+    /// Every pictogram the atlas paints comes from the bundled picture face, and
+    /// every typographic mark from the bundled mark face.
+    ///
+    /// The icons are emoji codepoints written into the lines themselves — and
+    /// into all six translations of them — so a font, not a call site, decides
+    /// how they look. This test reads the module's own sources and asserts that
+    /// each pictogram the atlas can paint is resolved by [`ICON_FONT`] first, and
+    /// each of the three chrome marks by [`SYMBOL_FONT`]: add a glyph without
+    /// regenerating the subsets (see `assets/fonts/README.md`) and this fails,
+    /// rather than the icon quietly falling back to the desktop's own fonts.
+    #[test]
+    fn every_icon_comes_from_a_bundled_face() {
+        // The viewer's own sources: every line the atlas can translate lives in
+        // one of them.
+        const SOURCES: &[&str] = &[
+            include_str!("viewer.rs"),
+            include_str!("viewer/i18n.rs"),
+            include_str!("viewer/settings.rs"),
+            include_str!("viewer/themes.rs"),
+        ];
+        // The typographic marks: not pictures, and served by the mark face.
+        const TEXT_MARKS: &str = "☰↺→";
+        let is_pictogram = |c: char| {
+            let cp = c as u32;
+            (0x1F000..=0x1FAFF).contains(&cp)
+                || (0x2600..=0x27BF).contains(&cp)
+                || (0x2B00..=0x2BFF).contains(&cp)
+                || (0x2300..=0x23FF).contains(&cp)
+                || (0x25A0..=0x25FF).contains(&cp)
+        };
+
+        let ctx = egui::Context::default();
+        let mut viewer = MapViewer::new(Genesis::new(42));
+        draw_frames(&ctx, &mut viewer);
+
+        ctx.fonts_mut(|fonts| {
+            let characters = fonts.characters(&egui::FontFamily::Proportional);
+            for source in SOURCES {
+                for icon in source
+                    .chars()
+                    .filter(|&c| is_pictogram(c) && !TEXT_MARKS.contains(c))
+                {
+                    let faces = characters.get(&icon).map(Vec::as_slice).unwrap_or_default();
+                    assert_eq!(
+                        faces.first().map(String::as_str),
+                        Some(ICON_FONT),
+                        "U+{:04X} ({icon}) is not drawn by {ICON_FONT}: {faces:?}",
+                        icon as u32
+                    );
+                }
+            }
+            for mark in TEXT_MARKS.chars() {
+                let faces = characters.get(&mark).map(Vec::as_slice).unwrap_or_default();
+                assert_eq!(
+                    faces.first().map(String::as_str),
+                    Some(SYMBOL_FONT),
+                    "U+{:04X} ({mark}) is not drawn by {SYMBOL_FONT}: {faces:?}",
+                    mark as u32
+                );
+            }
+        });
+    }
+
+    /// The bundled face is a colour font, and this build really paints its
+    /// layers.
+    ///
+    /// egui stores a monochrome glyph as white coverage and tints it with the
+    /// text colour; a colour glyph keeps its own RGBA. If `epaint/color_fonts`
+    /// were off, the wave below would come out blank — so a single pixel whose
+    /// channels differ proves OpenMoji's palette reached the atlas.
+    #[test]
+    fn the_icon_face_paints_in_colour() {
+        let ctx = egui::Context::default();
+        install_icon_fonts(&ctx);
+
+        let mut input = egui::RawInput::default();
+        input.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(400.0, 120.0),
+        ));
+        let mut output = ctx.run_ui(input, |ui| {
+            ui.label(egui::RichText::new("🌊").size(TEXT_HEADING));
+        });
+
+        let mut coloured = 0;
+        for deltas in output.textures_delta.set.values() {
+            for delta in deltas {
+                let egui::ImageData::Color(image) = &delta.image;
+                coloured += image
+                    .pixels
+                    .iter()
+                    .filter(|pixel| {
+                        let [r, g, b, a] = pixel.to_array();
+                        a > 0 && (r != g || g != b)
+                    })
+                    .count();
+            }
+        }
+        // A delta that is never applied (here: never uploaded to a GPU) panics
+        // when it is dropped, so a test that reads it must hand it back.
+        output.textures_delta.clear();
+        assert!(
+            coloured > 0,
+            "the 🌊 glyph is monochrome: is epaint's `color_fonts` feature enabled?"
+        );
     }
 }
