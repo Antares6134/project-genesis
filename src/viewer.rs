@@ -14,7 +14,7 @@ use crate::export::image::{
     HYPSOMETRIC_COLORS, HYPSOMETRIC_NAMES, get_atlas_biome_color, get_biome_name, hypsometric_band,
     hypsometric_color, hypsometric_range_label, id_to_territory_color,
 };
-use crate::geopolitics::GeopoliticalHierarchy;
+use crate::geopolitics::{GeopoliticalHierarchy, ProvinceNode};
 use crate::language::LanguagesWorld;
 use crate::pipeline::{
     AtlasWorld, CachedWorld, Genesis, LoadError, Stage, StageReport, StageState, cache_path,
@@ -27,6 +27,7 @@ use eframe::egui::{
 use noise::{NoiseFn, OpenSimplex};
 use rand::RngExt;
 use rayon::prelude::*;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Instant, SystemTime};
 use themes::{ClimateZone, TEMPERATURE_LEGEND_ROWS, TerrainClass};
@@ -696,7 +697,12 @@ fn sample_3d_fbm(
 /// single helper serves them.
 #[inline(always)]
 fn tier_color_id(hierarchy: &GeopoliticalHierarchy, id: u32, tier: MapTier) -> u32 {
-    let node = &hierarchy.provinces[id as usize];
+    ancestor_id(&hierarchy.provinces[id as usize], tier)
+}
+
+/// The id one node of the hierarchy carries at `tier`.
+#[inline(always)]
+fn ancestor_id(node: &ProvinceNode, tier: MapTier) -> u32 {
     match tier {
         MapTier::Provinces => node.id,
         MapTier::Areas => node.area_id,
@@ -706,11 +712,230 @@ fn tier_color_id(hierarchy: &GeopoliticalHierarchy, id: u32, tier: MapTier) -> u
     }
 }
 
-/// Darken a land pixel that sits on a border of the currently displayed tier.
+/// The tier a plate draws as its *frontier*, if it has one.
 ///
-/// Only the right and down neighbours are inspected, which yields a clean
-/// one-pixel frontier line; `id == 0` (coast or wilderness) always counts as a
-/// border, exactly as before.
+/// A plate shows its own fills and the frontier of the tier above it: the Areas
+/// plate draws the Region skeleton hard and its own subdivisions faintly, as an
+/// atlas draws departments inside a province. The Province plate is the base
+/// grain and has no frontier above it in this sense.
+fn parent_tier(tier: MapTier) -> Option<MapTier> {
+    match tier {
+        MapTier::Provinces | MapTier::Continents => None,
+        MapTier::Areas => Some(MapTier::Regions),
+        MapTier::Regions => Some(MapTier::Superregions),
+        MapTier::Superregions => Some(MapTier::Continents),
+    }
+}
+
+/// How hard a tier's own subdivision line is inked.
+///
+/// The ramp rises with coarseness — an area boundary is finer than a region's —
+/// except that the Province plate is the base grain and must stay readable on
+/// its own, with no parent skeleton to lean on.
+fn tier_border_weight(tier: MapTier) -> f32 {
+    match tier {
+        MapTier::Provinces => 0.44,
+        MapTier::Areas => 0.34,
+        MapTier::Regions => 0.42,
+        MapTier::Superregions => 0.50,
+        MapTier::Continents => 0.58,
+    }
+}
+
+/// The id count a hierarchy *claims* for a tier, used to size a palette even on
+/// a world whose province list is shorter than its census.
+fn declared_total(hierarchy: &GeopoliticalHierarchy, tier: MapTier) -> u32 {
+    match tier {
+        MapTier::Provinces => hierarchy.total_provinces as u32,
+        MapTier::Areas => hierarchy.total_areas as u32,
+        MapTier::Regions => hierarchy.total_regions as u32,
+        MapTier::Superregions => hierarchy.total_superregions as u32,
+        MapTier::Continents => hierarchy.total_continents as u32,
+    }
+}
+
+/// How many sibling shades a parent's children may be dealt.
+const SIBLING_SLOTS: usize = 6;
+
+/// Sibling offsets applied to the parent's own hue, saturation and value. One
+/// slot of each kind of shift, so even a pair of neighbours that happen to land
+/// on neighbouring hues still reads as two areas.
+const SIBLING_HUE: [f32; SIBLING_SLOTS] = [0.0, 0.085, -0.085, 0.042, -0.042, 0.125];
+const SIBLING_SAT: [f32; SIBLING_SLOTS] = [1.0, 0.90, 1.08, 0.82, 1.0, 0.94];
+const SIBLING_VAL: [f32; SIBLING_SLOTS] = [1.0, 0.89, 0.95, 0.81, 1.05, 0.90];
+
+fn rgb_to_hsv(rgb: [f32; 3]) -> (f32, f32, f32) {
+    let r = (rgb[0] / 255.0).clamp(0.0, 1.0);
+    let g = (rgb[1] / 255.0).clamp(0.0, 1.0);
+    let b = (rgb[2] / 255.0).clamp(0.0, 1.0);
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+    let hue = if delta <= f32::EPSILON {
+        0.0
+    } else if max == r {
+        ((g - b) / delta).rem_euclid(6.0) / 6.0
+    } else if max == g {
+        (((b - r) / delta) + 2.0) / 6.0
+    } else {
+        (((r - g) / delta) + 4.0) / 6.0
+    };
+    let saturation = if max <= f32::EPSILON { 0.0 } else { delta / max };
+    (hue, saturation, max)
+}
+
+fn hsv_to_rgb(hue: f32, saturation: f32, value: f32) -> [f32; 3] {
+    let h = hue.rem_euclid(1.0) * 6.0;
+    let sector = h.floor();
+    let f = h - sector;
+    let p = value * (1.0 - saturation);
+    let q = value * (1.0 - f * saturation);
+    let t = value * (1.0 - (1.0 - f) * saturation);
+    let (r, g, b) = match sector as i32 % 6 {
+        0 => (value, t, p),
+        1 => (q, value, p),
+        2 => (p, value, t),
+        3 => (p, q, value),
+        4 => (t, p, value),
+        _ => (value, p, q),
+    };
+    [r * 255.0, g * 255.0, b * 255.0]
+}
+
+/// One child's shade of the family colour its parent wears.
+fn sibling_color(parent: [f32; 3], slot: usize) -> [f32; 3] {
+    let slot = slot % SIBLING_SLOTS;
+    let (hue, saturation, value) = rgb_to_hsv(parent);
+    hsv_to_rgb(
+        hue + SIBLING_HUE[slot],
+        (saturation * SIBLING_SAT[slot]).clamp(0.26, 0.80),
+        (value * SIBLING_VAL[slot]).clamp(0.60, 0.99),
+    )
+}
+
+/// One colour per id of `tier`, computed once per plate.
+///
+/// Regions and Areas are coloured as *families*: a Region takes its
+/// Superregion's hue with one of a handful of sibling shades, and an Area takes
+/// its Region's. Adjacent siblings are never dealt the same shade (a greedy
+/// colouring of the sibling graph), so the plate shows both the structure and
+/// the grouping — which is exactly the difference between an atlas and a
+/// confetti scatter. Provinces, Superregions and Continents keep the
+/// golden-ratio wheel they have always worn; only the two middle tiers nest.
+fn territory_palette(hierarchy: &GeopoliticalHierarchy, tier: MapTier) -> Vec<[f32; 3]> {
+    let max_id = hierarchy
+        .provinces
+        .iter()
+        .filter(|p| p.id != 0)
+        .map(|p| ancestor_id(p, tier))
+        .max()
+        .unwrap_or(0)
+        .max(declared_total(hierarchy, tier));
+
+    let mut colors: Vec<[f32; 3]> = (0..=max_id)
+        .map(|id| id_to_territory_color(id))
+        .collect();
+    if colors.is_empty() {
+        return colors;
+    }
+    colors[0] = [0.0, 0.0, 0.0];
+
+    // Only Regions and Areas nest; their parent's palette is already resolved.
+    if !matches!(tier, MapTier::Regions | MapTier::Areas) {
+        return colors;
+    }
+    let Some(parent) = parent_tier(tier) else {
+        return colors;
+    };
+    let base = territory_palette(hierarchy, parent);
+
+    // Sibling ids per parent, and who among them actually touch.
+    let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    let mut siblings: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
+    for p in hierarchy.provinces.iter() {
+        if p.id == 0 {
+            continue;
+        }
+        let cid = ancestor_id(p, tier);
+        let pid = ancestor_id(p, parent);
+        if cid != 0 && pid != 0 {
+            children.entry(pid).or_default().push(cid);
+        }
+    }
+    for p in hierarchy.provinces.iter() {
+        if p.id == 0 {
+            continue;
+        }
+        let cid = ancestor_id(p, tier);
+        if cid == 0 {
+            continue;
+        }
+        for &(nb, _) in &p.neighbors {
+            let Some(q) = hierarchy.provinces.get(nb as usize) else {
+                continue;
+            };
+            if q.id == 0 {
+                continue;
+            }
+            let ncid = ancestor_id(q, tier);
+            if ncid == 0 || ncid == cid {
+                continue;
+            }
+            // Cousins inherit different parent hues, so only siblings compete
+            // for a shade.
+            if ancestor_id(q, parent) != ancestor_id(p, parent) {
+                continue;
+            }
+            siblings.entry(cid).or_default().insert(ncid);
+        }
+    }
+
+    // Greedy colouring, in id order: the first shade none of its neighbours wear.
+    let mut slot_of: BTreeMap<u32, usize> = BTreeMap::new();
+    for (_parent, kids) in children {
+        let mut kids = kids;
+        kids.sort_unstable();
+        kids.dedup();
+        for cid in kids {
+            let mut used = [false; SIBLING_SLOTS];
+            if let Some(neighbours) = siblings.get(&cid) {
+                for neighbour in neighbours {
+                    if let Some(&slot) = slot_of.get(neighbour) {
+                        used[slot] = true;
+                    }
+                }
+            }
+            let slot = (0..SIBLING_SLOTS).find(|&slot| !used[slot]).unwrap_or(0);
+            slot_of.insert(cid, slot);
+        }
+    }
+
+    for p in hierarchy.provinces.iter() {
+        if p.id == 0 {
+            continue;
+        }
+        let cid = ancestor_id(p, tier);
+        if cid == 0 || cid as usize >= colors.len() {
+            continue;
+        }
+        let pid = ancestor_id(p, parent);
+        let parent_color = base
+            .get(pid as usize)
+            .copied()
+            .unwrap_or([214.0, 207.0, 188.0]);
+        let slot = slot_of.get(&cid).copied().unwrap_or(0);
+        colors[cid as usize] = sibling_color(parent_color, slot);
+    }
+
+    colors
+}
+
+/// Ink a land pixel that sits on the frontier of the currently displayed tier.
+///
+/// A plate draws the tier above as its *frontier*: on the Areas plate the Region
+/// skeleton is inked hard (two pixels, so it survives the downscale to a 2K
+/// plate) while the Area subdivisions inside a Region stay faint. The coast sits
+/// between the two — real, but never louder than a realm's edge.
 #[inline]
 fn land_border_shade(
     mut color: [f32; 3],
@@ -727,13 +952,20 @@ fn land_border_shade(
     let Some(province_ids) = province_ids else {
         return color;
     };
-    let rx = province_ids.wrap_x(x as isize + 1) as isize;
-    let right_id = *province_ids.get(rx, y as isize);
+    let right_id = *province_ids.get(province_ids.wrap_x(x as isize + 1) as isize, y as isize);
+    let left_id = *province_ids.get(province_ids.wrap_x(x as isize - 1) as isize, y as isize);
     let down_id = if y + 1 < h {
         *province_ids.get(x as isize, y as isize + 1)
     } else {
         id
     };
+    let up_id = if y > 0 {
+        *province_ids.get(x as isize, y as isize - 1)
+    } else {
+        id
+    };
+
+    let own = tier_border_weight(tier);
 
     let differs = |nid: u32| -> bool {
         if nid == id {
@@ -748,20 +980,47 @@ fn land_border_shade(
         tier_color_id(hierarchy, nid, tier) != color_id
     };
 
+    // The frontier of the tier above, when there is one: the Region skeleton on
+    // the Areas plate, the Superregion skeleton on the Regions plate, …
+    let parent = parent_tier(tier);
+    let parent_here = parent.map(|parent| tier_color_id(hierarchy, id, parent));
+    let crosses_parent = |nid: u32| -> bool {
+        let (Some(parent), Some(here)) = (parent, parent_here) else {
+            return false;
+        };
+        if nid == 0 || nid == id || (nid as usize) >= hierarchy.provinces.len() {
+            return false;
+        }
+        let there = tier_color_id(hierarchy, nid, parent);
+        there != 0 && here != 0 && there != here
+    };
+
+    if crosses_parent(right_id)
+        || crosses_parent(down_id)
+        || crosses_parent(left_id)
+        || crosses_parent(up_id)
+        || (parent.is_none() && (differs(right_id) || differs(down_id)))
+    {
+        return blend_rgb(color, CIV_INK, (own + 0.22).min(0.62));
+    }
+
     if differs(right_id) || differs(down_id) {
-        color[0] *= 0.55;
-        color[1] *= 0.55;
-        color[2] *= 0.55;
+        if right_id == 0 || down_id == 0 {
+            // A shore is a real edge, but it belongs to the coast, not to a realm.
+            color = blend_rgb(color, CIV_INK, (own + 0.10).min(0.60));
+        } else {
+            color = blend_rgb(color, CIV_INK, own);
+        }
     }
     color
 }
 
-/// Darken an ocean pixel that sits on a border between two marine realms of the
-/// currently displayed tier.
+/// Ink an ocean pixel that sits on a border between two marine realms.
 ///
 /// Coastlines are intentionally *not* drawn: the shore is already unmistakable,
 /// and drawing it would trace every continent with a heavy outline. Only
-/// province-to-province transitions within the ocean produce a frontier line.
+/// province-to-province transitions within the ocean produce a frontier line,
+/// weighted exactly as the land's are: the tier above hard, the tier itself faint.
 #[inline]
 fn ocean_border_shade(
     mut color: [f32; 3],
@@ -778,13 +1037,22 @@ fn ocean_border_shade(
     let Some(ocean_province_ids) = ocean_province_ids else {
         return color;
     };
-    let rx = ocean_province_ids.wrap_x(x as isize + 1) as isize;
-    let right_id = *ocean_province_ids.get(rx, y as isize);
+    let right_id =
+        *ocean_province_ids.get(ocean_province_ids.wrap_x(x as isize + 1) as isize, y as isize);
+    let left_id =
+        *ocean_province_ids.get(ocean_province_ids.wrap_x(x as isize - 1) as isize, y as isize);
     let down_id = if y + 1 < h {
         *ocean_province_ids.get(x as isize, y as isize + 1)
     } else {
         ocean_id
     };
+    let up_id = if y > 0 {
+        *ocean_province_ids.get(x as isize, y as isize - 1)
+    } else {
+        ocean_id
+    };
+
+    let own = tier_border_weight(tier);
 
     let differs = |nid: u32| -> bool {
         if nid == 0 || nid == ocean_id {
@@ -796,10 +1064,30 @@ fn ocean_border_shade(
         tier_color_id(ocean_hierarchy, nid, tier) != color_id
     };
 
+    let parent = parent_tier(tier);
+    let parent_here = parent.map(|parent| tier_color_id(ocean_hierarchy, ocean_id, parent));
+    let crosses_parent = |nid: u32| -> bool {
+        let (Some(parent), Some(here)) = (parent, parent_here) else {
+            return false;
+        };
+        if nid == 0 || nid == ocean_id || (nid as usize) >= ocean_hierarchy.provinces.len() {
+            return false;
+        }
+        let there = tier_color_id(ocean_hierarchy, nid, parent);
+        there != 0 && here != 0 && there != here
+    };
+
+    if crosses_parent(right_id)
+        || crosses_parent(down_id)
+        || crosses_parent(left_id)
+        || crosses_parent(up_id)
+        || (parent.is_none() && (differs(right_id) || differs(down_id)))
+    {
+        return blend_rgb(color, CIV_INK, (own + 0.22).min(0.62));
+    }
+
     if differs(right_id) || differs(down_id) {
-        color[0] *= 0.55;
-        color[1] *= 0.55;
-        color[2] *= 0.55;
+        color = blend_rgb(color, CIV_INK, own);
     }
     color
 }
@@ -2360,6 +2648,13 @@ impl MapViewer {
 
         let mut pixels = vec![0u8; w * h * 4];
 
+        // The palette is a per-tier lookup table, built once for the whole plate.
+        // Regions and Areas are shaded as families of their parent (see
+        // `territory_palette`), so the pixel loop is a table read rather than 33
+        // million hue computations.
+        let land_palette = territory_palette(hierarchy, tier);
+        let ocean_palette = territory_palette(ocean_hierarchy, tier);
+
         pixels
             .par_chunks_exact_mut(4)
             .enumerate()
@@ -2803,7 +3098,10 @@ impl MapViewer {
                         // polar seas are still ocean, so they are tinted too and
                         // never break the continuity of a marine realm's borders.
                         let ocean_cid = tier_color_id(ocean_hierarchy, ocean_id, tier);
-                        let territory_rgb = id_to_territory_color(ocean_cid);
+                        let territory_rgb = ocean_palette
+                            .get(ocean_cid as usize)
+                            .copied()
+                            .unwrap_or([0.0, 0.0, 0.0]);
                         let phys = compute_physical_color();
                         final_color = [
                             territory_rgb[0] * 0.60 + phys[0] * 0.40,
@@ -2852,7 +3150,10 @@ impl MapViewer {
                     } else {
                         // Civilized Populated Province: territory tint over subtle terrain relief
                         let color_id = tier_color_id(hierarchy, id, tier);
-                        let territory_rgb = id_to_territory_color(color_id);
+                        let territory_rgb = land_palette
+                            .get(color_id as usize)
+                            .copied()
+                            .unwrap_or([0.0, 0.0, 0.0]);
                         let altitude = elev - sea_level;
                         let base = get_atlas_biome_color(display_temp, precip, altitude);
 
@@ -5477,5 +5778,117 @@ mod tests {
             coloured > 0,
             "the 🌊 glyph is monochrome: is epaint's `color_fonts` feature enabled?"
         );
+    }
+
+    /// One continent, one superregion, two regions and three single-province
+    /// areas inside each — enough to see the palette's nesting.
+    fn tiered_hierarchy() -> GeopoliticalHierarchy {
+        let mut provinces = vec![ProvinceNode {
+            id: 0,
+            center_x: 0.0,
+            center_y: 0.0,
+            pixel_count: 0,
+            neighbors: Vec::new(),
+            area_id: 0,
+            region_id: 0,
+            superregion_id: 0,
+            continent_id: 0,
+            anchor_id: 0,
+        }];
+        for id in 1..=6u32 {
+            let mut neighbors = Vec::new();
+            if id > 1 { neighbors.push((id - 1, 1)); }
+            if id < 6 { neighbors.push((id + 1, 1)); }
+            provinces.push(ProvinceNode {
+                id,
+                center_x: id as f32,
+                center_y: 0.0,
+                pixel_count: 100,
+                neighbors,
+                area_id: id,
+                region_id: if id <= 3 { 1 } else { 2 },
+                superregion_id: 1,
+                continent_id: 1,
+                anchor_id: id,
+            });
+        }
+        GeopoliticalHierarchy {
+            total_provinces: 6,
+            total_areas: 6,
+            total_regions: 2,
+            total_superregions: 1,
+            total_continents: 1,
+            provinces,
+        }
+    }
+
+    /// Areas are shades of the Region they belong to, and no two adjacent areas
+    /// of one Region are dealt the same shade — the map shows grouping *and*
+    /// structure instead of confetti.
+    #[test]
+    fn the_area_palette_nests_inside_its_region() {
+        let hierarchy = tiered_hierarchy();
+        let areas = territory_palette(&hierarchy, MapTier::Areas);
+        let regions = territory_palette(&hierarchy, MapTier::Regions);
+
+        assert_ne!(areas[1], areas[2]);
+        assert_ne!(areas[2], areas[3]);
+        assert_ne!(areas[4], areas[5]);
+        assert_ne!(areas[5], areas[6]);
+        assert_ne!(regions[1], regions[2], "adjacent regions must differ");
+
+        let hue = |color: [f32; 3]| rgb_to_hsv(color).0;
+        let circular = |a: f32, b: f32| {
+            let d = (a - b).abs();
+            d.min(1.0 - d)
+        };
+        let region_hue = hue(regions[1]);
+        for area in 1..=3u32 {
+            assert!(
+                circular(hue(areas[area as usize]), region_hue) < 0.13,
+                "area {area} left its region's hue family"
+            );
+        }
+    }
+
+    /// Provinces, Superregions and Continents keep the golden-ratio wheel; only
+    /// the two middle tiers nest.
+    #[test]
+    fn the_upper_tiers_keep_the_golden_ratio_palette() {
+        let hierarchy = tiered_hierarchy();
+        for tier in [MapTier::Provinces, MapTier::Superregions, MapTier::Continents] {
+            let palette = territory_palette(&hierarchy, tier);
+            for id in 1..palette.len() as u32 {
+                assert_eq!(
+                    palette[id as usize],
+                    id_to_territory_color(id),
+                    "{tier:?} id {id} changed colour"
+                );
+            }
+        }
+    }
+
+    /// The finer the tier, the fainter its own subdivisions — the frontier above
+    /// it always outranks it. The Province plate is the base grain, so its own
+    /// line stays strong even though Areas are drawn fainter than it.
+    #[test]
+    fn borders_get_lighter_as_the_tier_gets_finer() {
+        let order = [
+            MapTier::Continents,
+            MapTier::Superregions,
+            MapTier::Regions,
+            MapTier::Areas,
+        ];
+        for pair in order.windows(2) {
+            assert!(
+                tier_border_weight(pair[0]) > tier_border_weight(pair[1]),
+                "{:?} must be inked harder than {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+        assert!(tier_border_weight(MapTier::Provinces) > tier_border_weight(MapTier::Areas));
+        assert_eq!(parent_tier(MapTier::Areas), Some(MapTier::Regions));
+        assert_eq!(parent_tier(MapTier::Provinces), None);
     }
 }

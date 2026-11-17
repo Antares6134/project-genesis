@@ -178,7 +178,13 @@ world grows its tongues afresh rather than reading them back.
 ### Land tiers
 
 **Province → Area → Region → Superregion → Continent.** Each tier is a pure reaggregation of
-the one below it, so switching tiers never moves a border — it only coarsens the palette.
+the one below it, so switching tiers never moves a border. Areas are budgeted by *drawn land*
+rather than by province count — a desert province and a coastal speck do not buy the same
+amount of map — then a small island is kept whole in one area and the remaining borders are
+relaxed towards compact shapes. The palette nests: an Area wears a shade of its Region's
+colour and a Region a shade of its Superregion's, no two neighbours sharing one. A plate inks
+the tier above it as its frontier and its own subdivisions faintly, so the atlas reads as
+nested structure rather than a mosaic.
 
 | Provinces | Areas | Regions | Superregions | Continents |
 | :---: | :---: | :---: | :---: | :---: |
@@ -198,13 +204,13 @@ scaled up because it is one connected, far larger domain.
 | Metric | Value |
 | :--- | :--- |
 | Surface | **39.4 % land / 60.6 % ocean** |
-| Land hierarchy | **10 864 provinces · 1 349 areas · 246 regions · 36 superregions · 7 continents** |
-| Ocean hierarchy | **1 776 provinces · 135 areas · 36 regions · 11 superregions · 4 basins** |
+| Land hierarchy | **10 991 provinces · 1 075 areas · 174 regions · 33 superregions · 7 continents** |
+| Ocean hierarchy | **1 977 provinces · 149 areas · 44 regions · 12 superregions · 4 basins** |
 | Highest peak / deepest trench | **+7 019 m / −10 725 m** |
 | Median land elevation | **+750 m** (90 % of land below +2 050 m) |
 | Median ocean depth | **−3 950 m** |
 | Continental shelf (≤ −200 m) | **9.3 % of the ocean** |
-| Civilizations at 2 160 BCE | **24 states · 21 474 884 world population · 0.23 people/km²** |
+| Civilizations at 1 922 BCE | **26 states · 24 765 124 world population · 0.28 people/km²** |
 
 ## How it works
 

@@ -3,7 +3,7 @@ use crate::geography::config::OceanConfig;
 use crate::geopolitics::hierarchy::{GeopoliticalHierarchy, ProvinceNode};
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
-use std::collections::{BTreeMap, BinaryHeap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashSet};
 
 // ─── Priority-queue state for Dijkstra ───────────────────────────────────────
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -22,6 +22,39 @@ impl Ord for DijkState {
 impl PartialOrd for DijkState {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+/// How a clustering tier measures the size of one of its clusters.
+///
+/// The upper tiers are cut by head count: a Region is a run of ~45 provinces
+/// whether they are desert or delta. The land Areas cannot be, because the map
+/// is read by the eye rather than counted: a desert province and a coastal speck
+/// must not buy the same amount of drawn map. The Areas are therefore budgeted
+/// in *pixels*, which is what makes the ocean's own Area plate read evenly —
+/// its provinces are already of one size.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum ClusterWeight {
+    /// One per province — the historical measure.
+    Count,
+    /// The province's own pixels, floored at one so a speck still counts.
+    Pixels,
+}
+
+impl ClusterWeight {
+    #[inline]
+    fn of(self, province: &ProvinceNode) -> usize {
+        match self {
+            ClusterWeight::Count => 1,
+            ClusterWeight::Pixels => province.pixel_count.max(1),
+        }
+    }
+
+    #[inline]
+    fn of_ids(self, provinces: &[ProvinceNode], ids: &[u32]) -> usize {
+        ids.iter()
+            .map(|&id| self.of(&provinces[id as usize]))
+            .sum()
     }
 }
 
@@ -47,6 +80,7 @@ fn cluster_group(
     first_cid:    u32,
     rng:          &mut ChaCha8Rng,
     map_width:    f32,
+    weight:       ClusterWeight,
 ) -> BTreeMap<u32, u32> {
     let mut assignments: BTreeMap<u32, u32> = BTreeMap::new();
 
@@ -55,7 +89,8 @@ fn cluster_group(
         return assignments;
     }
 
-    let target_size = (members.len() as f32 / k as f32).max(1.0);
+    let total_weight = weight.of_ids(provinces, members);
+    let target_size = (total_weight as f32 / k as f32).max(1.0);
 
     // ── Step 1: K-Centers Farthest-point seeding ────────────────────────────
     let mut seeds: Vec<u32> = Vec::with_capacity(k);
@@ -130,7 +165,7 @@ fn cluster_group(
             let cid = first_cid + idx as u32;
             best.insert(s, 0);
             assignments.insert(s, cid);
-            cluster_claimed[idx] += 1;
+            cluster_claimed[idx] += weight.of(&provinces[s as usize]);
             heap.push(DijkState { cost: 0, id: s, cid });
         }
 
@@ -159,7 +194,7 @@ fn cluster_group(
                 if new_cost < prev_nb {
                     best.insert(nb, new_cost);
                     if !assignments.contains_key(&nb) && c_idx < k {
-                        cluster_claimed[c_idx] += 1;
+                        cluster_claimed[c_idx] += weight.of(&provinces[nb as usize]);
                     }
                     assignments.insert(nb, state.cid);
                     heap.push(DijkState { cost: new_cost, id: nb, cid: state.cid });
@@ -187,7 +222,13 @@ fn cluster_group(
 
         // Centroid Relocation for next pass
         if !is_final {
-            let mut sum_x = vec![0.0f32; k];
+            // A province centre is a longitude, and a longitude wraps. Averaging
+            // `x` arithmetically would put a group that straddles the antimeridian
+            // in the middle of the map and drag its medoid there — one bogus seed,
+            // one malformed cluster at the seam. The mean is taken on the circle
+            // and only then turned back into map pixels.
+            let mut sum_cos_x = vec![0.0f64; k];
+            let mut sum_sin_x = vec![0.0f64; k];
             let mut sum_y = vec![0.0f32; k];
             let mut count = vec![0usize; k];
 
@@ -195,15 +236,22 @@ fn cluster_group(
                 let cid = assignments[&m];
                 let idx = (cid - first_cid) as usize;
                 if idx < k {
-                    sum_x[idx] += provinces[m as usize].center_x;
-                    sum_y[idx] += provinces[m as usize].center_y;
+                    let centre = &provinces[m as usize];
+                    let angle = (centre.center_x / map_width) as f64
+                        * std::f64::consts::TAU;
+                    sum_cos_x[idx] += angle.cos();
+                    sum_sin_x[idx] += angle.sin();
+                    sum_y[idx] += centre.center_y;
                     count[idx] += 1;
                 }
             }
 
             for idx in 0..k {
                 if count[idx] > 0 {
-                    let avg_x = sum_x[idx] / count[idx] as f32;
+                    let mean_angle = sum_sin_x[idx]
+                        .atan2(sum_cos_x[idx])
+                        .rem_euclid(std::f64::consts::TAU);
+                    let avg_x = ((mean_angle / std::f64::consts::TAU) * map_width as f64) as f32;
                     let avg_y = sum_y[idx] / count[idx] as f32;
 
                     let mut best_m = seeds[idx];
@@ -252,6 +300,7 @@ fn cluster_tier(
     progress:                &Progress,
     label:                   &'static str,
     ocean:                   bool,
+    weight:                  ClusterWeight,
 ) -> (Vec<u32>, usize) {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let n = provinces.len();
@@ -278,14 +327,18 @@ fn cluster_tier(
         let count = members.len();
         if count == 0 { continue; }
 
-        let k = ((count as f32 / target_cluster_size as f32).round() as usize)
+        // A tier budgeted in pixels picks its quota from the member's mass, so
+        // a continent of tiny coastal provinces is cut into fewer, larger areas
+        // than the same head count of interior ones would be.
+        let member_weight = weight.of_ids(provinces, &members);
+        let k = ((member_weight as f32 / target_cluster_size as f32).round() as usize)
             .clamp(1, max_clusters_per_parent.min(count));
 
         let member_set: HashSet<u32> = members.iter().copied().collect();
         members.shuffle(&mut rng);
 
         let group_assignments = cluster_group(
-            &members, &member_set, provinces, k, next_cid, &mut rng, map_width,
+            &members, &member_set, provinces, k, next_cid, &mut rng, map_width, weight,
         );
 
         for (pid, cid) in group_assignments {
@@ -301,11 +354,18 @@ fn cluster_tier(
 
 /// Absorb small clusters below `min_size` into their strongest neighboring cluster.
 /// Strictly enforces that clusters ONLY merge into a neighbor within the SAME parent.
+///
+/// A cluster of a few provinces is dissolved **province by province** into the
+/// neighbours each province actually touches; only a lone province (or a pair)
+/// is moved whole. Swallowing every undersized cluster into a single neighbour
+/// is what used to leave a long annex hanging off the side of an otherwise
+/// round area.
 fn absorb_small_clusters(
     provinces:   &[ProvinceNode],
     cluster_ids: &mut [u32],
     parent_ids:  &[u32],
     min_size:    usize,
+    weight:      ClusterWeight,
     map_width:   f32,
     progress:    &Progress,
     label:       &'static str,
@@ -331,7 +391,7 @@ fn absorb_small_clusters(
             if p.id == 0 || p.pixel_count == 0 { continue; }
             let cid = cluster_ids[p.id as usize];
             if cid != 0 {
-                *cluster_sizes.entry(cid).or_insert(0) += 1;
+                *cluster_sizes.entry(cid).or_insert(0) += weight.of(p);
                 let parent = parent_ids[p.id as usize];
                 cluster_parent.insert(cid, parent);
             }
@@ -343,8 +403,8 @@ fn absorb_small_clusters(
 
         let mut small_clusters: Vec<u32> = cluster_sizes
             .iter()
-            .filter(|&(&cid, &count)| {
-                count < min_size && parent_cluster_count.get(&cluster_parent[&cid]).copied().unwrap_or(0) > 1
+            .filter(|&(&cid, &mass)| {
+                mass < min_size && parent_cluster_count.get(&cluster_parent[&cid]).copied().unwrap_or(0) > 1
             })
             .map(|(&cid, _)| cid)
             .collect();
@@ -406,12 +466,41 @@ fn absorb_small_clusters(
                 closest_cid
             };
 
-            if let Some(dest_cid) = target_cid {
-                for &m in &members {
-                    cluster_ids[m as usize] = dest_cid;
+            // A larger undersized area is a shape, not a token: hand each of its
+            // provinces to the neighbour it shares the most frontier with. The
+            // relaxation pass that follows then rounds whatever seams that leaves.
+            let dissolve = members.len() >= 3 && neighbor_scores.len() >= 2;
+
+            let mut moved_any = false;
+            for &m in &members {
+                let destination = if dissolve {
+                    let mut per_province: BTreeMap<u32, u32> = BTreeMap::new();
+                    for &(nb, cost) in &provinces[m as usize].neighbors {
+                        let nb_cid = cluster_ids[nb as usize];
+                        if nb_cid != 0 && nb_cid != small_cid {
+                            if parent_ids[nb as usize] == current_parent {
+                                let score = 5000u32.saturating_sub(cost.min(4900));
+                                *per_province.entry(nb_cid).or_insert(0) += score;
+                            }
+                        }
+                    }
+                    per_province
+                        .iter()
+                        .max_by_key(|&(_, score)| score)
+                        .map(|(&cid, _)| cid)
+                        .or(target_cid)
+                } else {
+                    target_cid
+                };
+
+                if let Some(dest_cid) = destination {
+                    if dest_cid != small_cid {
+                        cluster_ids[m as usize] = dest_cid;
+                        moved_any = true;
+                    }
                 }
-                any_merged = true;
             }
+            any_merged |= moved_any;
         }
 
         if !any_merged {
@@ -420,6 +509,15 @@ fn absorb_small_clusters(
     }
 
     // Re-index clusters to continuous 1..=total IDs
+    reindex_clusters(cluster_ids)
+}
+
+/// Renumber every non-zero cluster id to a contiguous `1..=total` run.
+///
+/// Every pass that can delete a cluster (the absorber, the splitter, the island
+/// unifier) ends here, so an id stays both a stable key inside a pass and a
+/// compact index for the palette that reads it.
+fn reindex_clusters(cluster_ids: &mut [u32]) -> usize {
     let mut unique_ids: Vec<u32> = cluster_ids.iter().copied().filter(|&id| id != 0).collect();
     unique_ids.sort_unstable();
     unique_ids.dedup();
@@ -439,18 +537,38 @@ fn absorb_small_clusters(
     remap.len()
 }
 
-/// Hard ceiling on how many provinces one land Area may hold.
+/// How large a land Area should read on the plate, measured in province pixels.
 ///
-/// [`cluster_tier`]'s second tuning value bounds how many Areas a Region is cut
-/// into, not how large each one grows, and both the island anchoring and the
-/// absorb sweep move provinces *into* areas afterwards. Without this ceiling a
-/// large Region still produced 15+ province Areas.
-const MAX_LAND_AREA_PROVINCES: usize = 8;
+/// The Area tier is the only one budgeted by drawn mass instead of head count:
+/// a desert province and a coastal speck must not buy the same amount of map.
+/// That irregular speckle is exactly what made the old head-counted Areas read
+/// as confetti. A land province is ≈350 px today, so these come out at roughly
+/// 13, 6 and 20 provinces respectively.
+const LAND_AREA_TARGET_PIXELS: usize = 4_500;
 
-/// The oceanic mirror of [`MAX_LAND_AREA_PROVINCES`].
+/// Smallest land Area that may survive the absorb sweep.
+const LAND_AREA_MIN_PIXELS: usize = 2_000;
+
+/// Largest land Area the splitter will tolerate.
+const LAND_AREA_MAX_PIXELS: usize = 7_000;
+
+/// A second, province-count ceiling: a raft of tiny island specks must not pile
+/// into one Area just because it happens to weigh as much as a desert.
+const LAND_AREA_MAX_PROVINCES: usize = 24;
+
+/// Most Areas a single Region may be cut into — a cluster cap, not a province cap.
+const MAX_AREAS_PER_REGION: usize = 8;
+
+/// How many tightening sweeps the shape pass may take. Three is ample: the first
+/// does almost all of the work, the rest only settle the seams it creates.
+const AREA_RELAX_SWEEPS: usize = 3;
+
+/// The oceanic mirror of the old land ceiling.
 ///
 /// An ocean province covers roughly 22× the area of a land province, so the
-/// oceanic Area ceiling is scaled up by the same factor.
+/// oceanic Area ceiling is scaled up by the same factor. Ocean provinces are
+/// already of one size, which is why the marine Area plate never needed a
+/// pixel budget.
 const MAX_OCEAN_AREA_PROVINCES: usize = 25;
 
 /// Bisect one cluster into two connected halves of nearly equal size.
@@ -461,6 +579,9 @@ const MAX_OCEAN_AREA_PROVINCES: usize = 25;
 /// `len - len / 2` — they sum to the member count, so a connected cluster is
 /// always fully claimed and neither half can swallow the other whole.
 ///
+/// "Size" is measured by `weight`: in provinces for the upper tiers, in pixels
+/// for the land Areas, where the cut must balance drawn map rather than heads.
+///
 /// Deliberately deterministic: no random numbers are drawn, ties in the
 /// farthest-pair scan keep the first (id-ordered) pair, and the heap orders
 /// equal-cost states by province id.
@@ -468,6 +589,7 @@ fn bisect_cluster(
     provinces: &[ProvinceNode],
     group:     &[u32],
     map_width: f32,
+    weight:    ClusterWeight,
 ) -> (Vec<u32>, Vec<u32>) {
     let len = group.len();
     if len < 2 {
@@ -491,8 +613,15 @@ fn bisect_cluster(
         }
     }
 
+    // Every centre identical (a synthetic test, or a degenerate island): the
+    // farthest-pair scan found no pair at all. Keep the halves distinct anyway.
+    if seed_a == seed_b {
+        seed_b = group[1];
+    }
+
     let member_set: HashSet<u32> = group.iter().copied().collect();
-    let caps = [len / 2, len - len / 2];
+    let total_weight = weight.of_ids(provinces, group).max(2);
+    let caps = [(total_weight / 2).max(1), (total_weight - total_weight / 2).max(1)];
 
     let mut side_of: BTreeMap<u32, usize> = BTreeMap::new();
     let mut side_len = [0usize; 2];
@@ -500,7 +629,7 @@ fn bisect_cluster(
 
     for (side, &seed) in [seed_a, seed_b].iter().enumerate() {
         side_of.insert(seed, side);
-        side_len[side] += 1;
+        side_len[side] += weight.of(&provinces[seed as usize]);
         heap.push(DijkState { cost: 0, id: seed, cid: side as u32 });
     }
 
@@ -517,7 +646,7 @@ fn bisect_cluster(
                 continue;
             }
             side_of.insert(nb, side);
-            side_len[side] += 1;
+            side_len[side] += weight.of(&provinces[nb as usize]);
             heap.push(DijkState {
                 cost: state.cost.saturating_add(edge_cost),
                 id:   nb,
@@ -561,7 +690,7 @@ fn bisect_cluster(
         }
 
         side_of.insert(m, best_side);
-        side_len[best_side] += 1;
+        side_len[best_side] += weight.of(&provinces[m as usize]);
     }
 
     let mut first  = Vec::with_capacity(len);
@@ -597,6 +726,7 @@ fn split_oversized_clusters(
     cluster_ids: &mut [u32],
     parent_ids:  &[u32],
     max_size:    usize,
+    weight:      ClusterWeight,
     map_width:   f32,
     progress:    &Progress,
     label:       &'static str,
@@ -616,9 +746,9 @@ fn split_oversized_clusters(
         if index >= cluster_ids.len() || index >= parent_ids.len() { continue; }
         let cid = cluster_ids[index];
         if cid == 0 || parent_ids[index] == 0 { continue; }
-        *sizes.entry(cid).or_insert(0) += 1;
+        *sizes.entry(cid).or_insert(0) += weight.of(p);
     }
-    if !sizes.values().any(|&count| count > max_size) {
+    if !sizes.values().any(|&size| size > max_size) {
         return sizes.len();
     }
 
@@ -645,7 +775,7 @@ fn split_oversized_clusters(
 
         let mut oversized: Option<Vec<u32>> = None;
         for group in members.values() {
-            if group.len() > max_size {
+            if weight.of_ids(provinces, group) > max_size {
                 oversized = Some(group.clone());
                 break;
             }
@@ -654,7 +784,7 @@ fn split_oversized_clusters(
 
         // Both halves keep the parent the cluster already had, so a split can
         // never cross the Region boundary.
-        let (keep, split) = bisect_cluster(provinces, &group, map_width);
+        let (keep, split) = bisect_cluster(provinces, &group, map_width, weight);
         if split.is_empty() {
             break;
         }
@@ -667,23 +797,345 @@ fn split_oversized_clusters(
     }
 
     // Re-index clusters to continuous 1..=total IDs, exactly as the absorber does.
-    let mut unique_ids: Vec<u32> = cluster_ids.iter().copied().filter(|&id| id != 0).collect();
-    unique_ids.sort_unstable();
-    unique_ids.dedup();
+    reindex_clusters(cluster_ids)
+}
 
-    let remap: BTreeMap<u32, u32> = unique_ids
-        .iter()
-        .enumerate()
-        .map(|(idx, &old)| (old, (idx + 1) as u32))
-        .collect();
+/// Give every small island landmass its own single Area.
+///
+/// The province graph already anchors each island landmass to one mainland
+/// coastal province, and every province of that landmass carries the same
+/// `anchor_id` (`graph.rs`). That is the island key used here: a landmass whose
+/// whole mass fits inside one Area must not be cut across several of them, or a
+/// handful of rocks shows up as a handful of unrelated colours and an
+/// archipelago reads as confetti.
+///
+/// Returns one flag per province: the provinces this pass moved are frozen, so
+/// the relaxation that follows can round the areas around an island without
+/// pulling the island apart again.
+fn unify_island_areas(
+    provinces:   &[ProvinceNode],
+    cluster_ids: &mut [u32],
+    parent_ids:  &[u32],
+    weight:      ClusterWeight,
+    max_size:    usize,
+) -> Vec<bool> {
+    let n = provinces.len();
+    let mut locked = vec![false; n];
 
-    for id in cluster_ids.iter_mut() {
-        if *id != 0 {
-            *id = *remap.get(id).unwrap();
+    // (anchor, parent) -> the whole landmass's provinces. Grouping by parent as
+    // well as anchor keeps every unification inside the Region that holds it.
+    let mut islands: BTreeMap<(u32, u32), Vec<u32>> = BTreeMap::new();
+    for p in provinces.iter() {
+        if p.id == 0 || p.pixel_count == 0 { continue; }
+        let index = p.id as usize;
+        if index >= cluster_ids.len() || index >= parent_ids.len() { continue; }
+        if p.anchor_id == 0 || p.anchor_id == p.id { continue; } // mainland province
+        if cluster_ids[index] == 0 || parent_ids[index] == 0 { continue; }
+        islands
+            .entry((p.anchor_id, parent_ids[index]))
+            .or_default()
+            .push(p.id);
+    }
+
+    for (_island, members) in islands {
+        let mass = weight.of_ids(provinces, &members);
+        if mass == 0 || mass > max_size {
+            continue; // a landmass that legitimately holds several Areas
+        }
+
+        // The area holding the most of the island wins; the lowest id breaks a tie.
+        let mut held: BTreeMap<u32, usize> = BTreeMap::new();
+        for &m in &members {
+            *held.entry(cluster_ids[m as usize]).or_insert(0) += weight.of(&provinces[m as usize]);
+        }
+        let Some((&home, _)) = held
+            .iter()
+            .max_by_key(|&(&cid, &mass)| (mass, std::cmp::Reverse(cid)))
+        else {
+            continue;
+        };
+
+        for &m in &members {
+            cluster_ids[m as usize] = home;
+            locked[m as usize] = true;
         }
     }
 
-    remap.len()
+    locked
+}
+
+/// Round the Areas by moving boundary provinces between neighbours.
+///
+/// The clustering balances mass; it does not care about shape. This pass does.
+/// A boundary province is handed to an adjacent Area whenever that lowers the
+/// tier's total `perimeter² / mass` — the same quantity a cartographer means by
+/// "a compact shape" — which is what removes the lobes, necks and dangling
+/// single-province protrusions a capacity-balanced flood fill leaves behind.
+///
+/// A province may only move to an Area that touches it and shares its Region,
+/// both Areas must stay inside their size bounds, the donor must remain one
+/// piece, and anything an island was unified into stays frozen. Deterministic:
+/// sweeps run in province-id order, each province takes the best improvement it
+/// can see, and ties keep the lowest destination id.
+fn relax_area_boundaries(
+    provinces:   &[ProvinceNode],
+    cluster_ids: &mut [u32],
+    parent_ids:  &[u32],
+    weight:      ClusterWeight,
+    min_size:    usize,
+    max_size:    usize,
+    locked:      &[bool],
+    max_sweeps:  usize,
+) -> usize {
+    let n = provinces.len();
+    if n < 2 {
+        return 0;
+    }
+
+    let mut mass: BTreeMap<u32, usize> = BTreeMap::new();
+    let mut members: BTreeMap<u32, usize> = BTreeMap::new();
+    let mut perimeter: BTreeMap<u32, usize> = BTreeMap::new();
+
+    for p in provinces.iter() {
+        if p.id == 0 || p.pixel_count == 0 { continue; }
+        let index = p.id as usize;
+        if index >= cluster_ids.len() { continue; }
+        let cid = cluster_ids[index];
+        if cid == 0 { continue; }
+        *mass.entry(cid).or_insert(0) += weight.of(p);
+        *members.entry(cid).or_insert(0) += 1;
+    }
+
+    // One frontier edge per adjacent province pair whose Areas differ. The pair
+    // is counted once (`nb > id`) and charged to both sides, because it is one
+    // unit of boundary in each area's own perimeter.
+    for p in provinces.iter() {
+        if p.id == 0 || p.pixel_count == 0 { continue; }
+        let index = p.id as usize;
+        if index >= cluster_ids.len() { continue; }
+        let cid = cluster_ids[index];
+        if cid == 0 { continue; }
+        for &(nb, _) in &p.neighbors {
+            if nb <= p.id || (nb as usize) >= cluster_ids.len() { continue; }
+            let n_cid = cluster_ids[nb as usize];
+            if n_cid == 0 || n_cid == cid { continue; }
+            *perimeter.entry(cid).or_insert(0) += 1;
+            *perimeter.entry(n_cid).or_insert(0) += 1;
+        }
+    }
+
+    let order: Vec<u32> = provinces
+        .iter()
+        .filter(|p| p.id != 0 && p.pixel_count > 0)
+        .map(|p| p.id)
+        .collect();
+
+    for _ in 0..max_sweeps {
+        let mut moved = false;
+
+        for &pid in &order {
+            let index = pid as usize;
+            if index >= cluster_ids.len() || locked.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            let own = cluster_ids[index];
+            if own == 0 { continue; }
+            let own_parent = parent_ids.get(index).copied().unwrap_or(0);
+            if own_parent == 0 { continue; }
+
+            // How much frontier this province shares with each neighbouring Area.
+            let mut touch: BTreeMap<u32, usize> = BTreeMap::new();
+            let mut deg_own = 0usize;
+            let mut deg_total = 0usize;
+            for &(nb, _) in &provinces[index].neighbors {
+                let n_index = nb as usize;
+                if n_index >= cluster_ids.len()
+                    || parent_ids.get(n_index).copied().unwrap_or(0) != own_parent
+                {
+                    continue;
+                }
+                let n_cid = cluster_ids[n_index];
+                if n_cid == 0 { continue; }
+                if n_cid == own {
+                    deg_own += 1;
+                } else {
+                    *touch.entry(n_cid).or_insert(0) += 1;
+                }
+                deg_total += 1;
+            }
+            if touch.is_empty() || deg_total == 0 {
+                continue; // interior province, or nothing to move to
+            }
+
+            let w = weight.of(&provinces[index]);
+            let mass_own = mass.get(&own).copied().unwrap_or(0);
+            if mass_own < min_size + w {
+                continue; // the donor would fall under the floor
+            }
+
+            let p_own = perimeter.get(&own).copied().unwrap_or(0) as f64;
+            let energy_own = p_own * p_own / mass_own as f64;
+
+            let mut best: Option<(u32, f64)> = None;
+            for (&dest, &deg_dest) in &touch {
+                let mass_dest = mass.get(&dest).copied().unwrap_or(0);
+                if mass_dest + w > max_size {
+                    continue;
+                }
+                let p_dest = perimeter.get(&dest).copied().unwrap_or(0) as f64;
+
+                let delta_own = 2.0 * deg_own as f64 - deg_total as f64;
+                let delta_dest = deg_total as f64 - 2.0 * deg_dest as f64;
+                let energy_after_own =
+                    (p_own + delta_own).max(0.0).powi(2) / (mass_own - w) as f64;
+                let energy_after_dest =
+                    (p_dest + delta_dest).max(0.0).powi(2) / (mass_dest + w) as f64;
+                let energy_before_dest = p_dest * p_dest / mass_dest.max(1) as f64;
+
+                let improvement =
+                    energy_own + energy_before_dest - energy_after_own - energy_after_dest;
+                if improvement <= 1e-9 {
+                    continue;
+                }
+                // Taking a province out of the middle of an area can cut it in
+                // two; a leaf cannot. Only the former needs the walk.
+                if deg_own >= 2
+                    && !donor_stays_connected(
+                        provinces,
+                        cluster_ids,
+                        own,
+                        pid,
+                        members.get(&own).copied().unwrap_or(0),
+                    )
+                {
+                    continue;
+                }
+
+                let take = match best {
+                    None => true,
+                    Some((best_cid, best_gain)) => {
+                        improvement > best_gain + 1e-9
+                            || ((improvement - best_gain).abs() <= 1e-9 && dest < best_cid)
+                    }
+                };
+                if take {
+                    best = Some((dest, improvement));
+                }
+            }
+
+            let Some((dest, _)) = best else { continue };
+
+            let deg_dest = touch[&dest] as isize;
+            let p_own = perimeter.get(&own).copied().unwrap_or(0) as isize;
+            let p_dest = perimeter.get(&dest).copied().unwrap_or(0) as isize;
+            let delta_own = 2 * deg_own as isize - deg_total as isize;
+            let delta_dest = deg_total as isize - 2 * deg_dest;
+
+            perimeter.insert(own, (p_own + delta_own).max(0) as usize);
+            perimeter.insert(dest, (p_dest + delta_dest).max(0) as usize);
+            mass.insert(own, mass_own - w);
+            *mass.entry(dest).or_insert(0) += w;
+            *members.entry(dest).or_insert(0) += 1;
+
+            let donor_members = members.get(&own).copied().unwrap_or(1).saturating_sub(1);
+            members.insert(own, donor_members);
+            if donor_members == 0 {
+                members.remove(&own);
+                mass.remove(&own);
+                perimeter.remove(&own);
+            }
+
+            cluster_ids[index] = dest;
+            moved = true;
+        }
+
+        if !moved {
+            break;
+        }
+    }
+
+    members.len()
+}
+
+/// Would the donor Area still be one piece without `removed`?
+///
+/// Only called for a province with at least two neighbours inside its own Area —
+/// a leaf cannot disconnect anything. A bounded flood fill over a cluster of a
+/// few provinces is cheaper than any cleverer test.
+fn donor_stays_connected(
+    provinces:    &[ProvinceNode],
+    cluster_ids:  &[u32],
+    own:          u32,
+    removed:      u32,
+    member_count: usize,
+) -> bool {
+    let start = provinces[removed as usize]
+        .neighbors
+        .iter()
+        .map(|&(nb, _)| nb)
+        .find(|&nb| {
+            nb != removed && (nb as usize) < cluster_ids.len() && cluster_ids[nb as usize] == own
+        });
+    let Some(start) = start else {
+        return member_count <= 1;
+    };
+
+    let mut seen: HashSet<u32> = HashSet::new();
+    let mut stack = vec![start];
+    seen.insert(start);
+    while let Some(id) = stack.pop() {
+        for &(nb, _) in &provinces[id as usize].neighbors {
+            if nb == removed {
+                continue;
+            }
+            let index = nb as usize;
+            if index >= cluster_ids.len() || cluster_ids[index] != own {
+                continue;
+            }
+            if seen.insert(nb) {
+                stack.push(nb);
+            }
+        }
+    }
+
+    // Everyone but the province about to leave must still be reachable.
+    seen.len() + 1 >= member_count
+}
+
+/// Mean number of frontier edges an area of the tier carries.
+///
+/// A pair of neighbouring provinces in two different areas is one frontier edge,
+/// charged to each side — the simple graph measure of how ragged the tier is.
+/// The shape pass exists to push this number down without shrinking any area.
+fn mean_frontier_edges(provinces: &[ProvinceNode], cluster_ids: &[u32]) -> f64 {
+    let mut frontier = 0usize;
+    let mut areas: BTreeSet<u32> = BTreeSet::new();
+    for p in provinces.iter().skip(1) {
+        let id = p.id as usize;
+        if id >= cluster_ids.len() || p.pixel_count == 0 {
+            continue;
+        }
+        let cid = cluster_ids[id];
+        if cid == 0 {
+            continue;
+        }
+        areas.insert(cid);
+        for &(nb, _) in &p.neighbors {
+            let n = nb as usize;
+            if n <= id || n >= cluster_ids.len() {
+                continue;
+            }
+            let n_cid = cluster_ids[n];
+            if n_cid != 0 && n_cid != cid {
+                frontier += 1;
+            }
+        }
+    }
+    if areas.is_empty() {
+        0.0
+    } else {
+        2.0 * frontier as f64 / areas.len() as f64
+    }
 }
 
 /// Build the complete four-level geopolitical hierarchy:
@@ -721,6 +1173,7 @@ pub fn build_geopolitical_hierarchy(
         progress,
         "Clustering superregions",
         false,
+        ClusterWeight::Count,
     );
 
     // COASTAL ISLAND ANCHORING: Every island strictly inherits its superregion from its anchor coast!
@@ -740,6 +1193,7 @@ pub fn build_geopolitical_hierarchy(
         &mut super_ids,
         &continent_ids,
         95,
+        ClusterWeight::Count,
         map_width,
         progress,
         "Absorbing small superregions",
@@ -763,6 +1217,7 @@ pub fn build_geopolitical_hierarchy(
         progress,
         "Clustering regions",
         false,
+        ClusterWeight::Count,
     );
 
     // For islands with < 25 provinces, strictly inherit Region from anchor coast
@@ -784,6 +1239,7 @@ pub fn build_geopolitical_hierarchy(
         &mut region_ids,
         &super_ids,
         16,
+        ClusterWeight::Count,
         map_width,
         progress,
         "Absorbing small regions",
@@ -795,58 +1251,107 @@ pub fn build_geopolitical_hierarchy(
     }
     println!("  ✓ Generated {} Region(s) worldwide (undersized absorbed).", total_regions);
 
-    // ── 4. Areas (State level: ≤ 5 provinces once the ceiling below is applied) ─
+    // ── 4. Areas (the fine political grain, budgeted by drawn mass) ───────────
     println!("  Clustering Areas (Strictly inside Regions)…");
     let (mut area_ids, _) = cluster_tier(
         &provinces,
         &region_ids,
-        3,     // target provinces per area
-        7,     // at most 7 areas per region — a cluster cap, not a province cap
+        LAND_AREA_TARGET_PIXELS,
+        MAX_AREAS_PER_REGION,
         seed.wrapping_add(1),
         map_width,
         progress,
         "Clustering areas",
         false,
+        ClusterWeight::Pixels,
     );
 
-    // Small 1-2 province coastal rocks merge directly into their anchor coast's Area
-    for i in 1..n {
-        let anchor = provinces[i].anchor_id;
-        if anchor != 0 && anchor != i as u32 && provinces[i].pixel_count < 200 {
-            area_ids[i] = area_ids[anchor as usize];
-        }
-    }
-
-    // Absorb single-province areas so multiple small islands become a single area
+    // Absorb areas whose drawn mass is under one readable unit. Provinces are
+    // handed to the neighbours they touch, so no neighbour grows an annex.
     let _ = absorb_small_clusters(
         &provinces,
         &mut area_ids,
         &region_ids,
-        2,
+        LAND_AREA_MIN_PIXELS,
+        ClusterWeight::Pixels,
         map_width,
         progress,
         "Absorbing small areas",
         false,
     );
 
-    // …then enforce the actual Area ceiling. Clustering only bounds how many
-    // areas a Region holds, and the island anchoring and absorb sweep above grow
-    // existing areas, so an over-full Area must be split.
-    let total_areas = split_oversized_clusters(
+    // Enforce both ceilings. Clustering only bounds how many areas a Region
+    // holds, and the absorb sweep grows existing areas, so an over-full Area
+    // must be split: first by mass, then by head count for the island rafts.
+    let _ = split_oversized_clusters(
         &provinces,
         &mut area_ids,
         &region_ids,
-        MAX_LAND_AREA_PROVINCES,
+        LAND_AREA_MAX_PIXELS,
+        ClusterWeight::Pixels,
         map_width,
         progress,
         "Splitting oversized areas",
         false,
     );
+    let _ = split_oversized_clusters(
+        &provinces,
+        &mut area_ids,
+        &region_ids,
+        LAND_AREA_MAX_PROVINCES,
+        ClusterWeight::Count,
+        map_width,
+        progress,
+        "Splitting crowded areas",
+        false,
+    );
+
+    // A small island is one place, so it is one Area; then round whatever the
+    // clustering left lopsided. Island provinces are frozen against the relax.
+    let locked = unify_island_areas(
+        &provinces,
+        &mut area_ids,
+        &region_ids,
+        ClusterWeight::Pixels,
+        LAND_AREA_MAX_PIXELS,
+    );
+    let frontier_before = mean_frontier_edges(&provinces, &area_ids);
+    relax_area_boundaries(
+        &provinces,
+        &mut area_ids,
+        &region_ids,
+        ClusterWeight::Pixels,
+        LAND_AREA_MIN_PIXELS,
+        LAND_AREA_MAX_PIXELS,
+        &locked,
+        AREA_RELAX_SWEEPS,
+    );
+    let frontier_after = mean_frontier_edges(&provinces, &area_ids);
+
+    // The island unifier can delete a cluster id; the shape pass cannot.
+    let total_areas = reindex_clusters(&mut area_ids);
 
     for i in 1..n {
         provinces[i].area_id = area_ids[i];
     }
-    println!("  ✓ Generated {} Area(s) worldwide (island areas unified).", total_areas);
+
+    // A one-line census of the tier, so its shape can be judged from the console
+    // the same way relief and climate already are.
+    let mut area_members: BTreeMap<u32, usize> = BTreeMap::new();
+    for i in 1..n {
+        if area_ids[i] != 0 {
+            *area_members.entry(area_ids[i]).or_insert(0) += 1;
+        }
+    }
+    let mut sizes: Vec<usize> = area_members.values().copied().collect();
+    sizes.sort_unstable();
+    let smallest = sizes.first().copied().unwrap_or(0);
+    let largest = sizes.last().copied().unwrap_or(0);
+    let median = sizes.get(sizes.len() / 2).copied().unwrap_or(0);
+    println!(
+        "  ✓ Generated {} Area(s) worldwide — {}–{} provinces (median {}), frontier edges each {:.1} → {:.1}.",
+        total_areas, smallest, largest, median, frontier_before, frontier_after
+    );
 
     GeopoliticalHierarchy {
         total_provinces: provinces.len().saturating_sub(1),
@@ -888,7 +1393,7 @@ pub fn build_ocean_hierarchy(
     // ── 1. Ocean Continents (the great basins) ────────────────────────────────
     // The whole ocean is one parent group, so this is a global partition.
     let roots: Vec<u32> = vec![1; n];
-    let (mut continent_ids, continent_count) = cluster_tier(
+    let (continent_ids, continent_count) = cluster_tier(
         &provinces,
         &roots,
         config.continent_target,
@@ -898,6 +1403,7 @@ pub fn build_ocean_hierarchy(
         progress,
         "Clustering ocean basins",
         true,
+        ClusterWeight::Count,
     );
     for i in 1..n {
         provinces[i].continent_id = continent_ids[i];
@@ -915,6 +1421,7 @@ pub fn build_ocean_hierarchy(
         progress,
         "Clustering oceanic superregions",
         true,
+        ClusterWeight::Count,
     );
     // Undersized superregions are absorbed so no tiny sliver survives between
     // two large ocean realms.
@@ -923,6 +1430,7 @@ pub fn build_ocean_hierarchy(
         &mut super_ids,
         &continent_ids,
         (config.superregion_target / 5).max(6),
+        ClusterWeight::Count,
         map_width,
         progress,
         "Absorbing small ocean superregions",
@@ -944,12 +1452,14 @@ pub fn build_ocean_hierarchy(
         progress,
         "Clustering oceanic regions",
         true,
+        ClusterWeight::Count,
     );
     let total_regions = absorb_small_clusters(
         &provinces,
         &mut region_ids,
         &super_ids,
         (config.region_target / 5).max(4),
+        ClusterWeight::Count,
         map_width,
         progress,
         "Absorbing small ocean regions",
@@ -971,12 +1481,14 @@ pub fn build_ocean_hierarchy(
         progress,
         "Clustering oceanic areas",
         true,
+        ClusterWeight::Count,
     );
     let _ = absorb_small_clusters(
         &provinces,
         &mut area_ids,
         &region_ids,
         2,
+        ClusterWeight::Count,
         map_width,
         progress,
         "Absorbing small ocean areas",
@@ -987,6 +1499,7 @@ pub fn build_ocean_hierarchy(
         &mut area_ids,
         &region_ids,
         MAX_OCEAN_AREA_PROVINCES,
+        ClusterWeight::Count,
         map_width,
         progress,
         "Splitting oversized ocean areas",
@@ -1070,11 +1583,14 @@ mod tests {
             ids[p.id as usize] = 1;
         }
 
+        // A ceiling of five cannot hold twelve provinces in two pieces.
+        let ceiling = 5;
         let total = split_oversized_clusters(
             &provinces,
             &mut ids,
             &parents,
-            MAX_LAND_AREA_PROVINCES,
+            ceiling,
+            ClusterWeight::Count,
             1_000.0,
             &Progress::silent(),
             "Splitting oversized areas",
@@ -1083,8 +1599,7 @@ mod tests {
 
         assert!(
             total >= 3,
-            "12 provinces cannot fit in fewer than 3 areas of {}",
-            MAX_LAND_AREA_PROVINCES
+            "12 provinces cannot fit in fewer than 3 areas of {ceiling}"
         );
 
         let areas = areas_of(&ids);
@@ -1092,7 +1607,7 @@ mod tests {
 
         for (&area, members) in &areas {
             assert!(
-                members.len() <= MAX_LAND_AREA_PROVINCES,
+                members.len() <= ceiling,
                 "area {area} holds {} provinces, over the ceiling",
                 members.len()
             );
@@ -1137,7 +1652,8 @@ mod tests {
             &provinces,
             &mut ids,
             &parents,
-            MAX_LAND_AREA_PROVINCES,
+            8,
+            ClusterWeight::Count,
             1_000.0,
             &Progress::silent(),
             "Splitting oversized areas",
@@ -1165,11 +1681,11 @@ mod tests {
         }
 
         let a = split_oversized_clusters(
-            &provinces, &mut first, &parents, MAX_LAND_AREA_PROVINCES,
+            &provinces, &mut first, &parents, 8, ClusterWeight::Count,
             10_000.0, &Progress::silent(), "Splitting oversized areas", false,
         );
         let b = split_oversized_clusters(
-            &provinces, &mut second, &parents, MAX_LAND_AREA_PROVINCES,
+            &provinces, &mut second, &parents, 8, ClusterWeight::Count,
             10_000.0, &Progress::silent(), "Splitting oversized areas", false,
         );
 
@@ -1221,9 +1737,9 @@ mod tests {
         provinces
     }
 
-    /// The whole land builder — clustering, island anchoring, absorb sweep and
-    /// split — must leave nothing over the Area ceiling, and nothing split
-    /// across two Regions.
+    /// The whole land builder — clustering, absorb sweep, split, island
+    /// unification and shape relaxation — must leave nothing over the Area
+    /// ceiling, and nothing split across two Regions.
     #[test]
     fn the_built_hierarchy_never_exceeds_the_area_ceiling() {
         let hierarchy = build_geopolitical_hierarchy(
@@ -1243,10 +1759,21 @@ mod tests {
 
         for (&area, members) in &areas {
             assert_ne!(area, 0, "every province got an area");
+            // The grid's provinces are all mainland, so nothing here is exempted
+            // from the ceilings by the island unifier.
             assert!(
-                members.len() <= MAX_LAND_AREA_PROVINCES,
+                members.len() <= LAND_AREA_MAX_PROVINCES,
                 "area {area} holds {} provinces, over the ceiling",
                 members.len()
+            );
+
+            let mass: usize = members
+                .iter()
+                .map(|&m| hierarchy.provinces[m as usize].pixel_count)
+                .sum();
+            assert!(
+                mass <= LAND_AREA_MAX_PIXELS,
+                "area {area} weighs {mass} px, over the ceiling"
             );
 
             let region = hierarchy.provinces[members[0] as usize].region_id;
@@ -1255,5 +1782,174 @@ mod tests {
                 "area {area} straddles two regions"
             );
         }
+    }
+
+    /// Total frontier edges across a tier, charged once to each side of every
+    /// adjacent province pair — the perimeter the shape pass reasons about.
+    fn frontier_edges(provinces: &[ProvinceNode], ids: &[u32]) -> usize {
+        let mut total = 0;
+        for p in provinces.iter().skip(1) {
+            let cid = ids[p.id as usize];
+            if cid == 0 { continue; }
+            for &(nb, _) in &p.neighbors {
+                let n = nb as usize;
+                if n > p.id as usize && n < ids.len() && ids[n] != 0 && ids[n] != cid {
+                    total += 1;
+                }
+            }
+        }
+        total
+    }
+
+    /// `Σ perimeter² / mass`, the compactness energy the shape pass minimises.
+    fn area_objective(provinces: &[ProvinceNode], ids: &[u32], weight: ClusterWeight) -> f64 {
+        let mut mass: BTreeMap<u32, usize> = BTreeMap::new();
+        let mut perimeter: BTreeMap<u32, usize> = BTreeMap::new();
+        for p in provinces.iter().skip(1) {
+            let cid = ids[p.id as usize];
+            if cid == 0 { continue; }
+            *mass.entry(cid).or_insert(0) += weight.of(p);
+            for &(nb, _) in &p.neighbors {
+                let n = nb as usize;
+                if n <= p.id as usize || n >= ids.len() { continue; }
+                let n_cid = ids[n];
+                if n_cid != 0 && n_cid != cid {
+                    *perimeter.entry(cid).or_insert(0) += 1;
+                    *perimeter.entry(n_cid).or_insert(0) += 1;
+                }
+            }
+        }
+        mass.iter()
+            .map(|(&cid, &m)| {
+                let p = perimeter.get(&cid).copied().unwrap_or(0) as f64;
+                p * p / m as f64
+            })
+            .sum()
+    }
+
+    fn area_is_connected(provinces: &[ProvinceNode], ids: &[u32], cid: u32) -> bool {
+        let Some(start) = provinces
+            .iter()
+            .skip(1)
+            .find(|p| ids[p.id as usize] == cid)
+            .map(|p| p.id)
+        else {
+            return true;
+        };
+        let mut seen: HashSet<u32> = HashSet::new();
+        let mut stack = vec![start];
+        seen.insert(start);
+        while let Some(id) = stack.pop() {
+            for &(nb, _) in &provinces[id as usize].neighbors {
+                let n = nb as usize;
+                if n < ids.len() && ids[n] == cid && seen.insert(nb) {
+                    stack.push(nb);
+                }
+            }
+        }
+        provinces
+            .iter()
+            .skip(1)
+            .filter(|p| ids[p.id as usize] == cid)
+            .all(|p| seen.contains(&p.id))
+    }
+
+    /// The shape pass pulls a lone protrusion back into the area it belongs to.
+    #[test]
+    fn relaxing_pulls_a_protrusion_into_shape() {
+        let provinces = continent_grid(5, 5);
+        let parents = parents_of(&provinces);
+        let mut ids = vec![0u32; provinces.len()];
+        for p in provinces.iter().skip(1) {
+            let row = (p.id - 1) / 5;
+            let col = (p.id - 1) % 5;
+            ids[p.id as usize] = if (row < 3 && col < 3) || p.id == 9 { 1 } else { 2 };
+        }
+
+        let before = area_objective(&provinces, &ids, ClusterWeight::Pixels);
+        let before_frontier = frontier_edges(&provinces, &ids);
+        let locked = vec![false; provinces.len()];
+        let total = relax_area_boundaries(
+            &provinces,
+            &mut ids,
+            &parents,
+            ClusterWeight::Pixels,
+            300,
+            1_000_000,
+            &locked,
+            AREA_RELAX_SWEEPS,
+        );
+
+        assert_eq!(total, 2, "relaxation never invents or removes an area");
+        let after = area_objective(&provinces, &ids, ClusterWeight::Pixels);
+        assert!(after < before, "the protrusion must round away: {before} -> {after}");
+        assert!(
+            frontier_edges(&provinces, &ids) < before_frontier,
+            "rounding an area must shorten its frontier"
+        );
+        assert!(area_is_connected(&provinces, &ids, 1));
+        assert!(area_is_connected(&provinces, &ids, 2));
+    }
+
+    /// Relaxation is a pure function of the tier it is handed.
+    #[test]
+    fn relaxation_is_deterministic() {
+        let provinces = continent_grid(6, 6);
+        let parents = parents_of(&provinces);
+        let mut first = vec![0u32; provinces.len()];
+        let mut second = vec![0u32; provinces.len()];
+        for p in provinces.iter().skip(1) {
+            let col = (p.id - 1) % 6;
+            let id = match col {
+                0..=1 => 1,
+                2..=3 => 2,
+                _ => 3,
+            };
+            first[p.id as usize] = id;
+            second[p.id as usize] = id;
+        }
+
+        let locked = vec![false; provinces.len()];
+        relax_area_boundaries(
+            &provinces, &mut first, &parents, ClusterWeight::Pixels, 300, 100_000, &locked, 5,
+        );
+        relax_area_boundaries(
+            &provinces, &mut second, &parents, ClusterWeight::Pixels, 300, 100_000, &locked, 5,
+        );
+
+        assert_eq!(first, second, "two runs of the same tier must agree");
+    }
+
+    /// A small island is one place: every province of it ends up in one area, and
+    /// the shape pass is not allowed to pull it apart again.
+    #[test]
+    fn a_small_island_becomes_one_area() {
+        let mut provinces = continent_grid(5, 5);
+        // A three-province island, all anchored to the same mainland coast.
+        for id in [3u32, 8, 9] {
+            provinces[id as usize].anchor_id = 2;
+            provinces[id as usize].pixel_count = 200;
+        }
+        let parents = parents_of(&provinces);
+        let mut ids = vec![0u32; provinces.len()];
+        for p in provinces.iter().skip(1) {
+            ids[p.id as usize] = if p.id <= 4 { 1 } else { 2 };
+        }
+
+        let locked = unify_island_areas(
+            &provinces,
+            &mut ids,
+            &parents,
+            ClusterWeight::Pixels,
+            LAND_AREA_MAX_PIXELS,
+        );
+
+        let home = ids[3];
+        assert!(home == 1 || home == 2, "the island kept a real area");
+        for id in [3u32, 8, 9] {
+            assert_eq!(ids[id as usize], home, "province {id} was left behind");
+            assert!(locked[id as usize], "unified province {id} must be frozen");
+        }
+        assert!(!locked[1], "only the island is frozen");
     }
 }
