@@ -1,7 +1,7 @@
 /// Tuning for **Languages & Phonetics** — the eighth act of creation.
 ///
 /// Every distance here is in **map pixels**, like [`CivilizationConfig`], so a
-/// rule reads the same on a 2K test world as on the 8K production plate. The
+/// rule reads the same on a 2K test world as on the 16K production plate. The
 /// stage works on the province graph rather than on pixels, so these are the
 /// only figures a world needs to reproduce its own languages exactly.
 ///

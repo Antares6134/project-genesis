@@ -1,4 +1,5 @@
 use crate::core::progress::Progress;
+use crate::core::sphere::CanvasScale;
 use crate::geography::config::OceanConfig;
 use crate::geopolitics::hierarchy::{GeopoliticalHierarchy, ProvinceNode};
 use rand::prelude::*;
@@ -1142,17 +1143,31 @@ fn mean_frontier_edges(provinces: &[ProvinceNode], cluster_ids: &[u32]) -> f64 {
 ///
 /// ```
 /// Continent  (Major landmass cores + strictly anchored islands)
-///   └─ Superregion  (~200 provinces, balanced, undersized absorbed)
-///        └─ Region  (~45 provinces, kingdom scale, undersized absorbed)
-///             └─ Area  (max 5 provinces, island chains united, min size 2)
+///   └─ Superregion  (~200 provinces at 16K, scaled by canvas area)
+///        └─ Region  (~45 provinces at 16K, scaled with it)
+///             └─ Area  (budgeted by drawn pixel mass, island chains united)
 /// ```
+///
+/// The superregion and region targets are quoted at the 16K reference plate and
+/// scaled with the province count, so a 2K world's political map keeps the same
+/// tier structure at a coarser grain.
 pub fn build_geopolitical_hierarchy(
     mut provinces: Vec<ProvinceNode>,
     seed:          u64,
     map_width:     f32,
+    scale:         CanvasScale,
     progress:      &Progress,
 ) -> GeopoliticalHierarchy {
     let n = provinces.len();
+    // The tier targets are province *counts*, tuned on the 16K reference plate.
+    // A canvas's province count is scaled by its area (see `GeographyConfig`), so
+    // the same factor carries these targets: a two-hundred-province superregion
+    // at 16K covers the same share of the world as an eight-province one at 2K.
+    // The floors keep every tier present on the smallest plate.
+    let superregion_target = scale.count_at_least(200, 8);
+    let superregion_absorb = scale.count_at_least(95, 2);
+    let region_target = scale.count_at_least(45, 4);
+    let region_absorb = scale.count_at_least(16, 1);
 
     // ── 1. Continents ─────────────────────────────────────────────────────────
     progress.sub_step("Anchoring the continents", 0);
@@ -1166,7 +1181,7 @@ pub fn build_geopolitical_hierarchy(
     let (mut super_ids, _) = cluster_tier(
         &provinces,
         &continent_ids,
-        200,   // ~200 provinces per superregion
+        superregion_target,
         50,    // At most 50 superregions per large continent
         seed.wrapping_add(3),
         map_width,
@@ -1192,7 +1207,7 @@ pub fn build_geopolitical_hierarchy(
         &provinces,
         &mut super_ids,
         &continent_ids,
-        95,
+        superregion_absorb,
         ClusterWeight::Count,
         map_width,
         progress,
@@ -1210,7 +1225,7 @@ pub fn build_geopolitical_hierarchy(
     let (mut region_ids, _) = cluster_tier(
         &provinces,
         &super_ids,
-        45,    // ~45 provinces per region
+        region_target,
         10,    // Up to 10 regions per superregion
         seed.wrapping_add(2),
         map_width,
@@ -1238,7 +1253,7 @@ pub fn build_geopolitical_hierarchy(
         &provinces,
         &mut region_ids,
         &super_ids,
-        16,
+        region_absorb,
         ClusterWeight::Count,
         map_width,
         progress,
@@ -1746,6 +1761,7 @@ mod tests {
             continent_grid(20, 20),
             42,
             100.0,
+            CanvasScale::reference(),
             &Progress::silent(),
         );
 

@@ -25,6 +25,9 @@ fn main() {
     let mut seed = 42;
     let mut save_cache = false;
     let mut load_cache = false;
+    let mut width: Option<usize> = None;
+    let mut height: Option<usize> = None;
+    let mut force_headless = false;
 
     let mut run_viewer = false;
     let mut run_plates = false;
@@ -41,6 +44,15 @@ fn main() {
             load_cache = true;
         } else if arg == "--viewer" {
             run_viewer = true;
+        } else if arg == "--headless" {
+            // Headless is the default when `--viewer` is absent; the flag is
+            // accepted so a script can say what it means, and it wins if both
+            // modes are named.
+            force_headless = true;
+        } else if arg == "--width" {
+            width = args.next().and_then(|value| value.parse::<usize>().ok());
+        } else if arg == "--height" {
+            height = args.next().and_then(|value| value.parse::<usize>().ok());
         } else if arg == "--plates" {
             run_plates = true;
         } else if arg == "--civs" {
@@ -59,12 +71,9 @@ fn main() {
         }
     }
 
-    println!(
-        "Active Seed: {} | Canvas: {}x{}",
-        seed,
-        pipeline::WORLD_WIDTH,
-        pipeline::WORLD_HEIGHT
-    );
+    if force_headless {
+        run_viewer = false;
+    }
 
     let total_start = Instant::now();
 
@@ -87,7 +96,15 @@ fn main() {
             })
             .unwrap_or_else(viewer::Language::from_env);
 
-        let mut genesis = Genesis::new(seed);
+        // The atlas starts on its 8K preset unless the command line names a
+        // canvas. `--load` may adopt a cache on another plate and move the panel's
+        // selector to it once the file is read.
+        let (default_width, default_height) = viewer::MapResolution::DEFAULT.size();
+        let (start_width, start_height) = (
+            width.unwrap_or(default_width),
+            height.unwrap_or(default_height),
+        );
+        let mut genesis = Genesis::new_sized(seed, start_width, start_height);
         genesis.set_autosave(save_cache);
         if load_cache {
             // `--load --viewer` adopts the saved world for the seed in one read:
@@ -98,6 +115,13 @@ fn main() {
                 report_load_failure(&why);
             }
         }
+        let (canvas_width, canvas_height) = genesis.canvas();
+        println!(
+            "Active Seed: {} | Canvas: {}x{}",
+            genesis.seed(),
+            canvas_width,
+            canvas_height
+        );
 
         println!("Launching Interactive 2D Viewer...");
         // An atlas is a window application, not a pop-up: open at a proper size
@@ -108,6 +132,9 @@ fn main() {
                 .with_inner_size([1720.0, 1040.0])
                 .with_min_inner_size([1100.0, 700.0])
                 .with_maximized(true),
+            // A 16K plate is one 16384 × 8192 texture; wgpu's default device
+            // limits stop at 8192 px and a 256 MiB buffer.
+            wgpu_options: viewer::wgpu_configuration(),
             ..Default::default()
         };
 
@@ -130,13 +157,26 @@ fn main() {
     // README, so they want exactly what they always wanted: a finished world, a
     // terminal full of figures, and PNGs on disk. They run the same pipeline the
     // atlas does, silently.
-    let mut genesis = Genesis::new(seed);
+    // Headless keeps the engine's tuned 16K plate unless `--width/--height` say
+    // otherwise. `--load` adopts whatever canvas the cache holds.
+    let mut genesis = Genesis::new_sized(
+        seed,
+        width.unwrap_or(pipeline::WORLD_WIDTH),
+        height.unwrap_or(pipeline::WORLD_HEIGHT),
+    );
     genesis.set_autosave(save_cache);
     if load_cache {
         if let Err(why) = genesis.load_cache() {
             report_load_failure(&why);
         }
     }
+    let (canvas_width, canvas_height) = genesis.canvas();
+    println!(
+        "Active Seed: {} | Canvas: {}x{}",
+        genesis.seed(),
+        canvas_width,
+        canvas_height
+    );
 
     let want_civilizations = run_civilizations || run_plates || run_languages;
     let want_languages = run_languages || run_civilizations || run_plates;
@@ -256,7 +296,7 @@ fn main() {
 
     // --- STAGE 9: CIVILIZATIONS MAP (optional) ---
     // The very same painter the viewer's Civilizations scope uses, exported at
-    // full 8K so it sits alongside the other `world_*.png` plates.
+    // full 16K so it sits alongside the other `world_*.png` plates.
     if want_civilizations && !world.civilizations.is_empty() {
         let civ_start = Instant::now();
         let mut civ_viewer = viewer::MapViewer::from_world(world.clone());

@@ -17,8 +17,7 @@ use crate::export::image::{
 use crate::geopolitics::{GeopoliticalHierarchy, ProvinceNode};
 use crate::language::LanguagesWorld;
 use crate::pipeline::{
-    AtlasWorld, CachedWorld, Genesis, LoadError, Stage, StageReport, StageState, cache_path,
-    cached_world, cached_worlds,
+    AtlasWorld, CachedWorld, Genesis, LoadError, Stage, StageReport, StageState, cached_worlds,
 };
 use eframe::egui::{
     self, Align2, Color32, ColorImage, FontFamily, FontId, Stroke, TextStyle, TextureHandle,
@@ -28,6 +27,7 @@ use noise::{NoiseFn, OpenSimplex};
 use rand::RngExt;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Instant, SystemTime};
 use themes::{ClimateZone, TEMPERATURE_LEGEND_ROWS, TerrainClass};
@@ -300,6 +300,118 @@ pub enum MapTier {
     Continents,
 }
 
+/// The map resolutions the atlas offers, from the smallest plate to the tuned
+/// 16K one.
+///
+/// A resolution is part of a world's identity, exactly like its seed: the same
+/// seed grown at 8K and at 16K are two different planets. The panel therefore
+/// chooses the canvas before act one, and a world already grown must be reset
+/// before its canvas can change.
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum MapResolution {
+    K2,
+    K4,
+    K8,
+    K12,
+    K16,
+    /// A canvas supplied on the command line that is not one of the presets.
+    Custom(usize, usize),
+}
+
+impl MapResolution {
+    /// Every preset, in the order the picker offers them.
+    pub const ALL: [MapResolution; 5] = [
+        MapResolution::K2,
+        MapResolution::K4,
+        MapResolution::K8,
+        MapResolution::K12,
+        MapResolution::K16,
+    ];
+
+    /// The interactive atlas starts on the 8K plate: detailed enough for the
+    /// whole hierarchy to breathe, small enough to grow in a few seconds.
+    pub const DEFAULT: MapResolution = MapResolution::K8;
+
+    /// The canvas size this choice means, in pixels.
+    pub fn size(self) -> (usize, usize) {
+        match self {
+            MapResolution::K2 => (2048, 1024),
+            MapResolution::K4 => (4096, 2048),
+            MapResolution::K8 => (8192, 4096),
+            MapResolution::K12 => (12288, 6144),
+            MapResolution::K16 => (16384, 8192),
+            MapResolution::Custom(width, height) => (width, height),
+        }
+    }
+
+    /// The label the picker and the saved-world rows show.
+    pub fn label(self) -> String {
+        let (width, height) = self.size();
+        match self {
+            MapResolution::K2 => format!("2K · {width} × {height}"),
+            MapResolution::K4 => format!("4K · {width} × {height}"),
+            MapResolution::K8 => format!("8K · {width} × {height}"),
+            MapResolution::K12 => format!("12K · {width} × {height}"),
+            MapResolution::K16 => format!("16K · {width} × {height}"),
+            MapResolution::Custom(..) => format!("{width} × {height}"),
+        }
+    }
+
+    /// Read a canvas back as a preset, or as a custom size when it is not one.
+    pub fn from_canvas(width: usize, height: usize) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|preset| preset.size() == (width, height))
+            .unwrap_or(MapResolution::Custom(width, height))
+    }
+}
+
+/// Edge of the largest texture the atlas must be able to upload: a finished 16K
+/// plate is one `WORLD_WIDTH × WORLD_HEIGHT` RGBA texture (16384 × 8192).
+///
+/// egui-wgpu asks the device for only `8192` — enough for any 4K display, but a
+/// world plate is not a screen, and wgpu rejects the upload as
+/// `egui_texid_Managed` before the atlas has drawn a frame.
+const ATLAS_TEXTURE_DIMENSION: u32 = 16384;
+
+/// Bytes the atlas must be able to stage at once: one 16K RGBA plate is 512 MiB,
+/// and wgpu's default device asks for only 256 MiB.
+const ATLAS_BUFFER_BYTES: u64 = 512 << 20;
+
+/// Raise the two device limits a 16K plate needs, up to what the adapter can do.
+///
+/// They are *requests*, so each is clamped to `adapter`: a GPU that cannot hold
+/// a 16K texture still gets a device (and would still refuse the plate, which is
+/// the honest outcome — there is nothing to show it with).
+fn atlas_device_limits(
+    mut limits: eframe::wgpu::Limits,
+    adapter: &eframe::wgpu::Limits,
+) -> eframe::wgpu::Limits {
+    limits.max_texture_dimension_2d =
+        ATLAS_TEXTURE_DIMENSION.min(adapter.max_texture_dimension_2d);
+    limits.max_buffer_size = ATLAS_BUFFER_BYTES.min(adapter.max_buffer_size);
+    limits
+}
+
+/// The wgpu configuration the atlas opens with.
+///
+/// Everything egui-wgpu chose is kept — instance backends, power preference, the
+/// backend-aware base limits and the device label — and only the requested
+/// limits are overridden, through the very descriptor egui-wgpu would have used.
+pub fn wgpu_configuration() -> eframe::WgpuConfiguration {
+    let mut configuration = eframe::WgpuConfiguration::default();
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut configuration.wgpu_setup {
+        let egui_descriptor = Arc::clone(&setup.device_descriptor);
+        setup.device_descriptor = Arc::new(move |adapter| {
+            let mut descriptor = egui_descriptor(adapter);
+            descriptor.required_limits =
+                atlas_device_limits(descriptor.required_limits, &adapter.limits());
+            descriptor
+        });
+    }
+    configuration
+}
+
 pub struct MapViewer {
     /// The world being built, and the acts of creation not yet run.
     ///
@@ -315,6 +427,9 @@ pub struct MapViewer {
     save_job: Option<SaveJob>,
     /// The seed as the reader typed it, which is not always a valid world.
     seed_text: String,
+    /// The canvas chosen for the next world. It is applied at once before act
+    /// one, and only through a reset once a world exists.
+    resolution: MapResolution,
     /// A sentence about the last cache attempt, when there is one worth saying.
     cache_notice: Option<String>,
     /// Every world cache on disk as of the last scan.
@@ -342,7 +457,7 @@ pub struct MapViewer {
     /// Tint the civilizations of the dawn over *any* scope, not just their own.
     show_civilizations: bool,
     /// World-wide relief extremes, measured once whenever the heightmap changes
-    /// so the topographic legend never has to re-scan the 8K heightmap every
+    /// so the topographic legend never has to re-scan the 16K heightmap every
     /// frame. The positions travel with the measurements so the legend can fly
     /// the reader there. `None` until there is a heightmap to measure.
     relief: Option<ReliefExtremes>,
@@ -1445,6 +1560,10 @@ impl MapViewer {
     fn with_world(mut genesis: Genesis, world: Option<AtlasWorld>) -> Self {
         let relief = world.as_ref().map(|world| measure_relief(&world.heightmap));
         let seed_text = genesis.seed().to_string();
+        let (canvas_width, canvas_height) = world
+            .as_ref()
+            .map_or_else(|| genesis.canvas(), |world| (world.width, world.height));
+        let resolution = MapResolution::from_canvas(canvas_width, canvas_height);
         // The panel opens ready to save, and the pipeline is told so at once: what
         // the checkbox says will happen and what act 3 will do are the same fact,
         // never two that happen to agree until someone touches the checkbox.
@@ -1459,6 +1578,7 @@ impl MapViewer {
             job: None,
             save_job: None,
             seed_text,
+            resolution,
             cache_notice: None,
             cached: Vec::new(),
             cached_scanned: false,
@@ -1510,7 +1630,14 @@ impl MapViewer {
         // whose own copy is being mutated on another thread.
         let autosave = self.genesis.autosave();
         let settings = self.genesis.settings().clone();
-        let mut genesis = Genesis::new(self.genesis.seed());
+        // Before act one the reader's resolution is authoritative; once a world
+        // exists it is already fixed in the pipeline and this is a no-op.
+        if self.genesis.stage().is_none() {
+            let (chosen_width, chosen_height) = self.resolution.size();
+            self.genesis.set_canvas(chosen_width, chosen_height);
+        }
+        let (width, height) = self.genesis.canvas();
+        let mut genesis = Genesis::new_sized(self.genesis.seed(), width, height);
         std::mem::swap(&mut genesis, &mut self.genesis);
         // The pipeline left behind is a placeholder, but the panel still asks it
         // what it would do: without this the Save choice would flicker off for the
@@ -1578,7 +1705,7 @@ impl MapViewer {
                     rgba,
                 }) => {
                     // A preview is a few hundred kilobytes, so it costs one
-                    // texture upload — not one per pixel of an 8K world.
+                    // texture upload — not one per pixel of a 16K world.
                     let image = ColorImage::from_rgba_unmultiplied([width, height], &rgba);
                     let texture = ctx.load_texture("live_preview", image, TextureOptions::NEAREST);
                     self.live = Some(LivePlate {
@@ -1718,8 +1845,22 @@ impl MapViewer {
     /// A load that finds nothing is not an error the reader can do anything about
     /// except be told: the panel says so, in a sentence that names the file and
     /// the one thing that would put one there.
+    #[cfg(test)]
     fn load_world(&mut self) {
-        match self.genesis.load_cache() {
+        self.adopt_cache(None);
+    }
+
+    /// Adopt one cache the reader picked from the saved-world list.
+    fn load_world_from(&mut self, cache: &CachedWorld) {
+        self.adopt_cache(Some(cache));
+    }
+
+    fn adopt_cache(&mut self, cache: Option<&CachedWorld>) {
+        let outcome = match cache {
+            Some(cache) => self.genesis.load_cached_world(cache),
+            None => self.genesis.load_cache(),
+        };
+        match outcome {
             Ok(()) => {
                 self.world = self.genesis.atlas();
                 self.relief = self
@@ -1729,6 +1870,10 @@ impl MapViewer {
                 // A loaded world is past whichever act it was saved at, so the
                 // atlas opens on it rather than on a blank plate.
                 self.forget_world_view();
+                // The cache's own canvas is part of what was adopted: an 8K
+                // selector must not keep claiming a 16K world.
+                let (width, height) = self.genesis.canvas();
+                self.resolution = MapResolution::from_canvas(width, height);
                 let stage = self.genesis.stage().unwrap_or(Stage::Geology);
                 self.scope = default_scope(stage);
                 self.cache_notice = None;
@@ -1820,13 +1965,25 @@ impl MapViewer {
     /// adopted at once, so there is no second press to discover. A file that
     /// vanished or cannot be read between the scan and the click still leaves
     /// the panel saying why.
+    #[cfg(test)]
     fn pick_cached_world(&mut self, seed: u64) {
         self.seed_text = seed.to_string();
         self.genesis.set_seed(seed);
         self.load_world();
     }
 
+    /// Adopt one cache the reader picked from the saved-world list, on the
+    /// canvas that cache was written at.
+    fn pick_cached_world_from(&mut self, cache: CachedWorld) {
+        self.seed_text = cache.seed.to_string();
+        self.genesis.set_seed(cache.seed);
+        self.load_world_from(&cache);
+    }
+
     /// Throw the world away and start again on the same seed.
+    ///
+    /// The resolution selector is the authority on the new canvas: this is how a
+    /// reader applies a resolution they chose after a world was already grown.
     fn reset_world(&mut self) {
         let seed = self.genesis.seed();
         let autosave = self.genesis.autosave();
@@ -1834,15 +1991,16 @@ impl MapViewer {
         // reset exactly as the cache choice does, so the next world grows under
         // the settings they have chosen.
         let settings = self.genesis.settings().clone();
-        self.genesis = Genesis::new(seed);
+        let (width, height) = self.resolution.size();
+        self.genesis = Genesis::new_sized(seed, width, height);
         self.genesis.set_autosave(autosave);
         self.genesis.set_settings(settings);
         self.world = None;
         self.forget_world_view();
         self.cache_notice = None;
         self.notice = Some(self.tf(
-            "↺ Seed {} cleared — press “{}” to grow it again.",
-            &[&seed, &act_label(self.language, Stage::Geology)],
+            "↺ Seed {} cleared on a {} × {} canvas — press “{}” to grow it again.",
+            &[&seed, &width, &height, &act_label(self.language, Stage::Geology)],
         ));
     }
 
@@ -1855,6 +2013,8 @@ impl MapViewer {
     /// it. The acts before it, and their artefacts, are left exactly as they were.
     fn rewind_world(&mut self, stage: Stage) {
         self.genesis.rewind_to(stage);
+        let (width, height) = self.genesis.canvas();
+        self.resolution = MapResolution::from_canvas(width, height);
         self.world = self.genesis.atlas();
         self.relief = self
             .world
@@ -2011,6 +2171,7 @@ impl MapViewer {
                         panel_title(ui, self.t("🧬 Genesis"));
                         ui.separator();
                         self.seed_row(ui, busy);
+                        self.resolution_row(ui, busy);
                         ui.add_space(2.0);
                         self.world_data_section(ui, busy);
                         self.act_section(ui, busy);
@@ -2100,6 +2261,86 @@ impl MapViewer {
         }
     }
 
+    /// The canvas the next world will grow on.
+    ///
+    /// Before act one the choice is applied at once. Once a world exists the
+    /// canvas is part of that world's identity, so the selector may still be
+    /// changed but it only takes effect through an explicit reset — which the
+    /// row says, and offers as a button.
+    fn resolution_row(&mut self, ui: &mut egui::Ui, busy: bool) {
+        let before = self.resolution;
+        let has_world = self.genesis.stage().is_some() || self.world.is_some();
+
+        ui.horizontal(|ui| {
+            ui.label(self.t("Map resolution"));
+            ui.add_enabled_ui(!busy, |ui| {
+                egui::ComboBox::from_id_salt("map_resolution")
+                    .selected_text(self.resolution.label())
+                    .width(200.0)
+                    .show_ui(ui, |ui| {
+                        for preset in MapResolution::ALL {
+                            ui.selectable_value(&mut self.resolution, preset, preset.label());
+                        }
+                        if let MapResolution::Custom(width, height) = self.resolution {
+                            ui.selectable_value(
+                                &mut self.resolution,
+                                MapResolution::Custom(width, height),
+                                MapResolution::Custom(width, height).label(),
+                            );
+                        }
+                    });
+            });
+        });
+
+        if self.resolution != before && !busy && !has_world {
+            self.apply_chosen_resolution();
+        }
+
+        let (width, height) = self.genesis.canvas();
+        if has_world && self.resolution.size() != (width, height) {
+            caption(
+                ui,
+                self.t("Changing the resolution resets this world — press ↺ Reset world to apply."),
+            );
+            if ui
+                .add_enabled(!busy, egui::Button::new(self.t("↺ Reset to apply")).small())
+                .clicked()
+            {
+                self.reset_world();
+            }
+        } else {
+            caption(
+                ui,
+                self.tf("Canvas {} × {} · resolution is fixed once act 1 runs.", &[&width, &height]),
+            );
+        }
+        caption(
+            ui,
+            self.t("Province, erosion and lake budgets scale with the canvas; advanced values are quoted at 16K."),
+        );
+    }
+
+    /// Put the chosen resolution into a world that has not begun yet.
+    ///
+    /// Returns `false` when a world already exists: its canvas is part of its
+    /// identity, and only [`MapViewer::reset_world`] may change it.
+    fn apply_chosen_resolution(&mut self) -> bool {
+        if self.genesis.stage().is_some() || self.world.is_some() {
+            return false;
+        }
+        let (width, height) = self.resolution.size();
+        if !self.genesis.set_canvas(width, height) {
+            return false;
+        }
+        self.texture = None;
+        self.pending_fit = true;
+        self.notice = Some(self.tf(
+            "🌱 Canvas {} × {} — press “{}” to grow it.",
+            &[&width, &height, &act_label(self.language, Stage::Geology)],
+        ));
+        true
+    }
+
     /// World data: loading and saving are commands, auto-save is a setting, and
     /// the list is what is actually on disk.
     ///
@@ -2127,7 +2368,19 @@ impl MapViewer {
         // The field is the truth here, not the last seed the pipeline accepted:
         // an empty or half-typed seed must not look loadable.
         let typed = self.seed_text.trim().parse::<u64>().ok();
-        let cache = typed.and_then(cached_world);
+        // The list has already been scanned, so this costs no filesystem call per
+        // frame. Prefer the cache on the canvas the selector is showing; if the
+        // seed only exists on another canvas, that cache is still loadable and
+        // will move the selector to its own resolution.
+        let cache = typed.and_then(|seed| {
+            let (width, height) = self.resolution.size();
+            self.cached
+                .iter()
+                .filter(|cache| cache.seed == seed)
+                .find(|cache| (cache.width, cache.height) == (width, height))
+                .or_else(|| self.cached.iter().find(|cache| cache.seed == seed))
+                .cloned()
+        });
         let load_hint = if busy {
             self.t("Wait for the act in flight to finish")
         } else if typed.is_none() {
@@ -2155,16 +2408,16 @@ impl MapViewer {
                 .on_hover_text(match &cache {
                     Some(cache) => self.tf(
                         "Read {} and pick the panel up where it left off",
-                        &[&cache_path(cache.seed).display().to_string()],
+                        &[&cache.path.display().to_string()],
                     ),
                     None => self.t("Read this seed's saved world").to_string(),
                 })
                 .on_disabled_hover_text(load_hint);
             if load.clicked()
-                && let Some(seed) = typed
+                && let (Some(seed), Some(cache)) = (typed, cache.clone())
             {
                 self.genesis.set_seed(seed);
-                self.load_world();
+                self.load_world_from(&cache);
             }
 
             let save = ui
@@ -2173,7 +2426,7 @@ impl MapViewer {
                     egui::Button::new(self.t("💾 Save")),
                 )
                 .on_hover_text(self.t(
-                    "Write every act grown so far, up to act 6, to saved_seeds/world_<seed>.bin",
+                    "Write every act grown so far, up to act 6, to saved_seeds/world_<seed>_<width>x<height>.bin",
                 ))
                 .on_disabled_hover_text(save_hint);
             if save.clicked() {
@@ -2185,9 +2438,11 @@ impl MapViewer {
             (Some(cache), _) => caption(
                 ui,
                 self.tf(
-                    "seed {} · {} · saved {}",
+                    "seed {} · {} × {} · {} · saved {}",
                     &[
                         &cache.seed,
+                        &cache.width,
+                        &cache.height,
                         &cache_size(cache.bytes, self.language),
                         &cache_age(cache.modified, self.language),
                     ],
@@ -2225,7 +2480,7 @@ impl MapViewer {
                 ),
             )
             .on_hover_text(self.t(
-                "Write every act grown so far, up to act 6, to saved_seeds/world_<seed>.bin",
+                "Write every act grown so far, up to act 6, to saved_seeds/world_<seed>_<width>x<height>.bin",
             ))
             .changed()
         {
@@ -2277,16 +2532,19 @@ impl MapViewer {
                                 let acts = acts_saved(cache.acts, self.language);
                                 let size = cache_size(cache.bytes, self.language);
                                 let age = cache_age(cache.modified, self.language);
+                                let resolution =
+                                    MapResolution::from_canvas(cache.width, cache.height).label();
                                 let line = self.tf(
-                                    "{}   {} · {}  · {}",
-                                    &[&cache.seed, &size, &age, &acts],
+                                    "{} · {}   {} · {}  · {}",
+                                    &[&cache.seed, &resolution, &size, &age, &acts],
                                 );
                                 let hover = self.tf(
-                                    "Load seed {} — {} · {} · {}\nPicks the panel up where the save left off.",
-                                    &[&cache.seed, &size, &age, &acts],
+                                    "Load seed {} on {} — {} · {} · {}\nPicks the panel up where the save left off.",
+                                    &[&cache.seed, &resolution, &size, &age, &acts],
                                 );
-                                let button = egui::Button::selectable(cache.seed == current, line)
-                                    .truncate();
+                                let selected = cache.seed == current
+                                    && (cache.width, cache.height) == self.genesis.canvas();
+                                let button = egui::Button::selectable(selected, line).truncate();
                                 if ui
                                     .add_enabled(!busy, button)
                                     .on_hover_text(hover)
@@ -2295,7 +2553,7 @@ impl MapViewer {
                                     )
                                     .clicked()
                                 {
-                                    picked = Some(cache.seed);
+                                    picked = Some(cache.clone());
                                 }
                             }
                         });
@@ -2310,8 +2568,8 @@ impl MapViewer {
         if refresh {
             self.refresh_cached();
         }
-        if let Some(seed) = picked {
-            self.pick_cached_world(seed);
+        if let Some(cache) = picked {
+            self.pick_cached_world_from(cache);
         }
     }
 
@@ -2558,7 +2816,7 @@ impl MapViewer {
         let (width, height) = self
             .world
             .as_ref()
-            .map_or((8192, 4096), |world| (world.width, world.height));
+            .map_or_else(|| self.genesis.canvas(), |world| (world.width, world.height));
         let v = (y / (height.saturating_sub(1)).max(1) as f32).clamp(0.0, 1.0);
         let u = (x / width.max(1) as f32).clamp(0.0, 1.0);
         ((0.5 - v) * 180.0, (u - 0.5) * 360.0)
@@ -3985,7 +4243,7 @@ impl MapViewer {
             }
         }
 
-        // The 8K plate is only regenerated when the world or the scope has
+        // The 16K plate is only regenerated when the world or the scope has
         // changed — never per frame — and never while an act is running, because
         // while an act is running the *live* plate is what the canvas shows.
         if self.job.is_none() && self.texture.is_none() {
@@ -4041,7 +4299,7 @@ impl MapViewer {
         // low-resolution picture that act is pushing up from the very grid it is
         // working on. It is drawn in the same rectangle as the finished map, at
         // the same zoom and offset, so the reader can pan the world as it grows —
-        // and when the act lands, the 8K plate replaces it in place.
+        // and when the act lands, the 16K plate replaces it in place.
         let live = if self.job.is_some() {
             self.live.as_ref()
         } else {
@@ -4605,6 +4863,35 @@ impl MapViewer {
 mod tests {
     use super::*;
 
+    // ─── THE WINDOW'S DEVICE ─────────────────────────────────────────────────
+
+    /// A 16K plate must fit in one texture and one staging buffer, and the atlas
+    /// must never ask for more than the adapter reports — the request would fail
+    /// outright on a modest GPU.
+    #[test]
+    fn the_atlas_asks_for_the_limits_a_16k_plate_needs() {
+        let generous = eframe::wgpu::Limits {
+            max_texture_dimension_2d: 16384,
+            max_buffer_size: 2 << 30,
+            ..Default::default()
+        };
+        let limits = atlas_device_limits(eframe::wgpu::Limits::default(), &generous);
+        assert_eq!(limits.max_texture_dimension_2d, 16384);
+        assert_eq!(limits.max_buffer_size, 512 << 20);
+
+        let modest = eframe::wgpu::Limits {
+            max_texture_dimension_2d: 8192,
+            max_buffer_size: 256 << 20,
+            ..Default::default()
+        };
+        let limits = atlas_device_limits(eframe::wgpu::Limits::default(), &modest);
+        assert_eq!(
+            limits.max_texture_dimension_2d, 8192,
+            "never above what the adapter reports"
+        );
+        assert_eq!(limits.max_buffer_size, 256 << 20);
+    }
+
     // ─── THE GENESIS FLOW ────────────────────────────────────────────────────
 
     /// A scope's subject has to exist before the scope is offered: relief needs
@@ -5014,6 +5301,77 @@ mod tests {
             viewer.genesis.world_config().sea_threshold,
             0.05,
             "and the constants the reader set"
+        );
+    }
+
+    /// The picker offers exactly the five documented presets, and reads a canvas
+    /// back to the preset that names it.
+    #[test]
+    fn the_resolution_presets_are_the_documented_sizes() {
+        assert_eq!(
+            MapResolution::ALL.map(MapResolution::size),
+            [
+                (2_048, 1_024),
+                (4_096, 2_048),
+                (8_192, 4_096),
+                (12_288, 6_144),
+                (16_384, 8_192),
+            ]
+        );
+        assert_eq!(MapResolution::DEFAULT.size(), (8_192, 4_096));
+        assert_eq!(
+            MapResolution::from_canvas(8_192, 4_096),
+            MapResolution::K8
+        );
+        assert_eq!(
+            MapResolution::from_canvas(3_000, 1_500),
+            MapResolution::Custom(3_000, 1_500)
+        );
+    }
+
+    /// Before act one the selector's choice becomes the pipeline's canvas at once.
+    #[test]
+    fn a_resolution_can_be_chosen_before_the_first_act() {
+        let mut viewer = MapViewer::new(Genesis::new_sized(42, 8_192, 4_096));
+        viewer.resolution = MapResolution::K2;
+        assert!(viewer.apply_chosen_resolution());
+        assert_eq!(viewer.genesis.canvas(), (2_048, 1_024));
+    }
+
+    /// Once a world exists, a new resolution waits for the reset it asks for.
+    #[test]
+    fn a_resolution_chosen_after_a_world_starts_waits_for_a_reset() {
+        let mut viewer = MapViewer::new(Genesis::for_test(42, Stage::Geology));
+        viewer.resolution = MapResolution::K2;
+
+        assert!(!viewer.apply_chosen_resolution());
+        assert_eq!(
+            viewer.genesis.canvas(),
+            (4, 2),
+            "the grown world keeps its own plate"
+        );
+
+        viewer.reset_world();
+        assert_eq!(viewer.genesis.canvas(), (2_048, 1_024));
+        assert!(viewer.world.is_none());
+    }
+
+    /// The resolution row is part of the panel before a world exists, and names
+    /// the canvas the atlas will grow.
+    #[test]
+    fn the_panel_paints_the_resolution_row() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+        let mut viewer = MapViewer::new(Genesis::new_sized(42, 8_192, 4_096));
+        let painted = draw_frames(&ctx, &mut viewer);
+        let text: Vec<&str> = painted.iter().map(|(drawn, _)| drawn.as_str()).collect();
+        assert!(
+            text.iter().any(|drawn| drawn.contains("Map resolution")),
+            "the selector is part of the panel"
+        );
+        assert!(
+            text.iter().any(|drawn| drawn.contains("8K · 8192 × 4096")),
+            "the startup preset is named"
         );
     }
 

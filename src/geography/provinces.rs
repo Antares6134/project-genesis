@@ -1,4 +1,5 @@
 use crate::core::progress::Progress;
+use crate::core::sphere::CanvasScale;
 use crate::core::Grid;
 use crate::export::live;
 use crate::geography::config::GeographyConfig;
@@ -137,7 +138,10 @@ pub fn generate_provinces(
     // ── Wasteland tuning (distances are in map pixels) ────────────────────────
     const COAST_RING: f32 = 20.0;      // guaranteed-populated coastal belt
     const ICE_LOCK_TEMP: f32 = -14.0;  // frozen coasts may still be wilderness
-    const MIN_WASTE_BLOB: usize = 64;  // discard sub-visible speckle
+    // Discard sub-visible speckle. The tuned threshold is sixty-four pixels on
+    // the 16K reference plate; it is an area, so a 2K plate needs one pixel to
+    // mean the same patch of ground.
+    let min_waste_blob = CanvasScale::new(w, h).pixels(64);
     // The hostility threshold and the share of land it may claim are the panel's
     // (`GeographyConfig`), so a reader can settle a planet or freeze it out.
     let waste_cutoff = config.waste_cutoff;
@@ -346,7 +350,7 @@ pub fn generate_provinces(
     }
 
     // Discard sub-visible speckle so patches read as wilderness, not noise.
-    remove_small_wasteland_blobs(&mut is_wasteland, &is_ice_cap, w, h, MIN_WASTE_BLOB);
+    remove_small_wasteland_blobs(&mut is_wasteland, &is_ice_cap, w, h, min_waste_blob);
     // Solidify the surviving cores (still sparing sanctuaries and ice caps).
     dilate_non_ice_wasteland(&mut is_wasteland, &is_ice_cap, &is_sanctuary, heightmap, is_lake, sea_level, 1);
 
@@ -958,12 +962,12 @@ fn carve_habitable_corridors(
     // Fill tiny *enclosed* pockets (oases smaller than a single province) back
     // into wilderness. Real small islands and river/coastal sanctuaries are
     // kept — they must stay populated.
-    const MIN_OASIS: usize = 80;
+    let min_oasis = CanvasScale::new(w, h).pixels(80);
     for y in 0..h {
         for x in 0..w {
             let id = *hab_comp.get(x as isize, y as isize) as usize;
             if id > 0
-                && comp_size[id] < MIN_OASIS
+                && comp_size[id] < min_oasis
                 && !comp_touches_sea[id]
                 && !comp_touches_sanctuary[id]
             {

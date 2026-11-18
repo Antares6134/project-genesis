@@ -1,7 +1,7 @@
 //! Live previews: the atlas, painted while the world is still being made.
 //!
-//! A finished 8K plate is 8192 × 4096 RGBA — 134 MB — and the full painter takes
-//! most of a second. Neither can be produced once a frame, so the atlas cannot be
+//! A finished 16K plate is 16384 × 8192 RGBA — 537 MB — and the full painter takes
+//! several seconds. Neither can be produced once a frame, so the atlas cannot be
 //! shown the real thing while a stage runs. What it *can* be shown is this: a
 //! strided sample of the grid the stage is working on, painted at
 //! [`PREVIEW_WIDTH`] and handed over as a few hundred kilobytes.

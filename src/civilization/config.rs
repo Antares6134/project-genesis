@@ -2,7 +2,7 @@
 /// rise and how far they spread.
 ///
 /// Every distance here is in **map pixels** (so a rule reads the same on a 2K
-/// test world as on the 8K production plate) and every `*_frac` value is a
+/// test world as on the 16K production plate) and every `*_frac` value is a
 /// fraction of the map *width*: on an equirectangular canvas the width spans the
 /// whole equator, so it is the only honest ruler for "how far apart are two
 /// cradles on this planet". The centimetre-precise figures a reader sees —

@@ -2,7 +2,7 @@
 //!
 //! [`crate::core::relief`] gives every stage the same metres; this module gives
 //! it the same kilometres. That matters because the engine's canvas is an
-//! equirectangular 8K plate, which is famously **not** uniform in area: a pixel
+//! equirectangular 16K plate, which is famously **not** uniform in area: a pixel
 //! on the 60th parallel covers half the ground of one on the equator. Anything
 //! that reports an area, a population or a population *density* therefore has to
 //! integrate over latitude instead of counting pixels, exactly as the relief
@@ -12,10 +12,84 @@
 //! seamless 3D noise: a sphere of radius [`PLANET_RADIUS_KM`], sampled by an
 //! equirectangular canvas of arbitrary resolution. Every function here is
 //! resolution-agnostic, so a 2K test world measures the same continents as the
-//! 8K production plate.
+//! 16K production plate.
 
 /// Radius of the generated planet in kilometres.
 pub const PLANET_RADIUS_KM: f32 = 6371.0;
+
+/// The canvas every tuned constant in the engine is quoted at: the 16K plate.
+///
+/// A reader may grow a world at 2K, 4K, 8K, 12K or 16K, but the engine's own
+/// distances and pixel budgets were calibrated here. [`CanvasScale`] is what
+/// carries those constants from this reference to the canvas actually chosen.
+pub const REFERENCE_CANVAS_WIDTH: usize = 16_384;
+pub const REFERENCE_CANVAS_HEIGHT: usize = 8_192;
+
+/// A world's canvas, expressed as a scale relative to the engine's tuned 16K
+/// reference plate.
+///
+/// Two factors matter when a rule is moved to a smaller plate:
+///
+/// * a **linear** distance (a strait's width, a droplet's path) shrinks with
+///   `width / 16384`;
+/// * an **area** budget (a pixel count, a lake's cells, a province's share of
+///   the canvas) shrinks with `(width * height) / (16384 * 8192)`.
+///
+/// Both are exactly `1.0` on the reference canvas, so a 16K world is untouched
+/// by this arithmetic — which is what keeps every existing headless plate and
+/// test bit-for-bit what it was.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CanvasScale {
+    width: usize,
+    height: usize,
+}
+
+impl CanvasScale {
+    /// The tuned reference canvas itself: every factor is `1.0`.
+    #[cfg(test)]
+    pub const fn reference() -> Self {
+        Self {
+            width: REFERENCE_CANVAS_WIDTH,
+            height: REFERENCE_CANVAS_HEIGHT,
+        }
+    }
+
+    pub const fn new(width: usize, height: usize) -> Self {
+        Self { width, height }
+    }
+
+    /// The linear factor: `width / 16384`.
+    pub fn linear(self) -> f32 {
+        self.width as f32 / REFERENCE_CANVAS_WIDTH as f32
+    }
+
+    /// The area factor: `(width * height) / (16384 * 8192)`.
+    pub fn area(self) -> f32 {
+        let canvas = (self.width as f64) * (self.height as f64);
+        let reference = (REFERENCE_CANVAS_WIDTH as f64) * (REFERENCE_CANVAS_HEIGHT as f64);
+        (canvas / reference) as f32
+    }
+
+    /// Scale a distance in pixels, never below one pixel.
+    pub fn len(self, pixels: usize) -> usize {
+        ((pixels as f32 * self.linear()).round() as usize).max(1)
+    }
+
+    /// Scale a count, never below one.
+    pub fn count(self, count: usize) -> usize {
+        ((count as f32 * self.area()).round() as usize).max(1)
+    }
+
+    /// Scale a count, but keep a documented floor for a tier that must survive.
+    pub fn count_at_least(self, count: usize, floor: usize) -> usize {
+        self.count(count).max(floor.max(1))
+    }
+
+    /// Scale an area given in pixels, never below one pixel.
+    pub fn pixels(self, pixels: usize) -> usize {
+        ((pixels as f32 * self.area()).round() as usize).max(1)
+    }
+}
 
 /// Latitude in radians of canvas row `y` on a canvas `height` rows tall.
 ///

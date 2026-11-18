@@ -24,12 +24,13 @@ const CACHE_MAGIC_ACTS: &[u8; 4] = b"PGZ2";
 const CACHE_ZSTD_LEVEL: i32 = 3;
 
 /// Worker threads zstd compresses a cache on. The payloads are gigabyte-scale —
-/// a full world at act six is roughly a gigabyte — and compressing it on one
-/// thread leaves every other core idle while a save runs. Eight is deliberately
-/// modest: it fills the cores of ordinary machines without starving the viewer,
-/// and zstd simply queues work when fewer cores exist. This needs the crate's
-/// `zstdmt` feature, which `Cargo.toml` turns on; without it the call below
-/// would not compile, so a build that succeeds can always compress in parallel.
+/// a full world at act six is roughly four gigabytes at 16K — and compressing
+/// it on one thread leaves every other core idle while a save runs. Eight is
+/// deliberately modest: it fills the cores of ordinary machines without
+/// starving the viewer, and zstd simply queues work when fewer cores exist.
+/// This needs the crate's `zstdmt` feature, which `Cargo.toml` turns on;
+/// without it the call below would not compile, so a build that succeeds can
+/// always compress in parallel.
 const CACHE_ZSTD_WORKERS: u32 = 8;
 
 /// Bytes buffered in front of the codec on both sides of a cache write or read.
@@ -187,7 +188,8 @@ fn acts_held(
 /// truth. A save also stamps that number into its header so the atlas can describe
 /// a cache without decoding it; the stamp is a hint for the list only, and a load
 /// still derives the act from the fields. Saves overwrite one another, so a single
-/// file (`world_<seed>.bin`) always holds the deepest checkpoint a seed has.
+/// file (`world_<seed>_<width>x<height>.bin`) always holds the deepest checkpoint
+/// that seed has on that canvas.
 ///
 /// Polar ice is not stored: it is a deterministic function of the heightmap, the
 /// lakes and the seed, resolved again on load so that a loaded world and a grown

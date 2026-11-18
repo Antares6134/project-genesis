@@ -1,3 +1,5 @@
+use crate::core::sphere::CanvasScale;
+
 /// Seconds in a Julian year.
 ///
 /// The bridge between the climate's *annual* water budget and the hydrology's
@@ -59,6 +61,20 @@ pub struct HydrologyConfig {
     /// Precipitation at or above which runoff runs at full strength; between the
     /// two the ground is semi-arid and yields proportionally less.
     pub runoff_wet_precip: f32,
+}
+
+impl HydrologyConfig {
+    /// The engine's tuned water, moved to a runtime canvas.
+    ///
+    /// `min_lake_cells` is an *area* threshold: twelve pixels at 16K is about
+    /// 71 km², and the same ground is one pixel at 2K. Rivers are left alone:
+    /// discharge is in m³/s and is already integrated through the planetary
+    /// geometry, so `min_river_flow` means the same physical river everywhere.
+    pub fn for_canvas(width: usize, height: usize) -> Self {
+        let mut config = Self::default();
+        config.min_lake_cells = CanvasScale::new(width, height).pixels(config.min_lake_cells);
+        config
+    }
 }
 
 impl Default for HydrologyConfig {

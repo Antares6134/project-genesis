@@ -406,12 +406,61 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Nenhum mundo guardado para a semente {}.",
             "{} tohumu için kayıtlı dünya yok.",
         ],
-        "seed {} · {} · saved {}" => [
-            "semilla {} · {} · guardado {}",
-            "graine {} · {} · enregistré {}",
-            "Startwert {} · {} · gespeichert {}",
-            "semente {} · {} · guardado {}",
-            "tohum {} · {} · kayıtlı {}",
+        "seed {} · {} × {} · {} · saved {}" => [
+            "semilla {} · {} × {} · {} · guardado {}",
+            "graine {} · {} × {} · {} · enregistré {}",
+            "Startwert {} · {} × {} · {} · gespeichert {}",
+            "semente {} · {} × {} · {} · guardado {}",
+            "tohum {} · {} × {} · {} · kayıtlı {}",
+        ],
+        "Map resolution" => [
+            "Resolución del mapa",
+            "Résolution de la carte",
+            "Kartenauflösung",
+            "Resolução do mapa",
+            "Harita çözünürlüğü",
+        ],
+        "Changing the resolution resets this world — press ↺ Reset world to apply." => [
+            "Cambiar la resolución reinicia este mundo: pulsa ↺ Reiniciar mundo para aplicarla.",
+            "Changer la résolution réinitialise ce monde — appuyez sur ↺ Réinitialiser le monde.",
+            "Eine andere Auflösung setzt diese Welt zurück — drücken Sie ↺ Welt zurücksetzen.",
+            "Mudar a resolução reinicia este mundo — prima ↺ Reiniciar mundo para aplicar.",
+            "Çözünürlüğü değiştirmek bu dünyayı sıfırlar — uygulamak için ↺ Dünyayı sıfırla.",
+        ],
+        "↺ Reset to apply" => [
+            "↺ Reiniciar para aplicar",
+            "↺ Réinitialiser pour appliquer",
+            "↺ Zum Anwenden zurücksetzen",
+            "↺ Reiniciar para aplicar",
+            "↺ Uygulamak için sıfırla",
+        ],
+        "Canvas {} × {} · resolution is fixed once act 1 runs." => [
+            "Lienzo {} × {} · la resolución se fija al ejecutar el acto 1.",
+            "Canevas {} × {} — la résolution est fixée dès l'acte 1.",
+            "Leinwand {} × {} — die Auflösung steht ab Akt 1 fest.",
+            "Tela {} × {} — a resolução fixa-se quando o ato 1 corre.",
+            "Tuval {} × {} — çözünürlük 1. perdeyle sabitlenir.",
+        ],
+        "Province, erosion and lake budgets scale with the canvas; advanced values are quoted at 16K." => [
+            "Los presupuestos de provincias, erosión y lagos se ajustan al lienzo; los valores avanzados se citan a 16K.",
+            "Les budgets de provinces, d'érosion et de lacs suivent le canevas ; les valeurs avancées sont citées à 16K.",
+            "Provinz-, Erosions- und Seebudgets skalieren mit der Leinwand; die Werte unter „Erweitert“ gelten für 16K.",
+            "Os orçamentos de províncias, erosão e lagos acompanham a tela; os valores avançados são indicados a 16K.",
+            "İl, erozyon ve göl bütçeleri tuvale göre ölçeklenir; gelişmiş değerler 16K için verilmiştir.",
+        ],
+        "🌱 Canvas {} × {} — press “{}” to grow it." => [
+            "🌱 Lienzo {} × {}: pulsa “{}” para generarlo.",
+            "🌱 Canevas {} × {} — appuyez sur « {} » pour le générer.",
+            "🌱 Leinwand {} × {} — „{}“ drücken, um sie zu erzeugen.",
+            "🌱 Tela {} × {} — prima “{}” para o gerar.",
+            "🌱 Tuval {} × {} — oluşturmak için “{}” düğmesine basın.",
+        ],
+        "↺ Seed {} cleared on a {} × {} canvas — press “{}” to grow it again." => [
+            "↺ Semilla {} borrada en un lienzo {} × {}: pulsa “{}” para generarla de nuevo.",
+            "↺ Graine {} effacée sur un canevas {} × {} — appuyez sur « {} » pour la régénérer.",
+            "↺ Startwert {} auf einer Leinwand {} × {} geleert — „{}“ drücken, um sie neu zu erzeugen.",
+            "↺ Semente {} apagada numa tela {} × {} — prima “{}” para a gerar de novo.",
+            "↺ {} tohumu {} × {} tuvalinde temizlendi — yeniden oluşturmak için “{}” düğmesine basın.",
         ],
         "Wait for the act in flight to finish" => [
             "Espera a que termine el acto en curso",
@@ -457,12 +506,12 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Ler o mundo guardado desta semente",
             "Bu tohumun kayıtlı dünyasını oku",
         ],
-        "Write every act grown so far, up to act 6, to saved_seeds/world_<seed>.bin" => [
-            "Escribe cada acto ya generado, hasta el acto 6, en saved_seeds/world_<seed>.bin",
-            "Écrit chaque acte déjà généré, jusqu'à l'acte 6, dans saved_seeds/world_<seed>.bin",
-            "Schreibt jeden bisher gewachsenen Akt bis Akt 6 nach saved_seeds/world_<seed>.bin",
-            "Escreve cada ato já gerado, até ao ato 6, em saved_seeds/world_<seed>.bin",
-            "Şimdiye kadar oluşan her perdeyi, 6. perdeye kadar saved_seeds/world_<seed>.bin dosyasına yazar",
+        "Write every act grown so far, up to act 6, to saved_seeds/world_<seed>_<width>x<height>.bin" => [
+            "Escribe cada acto ya generado, hasta el acto 6, en saved_seeds/world_<seed>_<width>x<height>.bin",
+            "Écrit chaque acte déjà généré, jusqu'à l'acte 6, dans saved_seeds/world_<seed>_<width>x<height>.bin",
+            "Schreibt jeden bisher gewachsenen Akt bis Akt 6 nach saved_seeds/world_<seed>_<width>x<height>.bin",
+            "Escreve cada ato já gerado, até ao ato 6, em saved_seeds/world_<seed>_<width>x<height>.bin",
+            "Şimdiye kadar oluşan her perdeyi, 6. perdeye kadar saved_seeds/world_<seed>_<width>x<height>.bin dosyasına yazar",
         ],
         "A seed is a whole number — Load needs one." => [
             "Una semilla es un número entero: Cargar necesita una.",
@@ -499,19 +548,19 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Ler saved_seeds novamente",
             "saved_seeds klasörünü yeniden oku",
         ],
-        "{}   {} · {}  · {}" => [
-            "{}   {} · {}  · {}",
-            "{}   {} · {}  · {}",
-            "{}   {} · {}  · {}",
-            "{}   {} · {}  · {}",
-            "{}   {} · {}  · {}",
+        "{} · {}   {} · {}  · {}" => [
+            "{} · {}   {} · {}  · {}",
+            "{} · {}   {} · {}  · {}",
+            "{} · {}   {} · {}  · {}",
+            "{} · {}   {} · {}  · {}",
+            "{} · {}   {} · {}  · {}",
         ],
-        "Load seed {} — {} · {} · {}\nPicks the panel up where the save left off." => [
-            "Cargar la semilla {} — {} · {} · {}\nRetoma el panel donde lo dejó el guardado.",
-            "Charger la graine {} — {} · {} · {}\nReprend le panneau là où l'enregistrement s'est arrêté.",
-            "Startwert {} laden — {} · {} · {}\nSetzt das Panel dort fort, wo das Speichern aufgehört hat.",
-            "Carregar a semente {} — {} · {} · {}\nRetoma o painel onde o guardado parou.",
-            "{} tohumunu yükle — {} · {} · {}\nPaneli kaydın bıraktığı yerden sürdürür.",
+        "Load seed {} on {} — {} · {} · {}\nPicks the panel up where the save left off." => [
+            "Cargar la semilla {} en {} — {} · {} · {}\nRetoma el panel donde lo dejó el guardado.",
+            "Charger la graine {} sur {} — {} · {} · {}\nReprend le panneau là où l'enregistrement s'est arrêté.",
+            "Startwert {} auf {} laden — {} · {} · {}\nSetzt das Panel dort fort, wo das Speichern aufgehört hat.",
+            "Carregar a semente {} em {} — {} · {} · {}\nRetoma o painel onde o guardado parou.",
+            "{} tohumunu {} üzerinde yükle — {} · {} · {}\nPaneli kaydın bıraktığı yerden sürdürür.",
         ],
         "acts 1–{}" => ["actos 1–{}", "actes 1–{}", "Akte 1–{}", "atos 1–{}", "perde 1–{}"],
         "a saved world" => [
@@ -2363,10 +2412,10 @@ mod tests {
         // German keeps the figures where its own grammar wants them.
         assert_eq!(
             Language::German.fill(
-                "seed {} · {} · saved {}",
-                &[&12, &"544 MB", &"3 d ago"],
+                "seed {} · {} × {} · {} · saved {}",
+                &[&12, &8_192, &4_096, &"544 MB", &"3 d ago"],
             ),
-            "Startwert 12 · 544 MB · gespeichert 3 d ago"
+            "Startwert 12 · 8192 × 4096 · 544 MB · gespeichert 3 d ago"
         );
 
         // Turkish moves the per-cent sign in front of the figure.

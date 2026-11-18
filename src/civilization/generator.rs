@@ -106,7 +106,7 @@ const DEVELOPMENT_INHERITANCE: f64 = 0.50;
 
 /// Everything the history stage ever needs to know about one province.
 ///
-/// The census is the only pass that touches the 8K grids: after it, every
+/// The census is the only pass that touches the 16K grids: after it, every
 /// decision is taken on provinces, and nothing has to be re-measured.
 #[derive(Clone, Copy, Default)]
 struct ProvinceStats {

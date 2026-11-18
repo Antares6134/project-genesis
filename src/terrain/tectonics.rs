@@ -107,7 +107,7 @@ pub fn simulate_tectonics(
     let h = config.height;
 
     // The continental field's own shape, as the panel describes it. Read once
-    // into locals: the inner loop is per pixel of an 8K canvas.
+    // into locals: the inner loop is per pixel of a 16K canvas.
     let sea_threshold = config.sea_threshold;
     let continent_freq = config.continental_freq;
     let continent_persistence = config.continental_persistence;

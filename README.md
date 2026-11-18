@@ -1,7 +1,7 @@
 # Project Genesis
 
-A procedural planet generator and interactive atlas viewer written in Rust. It grows an 8K
-(8192 × 4096) world from 3D spherical noise, simulates its atmosphere and hydrology,
+A procedural planet generator and interactive atlas viewer written in Rust. It grows a 16K
+(16384 × 8192) world from 3D spherical noise, simulates its atmosphere and hydrology,
 partitions **both the landmasses and the world ocean** into matching five-tier hierarchies,
 then gives that world a history: civilizations rise where the planet is genuinely best,
 spread until wilderness, mountains or an older neighbour stops them, and carry a cradle, a
@@ -14,7 +14,7 @@ reproduces the same planet.
 
 ## Highlights
 
-- **8K spherical worldgen** — tectonic plates, fractal detail and hydraulic + thermal erosion,
+- **16K spherical worldgen** — tectonic plates, fractal detail and hydraulic + thermal erosion,
   evaluated as 3D noise on a unit sphere so no seam appears at a pole or the antimeridian.
 - **Calibrated in metres** — a piecewise vertical datum, from −10 725 m trenches to +7 019 m
   peaks.
@@ -34,8 +34,9 @@ attached to the [GitHub releases](https://github.com/Antares6134/Project-Genesis
 
 ```bash
 cargo build --release                                          # build
-cargo run --release -- --viewer                                # open the atlas and grow a world in it
-cargo run --release -- 3286592765982 --save                    # generate a world headlessly + cache
+cargo run --release -- --viewer                                # open the atlas on its 8K preset
+cargo run --release -- 3286592765982 --save                    # generate a 16K world headlessly + cache
+cargo run --release -- 3286592765982 --save --width 2048 --height 1024  # a fast 2K draft
 cargo run --release -- 3286592765982 --load --civs             # print the dossier + export it
 cargo run --release -- 3286592765982 --load --plates           # re-render every README plate
 ```
@@ -47,17 +48,22 @@ live low-resolution plate of the world appearing on the canvas as it is made.
 | Flag | Effect |
 | :--- | :--- |
 | `<seed>` | Any unsigned integer; the same seed always produces the same planet. |
-| `--save` | Write the world as it grows (acts 1–3, then 1–6) to `saved_seeds/world_<seed>.bin`, zstd-compressed on disk. |
-| `--load` | Adopt the saved world for the seed instead of regenerating (much faster): the acts the file carries are taken as done, and the act after them is offered next. |
-| `--viewer` | Launch the interactive desktop atlas. |
-| `--civs` | Run the history stage, print the dossier, export its 8K plate. |
+| `--save` | Write the world as it grows (acts 1–3, then 1–6) to `saved_seeds/world_<seed>_<width>x<height>.bin`, zstd-compressed on disk. |
+| `--load` | Adopt the saved world for the seed instead of regenerating (much faster): the acts the file carries are taken as done, and the act after them is offered next. The cache's own canvas is adopted. |
+| `--viewer` | Launch the interactive desktop atlas. The atlas starts on the **8K** preset. |
+| `--headless` | Run without a window — the default when `--viewer` is absent. Headless starts on the tuned 16K plate. |
+| `--width <px>` / `--height <px>` | Choose the canvas for either mode; the interactive viewer's presets are 2K–16K. |
+| `--civs` | Run the history stage, print the dossier, export its 16K plate. |
 | `--civs-all` | The same, with a full dossier for every society — hundreds of them. |
 | `--langs` | Run Act 8, print the language families and their lexicons, and export the Languages map. |
 | `--plates` | Export the 17 `./exports/atlas_*.png` scope and tier plates used below. |
 | `--lang <code>` | The atlas's interface language — `en`, `es`, `fr`, `de`, `pt` or `tr` (default: the last choice, else the desktop's locale). |
 
-The world cache is a single file, `saved_seeds/world_<seed>.bin`, holding whichever acts the world
-had grown when it was written — every save overwrites the last, so it always holds the deepest one.
+The world cache is one file per seed **per canvas**, `saved_seeds/world_<seed>_<width>x<height>.bin`,
+holding whichever acts the world had grown when it was written — every save overwrites the last save
+for that seed and canvas, so the file always holds the deepest checkpoint. An 8K and a 16K run of the
+same seed are different worlds and never overwrite each other. A cache from before the canvas joined
+the name, `saved_seeds/world_<seed>.bin`, is still listed and loadable as the reference 16K plate.
 It is written as a zstd frame — a `PGZ2` magic, one byte naming the deepest act held, then the same
 bincode payload an uncompressed cache holds — so a save is a good deal smaller than its raw bytes.
 The one-byte header lets the atlas say how far a save was grown without decoding it, and is a hint
@@ -84,7 +90,8 @@ lines of plain figures under the canvas:
 | Step | What it does |
 | :--- | :--- |
 | **Seed** | Type a whole number, or press 🎲 to draw one. A seed is read by each act as it runs, so changing it between acts keeps the acts already grown and re-points only the acts still to come; before act 1 it simply starts a fresh world. |
-| **World data** | 📂 **Load** and 💾 **Save** are the two commands for the seed above. **Save** writes the world as it stands to `saved_seeds/world_<seed>.bin`, from act 1 up to act 6 — the land, the climate, the water and as far up the hierarchies as the world has climbed; acts 7 and 8 are never written. Every save overwrites the last, so the file always holds the deepest checkpoint. **Load** adopts it in one press and picks the panel up at the act after the one it holds. 💾 **Save automatically when act 3 and act 6 land** is the setting behind them: while it is ticked, act 3 writes the cache and act 6 writes it again, overwriting the earlier save. The expandable **📂 Saved worlds** list under it shows every cache on disk, newest first, with its age and size, and each row names the acts that save holds — `acts 1–6` — read from the file's one-byte header (a save from an older build, which has no header, says only that a world is there); click a world to load it. A seed with no cache says so plainly, in one line. |
+| **Map resolution** | The canvas the next world grows on: **2K · 2048 × 1024**, **4K · 4096 × 2048**, **8K · 8192 × 4096** (the startup default), **12K · 12288 × 6144**, or **16K · 16384 × 8192**. Before act 1 the choice applies at once. Once a world exists its canvas is part of its identity: choosing another preset shows a reset prompt, and **↺ Reset world** applies it. Province counts, erosion droplets, strait widths and lake thresholds scale with the canvas; the values in Advanced configuration are quoted at the 16K reference. |
+| **World data** | 📂 **Load** and 💾 **Save** are the two commands for the seed above. **Save** writes the world as it stands to `saved_seeds/world_<seed>_<width>x<height>.bin`, from act 1 up to act 6 — the land, the climate, the water and as far up the hierarchies as the world has climbed; acts 7 and 8 are never written. Every save overwrites the last, so the file always holds the deepest checkpoint. **Load** adopts it in one press and picks the panel up at the act after the one it holds. 💾 **Save automatically when act 3 and act 6 land** is the setting behind them: while it is ticked, act 3 writes the cache and act 6 writes it again, overwriting the earlier save. The expandable **📂 Saved worlds** list under it shows every cache on disk, newest first, with its age and size, and each row names the acts that save holds — `acts 1–6` — read from the file's one-byte header (a save from an older build, which has no header, says only that a world is there); click a world to load it. A seed with no cache says so plainly, in one line. |
 | **The eight acts** | A fold-out of its own, counting how many are grown. Only the next act is pressable; the ones behind it are ✔ and the ones ahead are greyed out. Every ✔ act also carries a small **↺** button that un-does that act and everything after it, so the whole tail may be grown again — optionally from a new seed or new constants. |
 | **▶▶ Run all remaining** | Grows the rest of the world without stopping (⏹ stops it after the act in flight). |
 | **↺ Reset world** | Throws the world away and starts over on the same seed — with the constants you chose. |
@@ -114,7 +121,7 @@ physical atlas and both climate scopes from act 2, the political map from act 4,
 the dawn from acts 6 and 7. While an act runs, the canvas shows a **live plate** — a
 low-resolution picture painted from the very grid the act is working on, a few frames a second:
 continents assembling, valleys carving, lakes filling, rivers reaching the sea, provinces
-spreading outward, realms claiming their hinterlands. When the act lands, its full 8K plate
+spreading outward, realms claiming their hinterlands. When the act lands, its full 16K plate
 replaces it in place.
 
 Nothing else changed: a world grown from one seed throughout still grows exactly the same planet
@@ -300,7 +307,7 @@ Everything is drawn from the seed through a `ChaCha8Rng` with fixed per-stage sa
 collection the RNG walks is sorted, so a seed always yields the same planet, civilizations,
 dates and populations.
 
-There is one cache, `world_<seed>.bin`, holding every act the world has grown up to act 6 — the
+There is one cache per seed and canvas, `world_<seed>_<width>x<height>.bin`, holding every act the world has grown up to act 6 — the
 heightmap, temperature, precipitation, flow and lakes, then the land provinces, the ocean provinces
 and both hierarchies as far as the world has climbed. It is written automatically the moment act 3
 lands and again the moment act 6 lands, each overwriting the last, and it can be written by hand at
@@ -310,7 +317,7 @@ save made at act 3 resumes at act 4, one made at act 6 at act 7. Languages are c
 regenerate every time, so they have no cache.
 
 Each save also carries a one-byte header naming the deepest act it holds, so the atlas's **📂 Saved
-worlds** list can say `acts 1–6` for a cache without decoding a gigabyte to find out; a save from an
+worlds** list can say `acts 1–6` for a cache without decoding several gigabytes to find out; a save from an
 older build has no such header and is still listed, but without the acts.
 
 ## Project layout
@@ -345,5 +352,5 @@ the [SIL OFL 1.1](assets/fonts/LICENSE-AdwaitaMono.txt).
 
 ---
 
-Every plate above is produced by `--plates` from seed `3286592765982`; the 8K `world_*.png`
+Every plate above is produced by `--plates` from seed `3286592765982`; the 16K `world_*.png`
 maps are exported by every headless run.

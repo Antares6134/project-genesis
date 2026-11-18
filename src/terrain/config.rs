@@ -1,3 +1,5 @@
+use crate::core::sphere::CanvasScale;
+
 #[derive(Clone, Debug)]
 pub struct WorldConfig {
     pub width: usize,
@@ -71,14 +73,15 @@ pub struct WorldConfig {
     ///
     /// The pass runs at the end of act one. A below-datum body is measured
     /// against `sea_min_area_share × width × height`; the largest body of water
-    /// in the world is always the ocean and is never a candidate. At 8 192 ×
-    /// 4 096 the default `0.0004` is ≈ 13 400 pixels — roughly 200 000 km², a
+    /// in the world is always the ocean and is never a candidate. At 16 384 ×
+    /// 8 192 the default `0.0004` is ≈ 53 700 pixels — roughly 200 000 km², a
     /// Great Lakes or Black Sea rather than a pond.
     pub sea_min_area_share: f32,
     /// Most landlocked seas one world will open to the ocean.
     pub sea_max_straits: usize,
-    /// Width, in pixels, of a carved strait's swath. Rounded down to an odd
-    /// centre-plus-shoulders width (`5` cuts a channel five pixels across).
+    /// Width, in pixels, of a carved strait's swath. The carve uses `width / 2`
+    /// as its radius, so the default `8` cuts a nine-pixel channel (a centre
+    /// pixel with four shoulders either side).
     pub strait_width: usize,
     /// How far below the datum a strait's centre floor is cut, in heightmap
     /// units. The shoulders are cut to half this; every carved pixel is water.
@@ -87,13 +90,37 @@ pub struct WorldConfig {
     /// through. Higher ground is a wall: the body stays a lake. The default
     /// `0.02` is ≈ +300 m.
     pub strait_max_sill: f32,
-    /// Longest strait, in pixels, the carver will consider. The default `600`
-    /// is ≈ 2 900 km at the atlas's 8K scale.
+    /// Longest strait, in pixels, the carver will consider. The default `1 200`
+    /// is ≈ 2 900 km at the atlas's 16K scale.
     pub strait_max_span: usize,
     /// Cost of one heightmap unit of uplift in the least-cost route. Larger
     /// values make the strait walk further to find a lower pass; smaller values
     /// favour the shortest cut regardless of the ridge it crosses.
     pub strait_slope_cost: f32,
+}
+
+impl WorldConfig {
+    /// The engine's tuned terrain, moved to a runtime canvas.
+    ///
+    /// The strait and droplet-path values in [`WorldConfig::default`] are quoted
+    /// at the 16K reference plate. They are *distances*, so they scale with the
+    /// canvas's width: a nine-pixel strait at 16K is still the same channel in
+    /// kilometres at 2K, where one pixel is eight times wider. The area budgets
+    /// (sea share, erosion droplet count) are deliberately left alone here:
+    /// `sea_min_area_share` is already a share of the canvas, and the droplet
+    /// count is the reader's own setting, scaled by the pipeline.
+    pub fn for_canvas(width: usize, height: usize) -> Self {
+        let mut config = Self {
+            width,
+            height,
+            ..Self::default()
+        };
+        let scale = CanvasScale::new(width, height);
+        config.strait_width = scale.len(config.strait_width);
+        config.strait_max_span = scale.len(config.strait_max_span);
+        config.max_droplet_lifetime = scale.len(config.max_droplet_lifetime);
+        config
+    }
 }
 
 impl Default for WorldConfig {
@@ -135,15 +162,15 @@ impl Default for WorldConfig {
             talus_threshold: 0.025,
             thermal_rate: 0.15,
 
-            // Landlocked seas: ≈13 400 px at 8K (Great Lakes scale), a five-pixel
+            // Landlocked seas: ≈53 700 px at 16K (Great Lakes scale), a nine-pixel
             // channel cut 220 m below the datum through saddles no higher than
-            // +300 m, within 600 px, and at most three seas per world.
+            // +300 m, within 1 200 px, and at most three seas per world.
             sea_min_area_share: 0.0004,
             sea_max_straits: 3,
-            strait_width: 5,
+            strait_width: 8,
             strait_depth: 0.008,
             strait_max_sill: 0.02,
-            strait_max_span: 600,
+            strait_max_span: 1_200,
             strait_slope_cost: 2_000.0,
         }
     }

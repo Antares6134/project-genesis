@@ -44,6 +44,7 @@ use crate::climate::{
 use crate::core::fmt::{thousands, thousands_u64};
 use crate::core::polar::PolarConfig;
 use crate::core::progress::{MapRefs, Progress, Sink};
+use crate::core::sphere::{CanvasScale, REFERENCE_CANVAS_HEIGHT, REFERENCE_CANVAS_WIDTH};
 use crate::core::{Grid, WorldCache, WorldCacheView, cache_stage, polar, relief};
 use crate::geography::{
     GeographyConfig, OceanConfig, OceanResult, ProvinceResult, generate_ocean_provinces,
@@ -63,10 +64,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
-/// Canvas the engine grows: 8K. Fixed, because a world's resolution is part of
-/// its identity — a seed must always mean exactly one planet.
-pub const WORLD_WIDTH: usize = 8192;
-pub const WORLD_HEIGHT: usize = 4096;
+/// The engine's tuned reference canvas: 16K.
+///
+/// A world's resolution is part of its identity, exactly like its seed, so it
+/// travels with the pipeline and the cache rather than living in a global. These
+/// constants are the reference every tuned pixel constant is quoted at, the
+/// default for a headless run, and the canvas an existing `world_<seed>.bin`
+/// cache was written on. The interactive atlas starts on the 8K preset instead
+/// (see `main`); `Genesis::new_sized` is how either path chooses its own plate.
+pub const WORLD_WIDTH: usize = REFERENCE_CANVAS_WIDTH;
+pub const WORLD_HEIGHT: usize = REFERENCE_CANVAS_HEIGHT;
 
 /// Directory a world's cache is written to.
 pub const CACHE_DIR: &str = "./saved_seeds";
@@ -149,7 +156,11 @@ pub struct WorldGenSettings {
     pub min_river_flow: f32,
 
     // ── Geography & wastelands ───────────────────────────────────────────────
-    /// Land provinces across the planet.
+    /// Land provinces across the planet, quoted at the tuned 16K reference.
+    ///
+    /// [`Genesis::geography_config`] scales it by the chosen canvas's area, so
+    /// the province's pixel mass — and therefore the whole Act 4/5 hierarchy —
+    /// stays the size the engine was tuned at.
     pub num_provinces: usize,
     /// Marine provinces across the world ocean.
     pub ocean_num_provinces: usize,
@@ -192,9 +203,11 @@ impl Default for WorldGenSettings {
             mountain_lift: world.mountain_lift,
             fault_noise_freq: world.fault_noise_freq,
             fault_band: world.fault_band,
-            // The atlas grows an 8K canvas, and the budget below is *its*
-            // weathering: the crate's own `WorldConfig::default` is a small-world
-            // default (120 000 droplets) and is not what a planet is carved with.
+            // The budget below is the tuned 16K weathering: the crate's own
+            // `WorldConfig::default` is a small-world default (120 000 droplets)
+            // and is not what a planet is carved with. `Genesis::world_config`
+            // scales it by the chosen canvas's area, so a 2K world receives the
+            // same rain per square kilometre.
             erosion_droplets: 3_500_000,
             thermal_iterations: world.thermal_iterations,
             base_rainfall: climate.base_rainfall,
@@ -453,11 +466,21 @@ pub struct Genesis {
 impl Genesis {
     /// A world that has not been begun: a seed, and nothing else.
     pub fn new(seed: u64) -> Self {
+        Self::new_sized(seed, WORLD_WIDTH, WORLD_HEIGHT)
+    }
+
+    /// A world that has not been begun, on a canvas of the reader's choosing.
+    ///
+    /// The canvas is part of a world's identity — the same seed on an 8K plate
+    /// and on a 16K plate are two different worlds — so it is held by the
+    /// pipeline alongside the seed, written into the cache, and fixed from the
+    /// moment act one runs.
+    pub fn new_sized(seed: u64, width: usize, height: usize) -> Self {
         Self {
             seed,
             stage: None,
-            width: WORLD_WIDTH,
-            height: WORLD_HEIGHT,
+            width: width.max(1),
+            height: height.max(1),
             heightmap: None,
             temperature: None,
             frozen_temperature: None,
@@ -476,6 +499,30 @@ impl Genesis {
             autosave: false,
             settings: WorldGenSettings::default(),
         }
+    }
+
+    /// The canvas this world grows on, in pixels.
+    pub fn canvas(&self) -> (usize, usize) {
+        (self.width, self.height)
+    }
+
+    /// Set the canvas, before act one has fixed it.
+    ///
+    /// Returns `false` and changes nothing once the world has begun: a heightmap
+    /// already exists at the old size, and silently reinterpreting it on another
+    /// plate would be a lie. The panel therefore locks the choice behind a reset.
+    pub fn set_canvas(&mut self, width: usize, height: usize) -> bool {
+        if self.stage.is_some() || self.heightmap.is_some() {
+            return false;
+        }
+        self.width = width.max(1);
+        self.height = height.max(1);
+        true
+    }
+
+    /// The runtime canvas expressed as a scale against the tuned 16K reference.
+    pub fn canvas_scale(&self) -> CanvasScale {
+        CanvasScale::new(self.width, self.height)
     }
 
     /// The seed this world grows from.
@@ -543,11 +590,15 @@ impl Genesis {
     /// would otherwise overwrite with their named copy).
     pub fn rewind_to(&mut self, stage: Stage) {
         if stage.index() <= 1 {
-            // Back to before act one: nothing is left of the world but its seed
-            // and what the reader chose about saving it.
+            // Back to before act one: nothing is left of the world but the
+            // choices that outlive a world — its seed, its canvas, its save
+            // setting and the constants the reader tuned.
             let (seed, autosave) = (self.seed, self.autosave);
-            *self = Self::new(seed);
+            let (width, height) = (self.width, self.height);
+            let settings = self.settings.clone();
+            *self = Self::new_sized(seed, width, height);
             self.autosave = autosave;
+            self.settings = settings;
             return;
         }
 
@@ -612,25 +663,26 @@ impl Genesis {
     // derive from the one thing that identifies a world: its seed.
 
     pub fn world_config(&self) -> WorldConfig {
-        WorldConfig {
-            width: WORLD_WIDTH,
-            height: WORLD_HEIGHT,
-            seed: self.seed,
-            num_plates: 32,
-            ocean_ratio: 0.65,
-            // Everything the terrain pass actually reads comes from the panel:
-            // the water line, the continental field and the orogeny that folds it.
-            sea_threshold: self.settings.sea_threshold,
-            continental_freq: self.settings.continental_freq,
-            continental_persistence: self.settings.continental_persistence,
-            domain_warp_amp: self.settings.domain_warp_amp,
-            mountain_lift: self.settings.mountain_lift,
-            fault_noise_freq: self.settings.fault_noise_freq,
-            fault_band: self.settings.fault_band,
-            erosion_droplets: self.settings.erosion_droplets,
-            thermal_iterations: self.settings.thermal_iterations,
-            ..Default::default()
-        }
+        let scale = self.canvas_scale();
+        let mut config = WorldConfig::for_canvas(self.width, self.height);
+        config.seed = self.seed;
+        config.num_plates = 32;
+        config.ocean_ratio = 0.65;
+        // Everything the terrain pass actually reads comes from the panel:
+        // the water line, the continental field and the orogeny that folds it.
+        config.sea_threshold = self.settings.sea_threshold;
+        config.continental_freq = self.settings.continental_freq;
+        config.continental_persistence = self.settings.continental_persistence;
+        config.domain_warp_amp = self.settings.domain_warp_amp;
+        config.mountain_lift = self.settings.mountain_lift;
+        config.fault_noise_freq = self.settings.fault_noise_freq;
+        config.fault_band = self.settings.fault_band;
+        // Droplets are a density, not a head count: the tuned budget is 3.5M on
+        // the 16K plate, and a quarter of that on 8K carves the same rain per
+        // square kilometre.
+        config.erosion_droplets = scale.count(self.settings.erosion_droplets);
+        config.thermal_iterations = self.settings.thermal_iterations;
+        config
     }
 
     pub fn climate_config(&self) -> ClimateConfig {
@@ -654,31 +706,29 @@ impl Genesis {
     }
 
     pub fn hydro_config(&self) -> HydrologyConfig {
-        HydrologyConfig {
-            min_lake_depth: 0.012,
-            // Only the rivers an atlas would ink: the major ones and their larger
-            // branches, not the capillary web.
-            min_river_flow: self.settings.min_river_flow,
-            // The Nile — a continental trunk drawn at full width.
-            major_river_flow: 3_000.0,
-            runoff_coefficient: self.settings.runoff_coefficient,
-            ..Default::default()
-        }
+        let mut config = HydrologyConfig::for_canvas(self.width, self.height);
+        config.min_lake_depth = 0.012;
+        // Only the rivers an atlas would ink: the major ones and their larger
+        // branches, not the capillary web.
+        config.min_river_flow = self.settings.min_river_flow;
+        // The Nile — a continental trunk drawn at full width.
+        config.major_river_flow = 3_000.0;
+        config.runoff_coefficient = self.settings.runoff_coefficient;
+        config
     }
 
     pub fn geography_config(&self) -> GeographyConfig {
-        GeographyConfig {
-            num_provinces: self.settings.num_provinces,
-            max_waste_share: self.settings.max_waste_share,
-            waste_cutoff: self.settings.waste_cutoff,
-        }
+        let mut config = GeographyConfig::for_canvas(self.width, self.height);
+        config.num_provinces = self.canvas_scale().count(self.settings.num_provinces);
+        config.max_waste_share = self.settings.max_waste_share;
+        config.waste_cutoff = self.settings.waste_cutoff;
+        config
     }
 
     pub fn ocean_config(&self) -> OceanConfig {
-        OceanConfig {
-            num_provinces: self.settings.ocean_num_provinces,
-            ..Default::default()
-        }
+        let mut config = OceanConfig::for_canvas(self.width, self.height);
+        config.num_provinces = self.canvas_scale().count(self.settings.ocean_num_provinces);
+        config
     }
 
     pub fn geopolitics_config(&self) -> GeopoliticsConfig {
@@ -702,13 +752,13 @@ impl Genesis {
 
     // ─── THE WORLD CACHE ─────────────────────────────────────────────────────
 
-    /// Where this world's cache lives.
+    /// Where this world's cache lives: `world_<seed>_<width>x<height>.bin`.
     pub fn cache_path(&self) -> PathBuf {
-        cache_path(self.seed)
+        cache_path(self.seed, self.width, self.height)
     }
 
-    /// Write the acts grown so far to disk, as `world_<seed>.bin`, overwriting any
-    /// earlier save for this seed.
+    /// Write the acts grown so far to disk, overwriting any earlier save for
+    /// this seed **on this canvas**.
     ///
     /// The save holds acts one through whichever act the world has reached, capped
     /// at act six: the bare land, the climate, the water, and as far up the two
@@ -745,17 +795,35 @@ impl Genesis {
         Ok(path)
     }
 
-    /// Adopt the acts already saved for this seed, from `world_<seed>.bin`.
+    /// Adopt the acts already saved for this seed.
+    ///
+    /// The current canvas is preferred, so an 8K pipeline loads the 8K cache.
+    /// If this seed has no cache on that canvas — an older save from before
+    /// resolution was part of the filename, for example — the newest cache for
+    /// the seed is adopted instead and its own dimensions become the world's.
     ///
     /// The save carries acts one through whichever act the world had reached when
     /// it was written, so the pipeline picks up at the act after that one — act
     /// four for a save made at act three, act seven for one made at act six. On
     /// success it holds exactly that much of the world, and no more.
     pub fn load_cache(&mut self) -> Result<(), LoadError> {
-        let path = self.cache_path();
-        if !Path::new(&path).exists() {
-            return Err(LoadError::Missing(path));
+        let exact = self.cache_path();
+        if Path::new(&exact).exists() {
+            return self.load_cached_path(exact);
         }
+        match cached_world(self.seed) {
+            Some(found) => self.load_cached_world(&found),
+            None => Err(LoadError::Missing(exact)),
+        }
+    }
+
+    /// Adopt the acts already saved in one cache found on disk.
+    pub fn load_cached_world(&mut self, found: &CachedWorld) -> Result<(), LoadError> {
+        self.load_cached_path(found.path.clone())
+    }
+
+    /// Read one cache file and adopt every act it carries.
+    fn load_cached_path(&mut self, path: PathBuf) -> Result<(), LoadError> {
         let start = Instant::now();
         println!("Loading world from cache '{}'…", path.display());
         let cache = WorldCache::try_load(&path.to_string_lossy())
@@ -796,9 +864,9 @@ impl Genesis {
     }
 }
 
-/// Where a world's cache lives.
-pub fn cache_path(seed: u64) -> PathBuf {
-    PathBuf::from(format!("{CACHE_DIR}/world_{seed}.bin"))
+/// Where a world's cache lives: one file per seed **per canvas**.
+pub fn cache_path(seed: u64, width: usize, height: usize) -> PathBuf {
+    PathBuf::from(format!("{CACHE_DIR}/world_{seed}_{width}x{height}.bin"))
 }
 
 /// One world cache found on disk, as the atlas lists it.
@@ -806,13 +874,22 @@ pub fn cache_path(seed: u64) -> PathBuf {
 /// This is metadata only: the atlas reads a cache's *header* — never its payload —
 /// to describe it. The file itself is loaded only when the reader asks to load it.
 ///
-/// A seed carries a single cache: `world_<seed>.bin`, holding every act it has
-/// grown. The `bytes` and `modified` describe that one file, which is what a Load
-/// would adopt.
+/// A cache is identified by its seed **and its canvas**. An 8K and a 16K world
+/// of the same seed are two different planets, and two different files:
+/// `world_<seed>_<width>x<height>.bin`. A save from an older build, spelled
+/// `world_<seed>.bin`, is recognised as the reference 16K plate.
 #[derive(Clone, Debug)]
 pub struct CachedWorld {
     /// The seed the cache is named after.
     pub seed: u64,
+    /// Canvas width the cache holds.
+    pub width: usize,
+    /// Canvas height the cache holds.
+    pub height: usize,
+    /// The file on disk, so a pick loads the very file the list described.
+    pub path: PathBuf,
+    /// True for a pre-resolution cache named `world_<seed>.bin`.
+    pub legacy: bool,
     /// Size of the cache, in bytes.
     pub bytes: u64,
     /// When the cache was last written, when the platform says.
@@ -824,29 +901,41 @@ pub struct CachedWorld {
     pub acts: Option<u8>,
 }
 
-/// The cache for one seed, if any checkpoint for it is on disk.
+/// The newest cache for one seed, on any canvas.
 ///
-/// A handful of metadata calls, so the panel may ask on every frame whether the
-/// seed it is showing can be loaded.
+/// This scans the cache directory, so the atlas uses its once-per-scan list
+/// instead of calling it per frame. It is for `--load`, tests and the headless
+/// path, where there is no panel to keep warm.
 pub fn cached_world(seed: u64) -> Option<CachedWorld> {
-    describe_cached_world(Path::new(CACHE_DIR), seed)
+    cached_worlds().into_iter().find(|world| world.seed == seed)
 }
 
-/// Describe one seed's cache as it sits in `dir`, or `None` if it is not there.
+/// Parse a cache filename into `(seed, width, height, legacy)`.
 ///
-/// Metadata only, so the per-frame [`cached_world`] costs nothing: the act the
-/// save holds is left `None` here and filled by [`cached_worlds_in`], which reads
-/// a cache's header once per scan rather than once per frame.
-fn describe_cached_world(dir: &Path, seed: u64) -> Option<CachedWorld> {
-    let file = std::fs::metadata(dir.join(format!("world_{seed}.bin")))
-        .ok()
-        .filter(std::fs::Metadata::is_file)?;
-    Some(CachedWorld {
-        seed,
-        bytes: file.len(),
-        modified: file.modified().ok(),
-        acts: None,
-    })
+/// Only canonical spellings are worlds the atlas can load. A stray file, a
+/// `.lang.bin` left over from an older build, or `world_0042.bin` names nothing,
+/// exactly as before. The one old spelling still accepted is `world_<seed>.bin`:
+/// every cache written before the canvas joined the name was a 16K plate.
+fn parse_cache_name(name: &str) -> Option<(u64, usize, usize, bool)> {
+    let rest = name.strip_prefix("world_")?.strip_suffix(".bin")?;
+    if let Some((seed_part, canvas)) = rest.split_once('_') {
+        let (width, height) = canvas.split_once('x')?;
+        let seed = seed_part.parse::<u64>().ok()?;
+        let width = width.parse::<usize>().ok()?;
+        let height = height.parse::<usize>().ok()?;
+        if width == 0 || height == 0 {
+            return None;
+        }
+        if name != format!("world_{seed}_{width}x{height}.bin") {
+            return None;
+        }
+        return Some((seed, width, height, false));
+    }
+    let seed = rest.parse::<u64>().ok()?;
+    if name != format!("world_{seed}.bin") {
+        return None;
+    }
+    Some((seed, WORLD_WIDTH, WORLD_HEIGHT, true))
 }
 
 /// Every world cache in the cache directory, newest first.
@@ -856,15 +945,16 @@ pub fn cached_worlds() -> Vec<CachedWorld> {
 
 /// Every world cache in `dir`, newest first.
 ///
-/// A world is named by one canonical spelling: `world_<seed>.bin`. A stray file, a
-/// `.lang.bin` left over from an older build, or a cache spelled `world_0042.bin`
-/// names nothing the atlas can load, so it is not listed. An unreadable directory
-/// is an empty list, never a panic.
+/// A seed may now have a cache on each canvas it was grown on; all of them are
+/// listed, because they are genuinely different worlds. A canonical file and a
+/// legacy `world_<seed>.bin` for the same seed and canvas are deduplicated in
+/// favour of the canonical one, so a resaved world does not appear twice. An
+/// unreadable directory is an empty list, never a panic.
 pub fn cached_worlds_in(dir: &Path) -> Vec<CachedWorld> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
-    let mut seeds: Vec<u64> = Vec::new();
+    let mut worlds: Vec<CachedWorld> = Vec::new();
     for entry in entries.flatten() {
         let Ok(file_type) = entry.file_type() else {
             continue;
@@ -875,34 +965,49 @@ pub fn cached_worlds_in(dir: &Path) -> Vec<CachedWorld> {
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
             continue;
         };
-        let Some(rest) = name.strip_prefix("world_") else {
+        let Some((seed, width, height, legacy)) = parse_cache_name(&name) else {
             continue;
         };
-        let Some(digits) = rest.strip_suffix(".bin") else {
+        let path = entry.path();
+        let Ok(file) = entry.metadata() else {
             continue;
         };
-        let Ok(seed) = digits.parse::<u64>() else {
-            continue;
+        // The act is in the header, so the list pays a handful of bytes per file
+        // rather than decoding a payload.
+        let acts = cache_stage(&path.to_string_lossy());
+        let world = CachedWorld {
+            seed,
+            width,
+            height,
+            path,
+            legacy,
+            bytes: file.len(),
+            modified: file.modified().ok(),
+            acts,
         };
-        if name != format!("world_{seed}.bin") {
-            continue;
-        }
-        if !seeds.contains(&seed) {
-            seeds.push(seed);
+        if let Some(existing) = worlds
+            .iter_mut()
+            .find(|other| (other.seed, other.width, other.height) == (seed, width, height))
+        {
+            // Prefer the canonical spelling, then the fresher file.
+            let fresher = match (world.modified, existing.modified) {
+                (Some(new), Some(old)) => new > old,
+                (Some(_), None) => true,
+                _ => false,
+            };
+            if (existing.legacy && !world.legacy) || (existing.legacy == world.legacy && fresher) {
+                *existing = world;
+            }
+        } else {
+            worlds.push(world);
         }
     }
-    let mut worlds: Vec<CachedWorld> = seeds
-        .into_iter()
-        .filter_map(|seed| describe_cached_world(dir, seed))
-        .collect();
-    // The act cannot be told from metadata alone, so each listed file's header is
-    // read here for it. This runs once per scan, not once per frame, so a list of
-    // many worlds costs a handful of bytes each — never a decoded payload.
-    for world in &mut worlds {
-        let path = dir.join(format!("world_{}.bin", world.seed));
-        world.acts = cache_stage(&path.to_string_lossy());
-    }
-    worlds.sort_by(|a, b| b.modified.cmp(&a.modified).then(b.seed.cmp(&a.seed)));
+    worlds.sort_by(|a, b| {
+        b.modified
+            .cmp(&a.modified)
+            .then(b.seed.cmp(&a.seed))
+            .then(b.width.cmp(&a.width))
+    });
     worlds
 }
 
@@ -1317,10 +1422,27 @@ impl Genesis {
             .iter()
             .filter(|&&w| w)
             .count();
-        let summary = vec![
+        let mut summary = vec![
             format!("{} provinces", thousands_u64(result.num_provinces as u64)),
             format!("{} wasteland pixels", thousands_u64(wasteland as u64)),
         ];
+        // The panel's province count is quoted at the 16K reference canvas. Say
+        // so when it was scaled, and say plainly when even the scaled target did
+        // not fit: the seeder stops at its eighteen-pixel minimum spacing rather
+        // than silently pretending it seeded provinces that have no room.
+        if geo_config.num_provinces != self.settings.num_provinces {
+            summary.push(format!(
+                "scaled from {} at the 16K reference",
+                thousands_u64(self.settings.num_provinces as u64)
+            ));
+        }
+        if result.num_provinces < geo_config.num_provinces {
+            summary.push(format!(
+                "{} requested · {} fit at this canvas",
+                thousands_u64(geo_config.num_provinces as u64),
+                thousands_u64(result.num_provinces as u64)
+            ));
+        }
         self.provinces = Some(Arc::new(result));
         summary
     }
@@ -1359,6 +1481,7 @@ impl Genesis {
             extracted.provinces,
             self.seed,
             world.width as f32,
+            self.canvas_scale(),
             &progress,
         );
 
@@ -1870,7 +1993,7 @@ mod tests {
     #[test]
     fn a_save_resumes_at_the_act_after_the_one_it_holds() {
         let seed = 0x0BAD_C0D1;
-        let path = cache_path(seed);
+        let path = cache_path(seed, 4, 2);
         let _ = std::fs::remove_file(&path);
         for (index, stage) in Stage::ALL[..6].iter().enumerate() {
             let genesis = Genesis::for_test(seed, *stage);
@@ -1890,16 +2013,21 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// A cache is named after the seed it holds, and lives with its siblings.
+    /// A cache is named after the seed it holds and the canvas it was grown on.
     #[test]
-    fn a_worlds_cache_is_named_after_its_seed() {
+    fn a_worlds_cache_is_named_after_its_seed_and_canvas() {
         assert_eq!(
-            cache_path(1_980).to_string_lossy(),
-            format!("{CACHE_DIR}/world_1980.bin")
+            cache_path(1_980, 8_192, 4_096).to_string_lossy(),
+            format!("{CACHE_DIR}/world_1980_8192x4096.bin")
         );
         assert_ne!(
-            cache_path(1).to_string_lossy(),
-            cache_path(2).to_string_lossy()
+            cache_path(1, 8_192, 4_096).to_string_lossy(),
+            cache_path(2, 8_192, 4_096).to_string_lossy()
+        );
+        assert_ne!(
+            cache_path(42, 8_192, 4_096).to_string_lossy(),
+            cache_path(42, 16_384, 8_192).to_string_lossy(),
+            "the same seed on two canvases is two worlds"
         );
     }
 
@@ -1978,7 +2106,7 @@ mod tests {
     fn a_listed_world_says_which_acts_it_holds() {
         // A synthetic seed no real cache is ever written for.
         let seed = 0x0BAD_C0F0;
-        let path = cache_path(seed);
+        let path = cache_path(seed, 4, 2);
         let _ = std::fs::remove_file(&path);
         Genesis::for_test(seed, Stage::Geopolitics)
             .save_cache()
@@ -2137,6 +2265,165 @@ mod tests {
             genesis.atlas().is_some(),
             "the heightmap act one grew is still there to paint"
         );
+    }
+
+    // ─── THE RUNTIME CANVAS ──────────────────────────────────────────────────
+
+    /// A sized pipeline grows the canvas it was given, and its terrain config
+    /// reads that canvas rather than the global reference.
+    #[test]
+    fn a_sized_world_uses_its_own_canvas() {
+        let genesis = Genesis::new_sized(42, 2_048, 1_024);
+        assert_eq!(genesis.canvas(), (2_048, 1_024));
+        let terrain = genesis.world_config();
+        assert_eq!((terrain.width, terrain.height), (2_048, 1_024));
+        assert_eq!(terrain.strait_width, 1);
+        assert_eq!(terrain.strait_max_span, 150);
+        assert_eq!(terrain.max_droplet_lifetime, 5);
+        assert_eq!(terrain.erosion_droplets, 54_688);
+        assert_eq!(genesis.geography_config().num_provinces, 469);
+        assert_eq!(genesis.hydro_config().min_lake_cells, 1);
+    }
+
+    /// The per-resolution budgets follow the area and linear scales, and the 16K
+    /// reference is exactly the world the engine has always grown.
+    #[test]
+    fn the_resolution_budgets_scale_with_the_canvas() {
+        let cases = [
+            (2_048, 1_024, 469, 54_688, 1, 150),
+            (4_096, 2_048, 30_000 / 16, 3_500_000 / 16, 1, 300),
+            (8_192, 4_096, 30_000 / 4, 3_500_000 / 4, 3, 600),
+            (12_288, 6_144, 16_875, 1_968_750, 7, 900),
+            (16_384, 8_192, 30_000, 3_500_000, 12, 1_200),
+        ];
+        for (width, height, provinces, droplets, lake_cells, strait_span) in cases {
+            let genesis = Genesis::new_sized(42, width, height);
+            let terrain = genesis.world_config();
+            assert_eq!(
+                genesis.geography_config().num_provinces,
+                provinces,
+                "provinces at {width}×{height}"
+            );
+            assert_eq!(
+                terrain.erosion_droplets, droplets,
+                "droplets at {width}×{height}"
+            );
+            assert_eq!(
+                genesis.hydro_config().min_lake_cells,
+                lake_cells,
+                "lake cells at {width}×{height}"
+            );
+            assert_eq!(
+                terrain.strait_max_span, strait_span,
+                "strait span at {width}×{height}"
+            );
+        }
+
+        let reference = Genesis::new_sized(42, 16_384, 8_192);
+        assert_eq!(reference.geography_config().num_provinces, 30_000);
+        assert_eq!(reference.world_config().erosion_droplets, 3_500_000);
+        assert_eq!(reference.world_config().strait_width, 8);
+        assert_eq!(reference.hydro_config().min_lake_cells, 12);
+    }
+
+    /// The canvas may be chosen before act one and never after it.
+    #[test]
+    fn the_canvas_is_fixed_once_act_one_has_run() {
+        let mut blank = Genesis::new_sized(42, 2_048, 1_024);
+        assert!(blank.set_canvas(4_096, 2_048));
+        assert_eq!(blank.canvas(), (4_096, 2_048));
+
+        let mut grown = Genesis::for_test(42, Stage::Geology);
+        assert!(!grown.set_canvas(2_048, 1_024));
+        assert_eq!(grown.canvas(), (4, 2), "the grown world keeps its plate");
+        assert_eq!(grown.world_config().strait_width, 1);
+    }
+
+    /// A rewind to before act one keeps the canvas and the reader's constants.
+    #[test]
+    fn rewinding_to_geology_keeps_the_canvas_and_settings() {
+        let mut genesis = Genesis::for_test(42, Stage::Hydrology);
+        genesis.width = 8_192;
+        genesis.height = 4_096;
+        genesis.set_settings(WorldGenSettings {
+            sea_threshold: 0.05,
+            ..WorldGenSettings::default()
+        });
+
+        genesis.rewind_to(Stage::Geology);
+
+        assert_eq!(genesis.canvas(), (8_192, 4_096));
+        assert_eq!(genesis.settings().sea_threshold, 0.05);
+        assert_eq!(genesis.world_config().strait_width, 4);
+    }
+
+    /// Cache names carry the canvas, and only canonical spellings are listed.
+    #[test]
+    fn a_cache_name_carries_seed_and_canvas() {
+        assert_eq!(
+            parse_cache_name("world_42_2048x1024.bin"),
+            Some((42, 2_048, 1_024, false))
+        );
+        assert_eq!(
+            parse_cache_name("world_42.bin"),
+            Some((42, WORLD_WIDTH, WORLD_HEIGHT, true)),
+            "an old save is the reference 16K plate"
+        );
+        assert_eq!(parse_cache_name("world_0042_2048x1024.bin"), None);
+        assert_eq!(parse_cache_name("world_42_2048X1024.bin"), None);
+        assert_eq!(parse_cache_name("world_42_0x1024.bin"), None);
+        assert_eq!(parse_cache_name("world_42.full.bin"), None);
+    }
+
+    /// A load with no cache on the current canvas falls back to the seed's cache
+    /// and adopts the canvas the cache actually holds.
+    #[test]
+    fn a_load_adopts_the_canvas_of_the_cache_it_finds() {
+        let seed = 0x0BAD_C0D2;
+        let path = Genesis::for_test(seed, Stage::Hydrology).cache_path();
+        let _ = std::fs::remove_file(&path);
+        Genesis::for_test(seed, Stage::Hydrology)
+            .save_cache()
+            .expect("write the world");
+
+        let mut adopted = Genesis::new(seed);
+        assert_eq!(adopted.canvas(), (WORLD_WIDTH, WORLD_HEIGHT));
+        adopted.load_cache().expect("read the world back");
+        assert_eq!(adopted.canvas(), (4, 2), "the file's canvas is the world's");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The same seed on two canvases is two entries, and a canonical file is
+    /// preferred to a legacy file for the same plate.
+    #[test]
+    fn a_cache_directory_lists_two_canvases_of_one_seed() {
+        let dir = std::env::temp_dir().join(format!(
+            "project-genesis-cache-canvases-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch cache directory");
+        for name in [
+            "world_42_8192x4096.bin",
+            "world_42_16384x8192.bin",
+            "world_42.bin",
+        ] {
+            std::fs::write(dir.join(name), b"cache").expect("a scratch cache file");
+        }
+
+        let worlds = cached_worlds_in(&dir);
+        let forty_two: Vec<&CachedWorld> =
+            worlds.iter().filter(|world| world.seed == 42).collect();
+        assert_eq!(forty_two.len(), 2, "one legacy file folds into its 16K twin");
+        assert!(
+            forty_two
+                .iter()
+                .any(|world| (world.width, world.height) == (8_192, 4_096))
+        );
+        assert!(forty_two.iter().any(|world| !world.legacy && world.width == 16_384));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
