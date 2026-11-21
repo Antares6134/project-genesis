@@ -37,26 +37,25 @@
 //!    state sits where its tier puts it and does not climb.
 //! 8. **Dossier** — the country decides a society's economy, government and faith.
 //! 9. **Contact** — territories that touch, or that lie within a sea-crossing of
-//!    each other, are linked; the rest rose alone. Capped, because a partitioned
-//!    world has hundreds of societies and a neighbour list is not a census.
-//! 10. **Inheritance** — societies close enough to share an ancestral stock get one
-//!    tongue family, and a younger realm in contact with an older one may have
-//!    taken up its crops, rites or government *before* founding a city of its own.
+//!    each other, are counted; the count feeds the choice of the epoch site. The
+//!    identities are discarded: the dossier does not list neighbours.
+//! 10. **Ancestral stock** — societies close enough to share a descent get one
+//!    tongue family, and an older realm's temple form and rites can pass to a
+//!    younger one.
 
 use crate::civilization::config::CivilizationConfig;
 use crate::civilization::epoch::{
     DevelopmentPace, Epoch, EpochCandidate, Timeline, place_name, select_epoch_site,
 };
 use crate::civilization::{
-    Age, Civilization, CivilizationWorld, Contact, ContactKind, CradleKind, Culture, Environment,
-    Faith, FaithKind, Government, Influence, Outlook, RiseProfile, ScaleClass, SocietyTier,
-    Subsistence,
+    Age, Civilization, CivilizationWorld, CradleKind, Culture, Environment, Faith, FaithKind,
+    Government, Outlook, ScaleClass, SocietyTier, Subsistence,
 };
 use crate::climate::PlanetaryMode;
 use crate::core::fmt::{thousands, thousands_u64};
 use crate::core::progress::Progress;
 use crate::core::sphere;
-use crate::core::{relief, Grid};
+use crate::core::{Grid, relief};
 use crate::geopolitics::{GeopoliticalHierarchy, ProvinceNode};
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
@@ -132,16 +131,32 @@ struct ProvinceStats {
 
 impl ProvinceStats {
     fn hab_mean(&self) -> f32 {
-        if self.px == 0 { 0.0 } else { (self.hab_sum / self.px as f64) as f32 }
+        if self.px == 0 {
+            0.0
+        } else {
+            (self.hab_sum / self.px as f64) as f32
+        }
     }
     fn temp_mean(&self) -> f32 {
-        if self.px == 0 { 0.0 } else { (self.temp_sum / self.px as f64) as f32 }
+        if self.px == 0 {
+            0.0
+        } else {
+            (self.temp_sum / self.px as f64) as f32
+        }
     }
     fn precip_mean(&self) -> f32 {
-        if self.px == 0 { 0.0 } else { (self.precip_sum / self.px as f64) as f32 }
+        if self.px == 0 {
+            0.0
+        } else {
+            (self.precip_sum / self.px as f64) as f32
+        }
     }
     fn elev_mean_m(&self) -> f32 {
-        if self.px == 0 { 0.0 } else { (self.elev_sum_m / self.px as f64) as f32 }
+        if self.px == 0 {
+            0.0
+        } else {
+            (self.elev_sum_m / self.px as f64) as f32
+        }
     }
     fn is_coastal(&self) -> bool {
         self.sea_px > 0
@@ -236,9 +251,8 @@ pub fn generate_civilizations(
                 // by thin air and hard ground high up. The realm's own
                 // development multiplier is applied once the realm exists.
                 let alt_penalty = 1.0 - (metres / 4_000.0).clamp(0.0, 0.55);
-                let density = config.max_density_per_km2
-                    * hab.clamp(0.0, 1.4).powf(0.85)
-                    * alt_penalty;
+                let density =
+                    config.max_density_per_km2 * hab.clamp(0.0, 1.4).powf(0.85) * alt_penalty;
 
                 let node = &hierarchy.provinces[idx];
                 let s = &mut stats[idx];
@@ -375,7 +389,15 @@ pub fn generate_civilizations(
     // to the richest superregions, one to three cradles each.
     let lonely_slots = ((wanted as f32 * 0.2).round() as usize).clamp(1, 4);
     let core_target = wanted.saturating_sub(lonely_slots).max(1);
-    let quota_for = |rank: usize| if rank < 3 { 3 } else if rank < 8 { 2 } else { 1 };
+    let quota_for = |rank: usize| {
+        if rank < 3 {
+            3
+        } else if rank < 8 {
+            2
+        } else {
+            1
+        }
+    };
 
     for (rank, superregion) in ranked_superregions.iter().enumerate() {
         if picked.len() >= core_target {
@@ -455,9 +477,11 @@ pub fn generate_civilizations(
         if picked.iter().any(|p| p.prov == candidate.prov) {
             continue;
         }
-        if per_region.get(&candidate.region).copied().unwrap_or(0)
-            >= config.cradle_max_per_region
-            || per_superregion.get(&candidate.superregion).copied().unwrap_or(0)
+        if per_region.get(&candidate.region).copied().unwrap_or(0) >= config.cradle_max_per_region
+            || per_superregion
+                .get(&candidate.superregion)
+                .copied()
+                .unwrap_or(0)
                 >= config.cradle_max_per_superregion
         {
             continue;
@@ -524,8 +548,9 @@ pub fn generate_civilizations(
     // cradle still rises first and the roster stays in founding order, while the
     // set clusters instead of stretching and can never exceed the window however
     // many cradles the world carries.
-    let founding_span =
-        (config.founding_window_years as f32 / pace.multiplier()).round().max(1.0) as i32;
+    let founding_span = (config.founding_window_years as f32 / pace.multiplier())
+        .round()
+        .max(1.0) as i32;
     let mut founding_years: Vec<i32> = Vec::with_capacity(picked.len());
     founding_years.push(0);
     let nearest_elder: Vec<f32> = (1..picked.len())
@@ -899,7 +924,6 @@ pub fn generate_civilizations(
     }
     let mut family_name: Vec<String> = vec![String::new(); skeletons.len()];
     let mut family_ancestor: Vec<usize> = (0..skeletons.len()).collect();
-    let mut kin: Vec<Vec<u32>> = vec![Vec::new(); skeletons.len()];
     for members in family_members.values() {
         let ancestor = *members
             .iter()
@@ -909,35 +933,15 @@ pub fn generate_civilizations(
         for &m in members {
             family_name[m] = name.clone();
             family_ancestor[m] = ancestor;
-            // A family can hold a hundred peoples on a crowded continent, so kin are
-            // the nearest few by the seats they sit in, not the whole clan: a
-            // genealogy is not a census.
-            let mut siblings: Vec<(f32, u32)> = members
-                .iter()
-                .filter(|&&other| other != m)
-                .map(|&other| {
-                    (
-                        distance(&skeletons[m].cradle, &skeletons[other].cradle),
-                        other as u32 + 1,
-                    )
-                })
-                .collect();
-            siblings.sort_by(|a, b| {
-                a.0.partial_cmp(&b.0)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then(a.1.cmp(&b.1))
-            });
-            siblings.truncate(config.kin_limit);
-            kin[m] = siblings.into_iter().map(|(_, id)| id).collect();
         }
     }
 
-    // What the atlas calls each society, decided here because the contact and
-    // inheritance notes below have to name the other side of every frontier.
-    //
-    // A people's name is their country and their kind, and two peoples of the same
-    // country and the same kind collide: the second one onward takes a numeral, which
-    // is how a real gazetteer disambiguates them too. A state keeps its placeholder
+    // What the atlas calls each society. A people's name is their country and
+    // their kind, and two peoples of the same country and the same kind collide:
+    // the second one onward takes a numeral, which is how a real gazetteer
+    // disambiguates them too. A state keeps its placeholder number, because a
+    // state is exactly the kind of thing that would have a proper name once this
+    // world has languages.
     // number, because a state is exactly the kind of thing that would have a proper
     // name once this world has languages.
     let names: Vec<String> = {
@@ -981,7 +985,7 @@ pub fn generate_civilizations(
         } else {
             subsistence_for(tier, environment, &mut rng)
         };
-        let outlook = choose_outlook(&mut rng, subsistence);
+        let outlook = choose_outlook(&mut rng, subsistence, tier);
         // A people that is not a state does not climb the development axis: where it
         // sits on it is decided by what kind of society it is, not by how long it has
         // been climbing. Only a state is measured by the deep-time pass.
@@ -1042,7 +1046,6 @@ pub fn generate_civilizations(
             &skeletons[rank],
             schemes[rank],
             inherited_culture.as_ref(),
-            family_name[rank].as_str(),
         );
         let faith = build_faith(&mut rng, &skeletons[rank], inherited_faith.as_ref());
         cultures.push(culture);
@@ -1085,7 +1088,7 @@ pub fn generate_civilizations(
     // frontier), when only a strait or a short sea crossing lies between them (a
     // sea route), or when they are close enough for travellers to carry word of
     // each other (a rumour). Every other realm rose completely alone.
-    let mut reach: BTreeMap<(u32, u32), Reach> = BTreeMap::new();
+    let mut reach: BTreeMap<(u32, u32), f32> = BTreeMap::new();
     for (rank, sk) in skeletons.iter().enumerate() {
         let a = rank as u32 + 1;
         for &p in &sk.provinces {
@@ -1100,198 +1103,50 @@ pub fn generate_civilizations(
                     continue;
                 }
                 let other_node = &hierarchy.provinces[idx];
-                let candidate = Reach {
-                    px: sphere::wrap_distance_px(
-                        node.center_x,
-                        node.center_y,
-                        other_node.center_x,
-                        other_node.center_y,
-                        w,
-                    ),
-                    x1: node.center_x,
-                    y1: node.center_y,
-                    x2: other_node.center_x,
-                    y2: other_node.center_y,
-                };
+                let px = sphere::wrap_distance_px(
+                    node.center_x,
+                    node.center_y,
+                    other_node.center_x,
+                    other_node.center_y,
+                    w,
+                );
                 let key = (a.min(other), a.max(other));
-                let slot = reach.entry(key).or_insert(candidate);
-                if candidate.px < slot.px {
-                    *slot = candidate;
+                let slot = reach.entry(key).or_insert(px);
+                if px < *slot {
+                    *slot = px;
                 }
             }
         }
     }
 
-    let mut contacts: Vec<Vec<Contact>> = vec![Vec::new(); skeletons.len()];
+    // How many neighbours each realm can reach. The dossier no longer lists them,
+    // but the epoch still prefers a crossroads, so the count is kept and the
+    // identities discarded.
+    let mut contact_counts: Vec<usize> = vec![0; skeletons.len()];
     for a in 0..skeletons.len() {
-        for b in (a + 1)..skeletons.len() {
+        let mut distances: Vec<f32> = Vec::new();
+        for b in 0..skeletons.len() {
+            if a == b {
+                continue;
+            }
             let id_a = a as u32 + 1;
             let id_b = b as u32 + 1;
-
-            let found = match reach.get(&(id_a, id_b)) {
-                Some(r) => Some(*r),
+            let key = (id_a.min(id_b), id_a.max(id_b));
+            let px = match reach.get(&key) {
+                Some(px) => *px,
                 None => {
-                    // No provinces touch at all: the two only matter to each other
-                    // if their hearts are within reach of a traveller.
                     let seat_px = distance(&skeletons[a].cradle, &skeletons[b].cradle);
                     if seat_px > config.rumour_distance_px {
                         continue;
                     }
-                    Some(Reach {
-                        px: seat_px,
-                        x1: skeletons[a].cradle.cx,
-                        y1: skeletons[a].cradle.cy,
-                        x2: skeletons[b].cradle.cx,
-                        y2: skeletons[b].cradle.cy,
-                    })
+                    seat_px
                 }
             };
-            let Some(found) = found else { continue };
-
-            let kind = if found.px <= config.frontier_distance_px {
-                ContactKind::LandFrontier
-            } else if found.px <= config.searoute_distance_px {
-                ContactKind::SeaRoute
-            } else {
-                ContactKind::DistantRumour
-            };
-            let distance_km =
-                sphere::map_distance_km(found.x1, found.y1, found.x2, found.y2, w, h);
-            let relation = pick_relation(&mut rng, kind, cultures[a].outlook, cultures[b].outlook);
-
-            contacts[a].push(Contact {
-                other: id_b,
-                kind,
-                distance_km,
-                relation,
-                note: contact_note(kind, relation, distance_km, &names[b]),
-            });
-            contacts[b].push(Contact {
-                other: id_a,
-                kind,
-                distance_km,
-                relation,
-                note: contact_note(kind, relation, distance_km, &names[a]),
-            });
+            distances.push(px);
         }
-    }
-
-    // A partitioned world carries hundreds of societies, so a neighbour list is not
-    // a census: every society keeps the nearest handful and no more. Sorted by
-    // distance first, then by id, so the cut is never arbitrary.
-    for list in contacts.iter_mut() {
-        list.sort_by(|a, b| {
-            a.distance_km
-                .partial_cmp(&b.distance_km)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(a.other.cmp(&b.other))
-        });
-        list.truncate(config.contact_limit);
-        list.sort_by_key(|contact| contact.other);
-    }
-
-    // ─── 9. INHERITANCE ──────────────────────────────────────────────────────
-    // A younger realm in contact with an older one may have taken up crops, rites
-    // or a script centuries before it founded a city of its own — the way the
-    // ancestors of Egypt took up farming and pottery from Mesopotamia long before
-    // Narmer. This is the half of prehistory that leaves no border on the map.
-    let mut influences: Vec<Vec<Influence>> = vec![Vec::new(); skeletons.len()];
-    for a in 0..skeletons.len() {
-        for b in (a + 1)..skeletons.len() {
-            let (older, younger) = if skeletons[a].founding_year_internal
-                <= skeletons[b].founding_year_internal
-            {
-                (a, b)
-            } else {
-                (b, a)
-            };
-            let gap = skeletons[younger].founding_year_internal
-                - skeletons[older].founding_year_internal;
-            if gap < 150 {
-                continue; // too close in time for an inheritance to be visible
-            }
-            let older_id = older as u32 + 1;
-            // Only a state takes up a neighbour's crops *before founding a city* —
-            // a people never founded one, and their own country already decides how
-            // they live. Inheritance in the dossier is a story about cities.
-            if !skeletons[older].tier.is_state() || !skeletons[younger].tier.is_state() {
-                continue;
-            }
-            let Some(contact) = contacts[younger].iter().find(|c| c.other == older_id) else {
-                continue; // the two never met before the younger one existed
-            };
-            let same_family =
-                family_find(&mut family_of, older) == family_find(&mut family_of, younger);
-            let base = match contact.kind {
-                ContactKind::LandFrontier => 0.60,
-                ContactKind::SeaRoute => 0.45,
-                ContactKind::DistantRumour => 0.18,
-            };
-            let chance = (base
-                * cultures[younger].outlook.openness()
-                * if same_family { 1.30 } else { 1.0 })
-            .min(0.95);
-            if rng.random::<f32>() > chance {
-                continue;
-            }
-
-            let pool = hallmarks(&cultures[older], &faiths[older]);
-            let count = rng.random_range(1..=3usize).min(pool.len());
-            let mut picks: Vec<&'static str> = Vec::new();
-            while picks.len() < count {
-                let candidate = *pool.choose(&mut rng).unwrap();
-                if !picks.contains(&candidate) {
-                    picks.push(candidate);
-                }
-            }
-            let borrowed: Vec<String> = picks.iter().map(|s| lowercase_first(s)).collect();
-            let note = format!(
-                "{} was already {} years old when {} began to settle: {} had crossed the country — and the frontier between them did not exist yet — generations before the younger realm's first city did.",
-                names[older],
-                thousands_u64(gap.max(0) as u64),
-                names[younger],
-                join_list(&borrowed),
-            );
-            influences[younger].push(Influence {
-                other: older_id,
-                borrowed,
-                note,
-            });
-        }
-    }
-
-    // ─── 10. THE REASONS ──────────────────────────────────────────────────────
-    // The dossier's "why here" bullets are written last, once the distances to the
-    // other realms are finally known.
-    let mut rises: Vec<RiseProfile> = Vec::with_capacity(skeletons.len());
-    for rank in 0..skeletons.len() {
-        let nearest_km = (0..skeletons.len())
-            .filter(|&other| other != rank)
-            .map(|other| {
-                sphere::map_distance_km(
-                    skeletons[rank].cradle.cx,
-                    skeletons[rank].cradle.cy,
-                    skeletons[other].cradle.cx,
-                    skeletons[other].cradle.cy,
-                    w,
-                    h,
-                )
-            })
-            .fold(f32::MAX, f32::min);
-        let richest_rank = cradles
-            .iter()
-            .position(|c| c.prov == skeletons[rank].cradle.prov)
-            .map_or(0, |i| i + 1);
-        rises.push(build_rise(
-            &skeletons[rank],
-            hierarchy,
-            richest_rank,
-            cradles.len(),
-            nearest_km,
-            sphere::row_latitude_deg(skeletons[rank].cradle.cy, h),
-            min_river_flow,
-            config.great_river_flow,
-        ));
+        distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        distances.truncate(config.contact_limit);
+        contact_counts[a] = distances.len();
     }
 
     // ─── 10b. THE EPOCH AND THE DEPTH OF PREHISTORY ───────────────────────────
@@ -1321,7 +1176,8 @@ pub fn generate_civilizations(
         thousands(prehistory_years as f32),
     );
 
-    let epoch_candidates = build_epoch_candidates(&stats, hierarchy, &owner, &contacts, &seats);
+    let epoch_candidates =
+        build_epoch_candidates(&stats, hierarchy, &owner, &contact_counts, &seats);
     let epoch_site = select_epoch_site(
         &epoch_candidates,
         config.epoch_site_min_area_km2,
@@ -1364,7 +1220,6 @@ pub fn generate_civilizations(
             environment: sk.environment,
             cradle_kind: sk.cradle_kind,
             scale: sk.scale,
-            rise: rises[rank].clone(),
             culture: cultures[rank].clone(),
             faith: faiths[rank].clone(),
             seat_province: sk.cradle.prov,
@@ -1383,9 +1238,6 @@ pub fn generate_civilizations(
                 None
             },
             age_years: sk.age_years,
-            contacts: std::mem::take(&mut contacts[rank]),
-            influences: std::mem::take(&mut influences[rank]),
-            kin: kin[rank].clone(),
             language_family: family_name[rank].clone(),
             density_per_km2: if sk.area_km2 > 0.0 {
                 population as f32 / sk.area_km2
@@ -1457,16 +1309,6 @@ struct Skeleton {
     founding_year_internal: i32,
 }
 
-/// The closest approach between two realms' territories.
-#[derive(Clone, Copy)]
-struct Reach {
-    px: f32,
-    x1: f32,
-    y1: f32,
-    x2: f32,
-    y2: f32,
-}
-
 /// One frontier step: a province reached at a certain accumulated cost, by a
 /// particular society. The society is part of the ordering so that two sources
 /// reaching one province at equal cost always resolve the same way.
@@ -1505,14 +1347,14 @@ fn civilization_name(id: u32) -> String {
 /// Gather every province worth considering as the place a calendar is reckoned
 /// from.
 ///
-/// Runs after contacts and inheritance, because a crossroads is only a crossroads
-/// once somebody is standing on the other side of it. Every field is a measurement
-/// the census already took, so the choice can be audited line by line.
+/// Runs after contacts, because a crossroads is only a crossroads once somebody is
+/// standing on the other side of it. Every field is a measurement the census
+/// already took, so the choice can be audited line by line.
 fn build_epoch_candidates(
     stats: &[ProvinceStats],
     hierarchy: &GeopoliticalHierarchy,
     owner: &[u16],
-    contacts: &[Vec<Contact>],
+    contact_counts: &[usize],
     seats: &[u32],
 ) -> Vec<EpochCandidate> {
     let mut out = Vec::new();
@@ -1547,7 +1389,10 @@ fn build_epoch_candidates(
         let realm_contacts = if holder == 0 {
             0
         } else {
-            contacts.get(holder as usize - 1).map_or(0, |c| c.len())
+            contact_counts
+                .get(holder as usize - 1)
+                .copied()
+                .unwrap_or(0)
         };
 
         out.push(EpochCandidate {
@@ -1668,7 +1513,7 @@ fn family_find(parent: &mut Vec<usize>, mut i: usize) -> usize {
 
 /// Which realms share a frontier, for the development pass.
 ///
-/// The rich [`Contact`] pass runs after the dossiers and is far too expensive to
+/// The rich contact pass runs after the dossiers and is far too expensive to
 /// repeat here; this is only the cheap half of it — two realms are adjacent when
 /// one holds a province whose neighbour the other holds. Sorted, so the walk over
 /// it is order-stable.
@@ -1957,7 +1802,11 @@ fn environment_cradle_kind(environment: Environment) -> CradleKind {
 /// A band of foragers forages, a herd people herds, and a farming society farms —
 /// with the *kind* of farming still following the country, which is the one part of
 /// this that geography has always decided.
-fn subsistence_for(tier: SocietyTier, environment: Environment, rng: &mut ChaCha8Rng) -> Subsistence {
+fn subsistence_for(
+    tier: SocietyTier,
+    environment: Environment,
+    rng: &mut ChaCha8Rng,
+) -> Subsistence {
     match tier {
         SocietyTier::HunterGatherers => Subsistence::Foraging,
         SocietyTier::NomadicPastoralists => Subsistence::Pastoralism,
@@ -2201,7 +2050,13 @@ fn edge_step(
     width: usize,
     config: &CivilizationConfig,
 ) -> Option<f32> {
-    let hop = sphere::wrap_distance_px(from.center_x, from.center_y, to.center_x, to.center_y, width);
+    let hop = sphere::wrap_distance_px(
+        from.center_x,
+        from.center_y,
+        to.center_x,
+        to.center_y,
+        width,
+    );
     let fertility = 0.35 + to_stats.hab_mean().clamp(0.0, 1.2);
     let jump = if hop <= 90.0 {
         1.0
@@ -2757,7 +2612,11 @@ fn merge_peoples(
     let rebuilt_tiers: Vec<u8> = kept.iter().map(|&root| tiers[root]).collect();
     for index in 0..n {
         let root = uf_find(&mut parent, index);
-        let target = if index < state_count { slot[index] } else { slot[root] };
+        let target = if index < state_count {
+            slot[index]
+        } else {
+            slot[root]
+        };
         if let Some(piece) = rebuilt.get_mut(target) {
             piece.extend_from_slice(&societies[index]);
         }
@@ -2864,113 +2723,6 @@ fn development_multiplier(government: Government, outlook: Outlook, complexity: 
     (development + government.density_bias() + outlook.density_bias()).clamp(0.40, 1.45)
 }
 
-// ─── RELATIONS ───────────────────────────────────────────────────────────────
-
-/// Ways two realms that share a land border treat each other.
-const FRONTIER_RELATIONS: [&str; 6] = [
-    "trade partners",
-    "uneasy rivals",
-    "rivals for the same river",
-    "raiding neighbours",
-    "kin who share the frontier",
-    "a wary peace along the border",
-];
-
-/// Ways two realms separated by water treat each other.
-const SEA_RELATIONS: [&str; 5] = [
-    "trading partners across the water",
-    "rival merchants",
-    "colonists of the same sea",
-    "fisherfolk who share the fishing grounds",
-    "rival captains",
-];
-
-/// Ways two realms that know of each other only by report treat each other.
-const RUMOUR_RELATIONS: [&str; 4] = [
-    "a name in travellers' tales",
-    "traders by proxy",
-    "a half-believed rumour",
-    "a distant market for the same goods",
-];
-
-/// Choose how two contacting realms treat each other.
-///
-/// A martial ethos leans the draw towards rivalry and a mercantile one towards
-/// trade, so the relation reads off the two dossiers instead of contradicting
-/// them.
-fn pick_relation(rng: &mut ChaCha8Rng, kind: ContactKind, a: Outlook, b: Outlook) -> &'static str {
-    let mut pool: Vec<&'static str> = match kind {
-        ContactKind::LandFrontier => FRONTIER_RELATIONS.to_vec(),
-        ContactKind::SeaRoute => SEA_RELATIONS.to_vec(),
-        ContactKind::DistantRumour => RUMOUR_RELATIONS.to_vec(),
-    };
-
-    let martial = a == Outlook::Martial || b == Outlook::Martial;
-    let mercantile = a == Outlook::Mercantile || b == Outlook::Mercantile;
-    if martial {
-        let rivals: Vec<&'static str> = pool
-            .iter()
-            .copied()
-            .filter(|r| r.contains("rival") || r.contains("raid"))
-            .collect();
-        pool.extend(rivals);
-    }
-    if mercantile {
-        let traders: Vec<&'static str> = pool
-            .iter()
-            .copied()
-            .filter(|r| r.contains("trade") || r.contains("traders") || r.contains("market"))
-            .collect();
-        pool.extend(traders);
-    }
-
-    *pool.choose(rng).unwrap()
-}
-
-/// A sentence describing one side of a contact, from that side's point of view.
-fn contact_note(kind: ContactKind, relation: &str, distance_km: f32, other: &str) -> String {
-    match kind {
-        ContactKind::LandFrontier => format!(
-            "Its provinces meet those of {other} — a shared border, and across it the two are {relation}."
-        ),
-        ContactKind::SeaRoute => format!(
-            "It reaches {other} across about {} km of water, and the two are {relation}.",
-            thousands(distance_km)
-        ),
-        ContactKind::DistantRumour => format!(
-            "It knows {other} only by report, from roughly {} km away, where the two are {relation}.",
-            thousands(distance_km)
-        ),
-    }
-}
-
-// ─── SMALL HELPERS ───────────────────────────────────────────────────────────
-
-/// What a realm is known for abroad — the shop list of prehistory.
-///
-/// Every entry is drawn from the realm's own dossier, so a borrowed habit is
-/// always something the older civilization genuinely had.
-fn hallmarks(culture: &Culture, faith: &Faith) -> Vec<&'static str> {
-    vec![
-        culture.subsistence.hallmark(),
-        culture.government.hallmark(),
-        faith.kind.hallmark(),
-        culture.architecture,
-    ]
-}
-
-/// `Mud-brick temple platforms` → `mud-brick temple platforms`, so a borrowed
-/// hallmark reads inside a sentence.
-/// `Riparian Tongue` → `Riparian tongue`, so a borrowed hallmark reads inside a
-/// sentence.
-fn lowercase_first(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
-}
-
 /// `woodland` → `Woodland`, so a descriptive society name opens like a name.
 fn capitalize_first(s: &str) -> String {
     let mut chars = s.chars();
@@ -2978,34 +2730,6 @@ fn capitalize_first(s: &str) -> String {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
     }
-}
-
-/// `[a, b, c]` → `a, b and c`.
-fn join_list<T: AsRef<str>>(items: &[T]) -> String {
-    match items {
-        [] => String::new(),
-        [only] => only.as_ref().to_string(),
-        [head @ .., last] => format!(
-            "{} and {}",
-            head.iter()
-                .map(|s| s.as_ref())
-                .collect::<Vec<_>>()
-                .join(", "),
-            last.as_ref()
-        ),
-    }
-}
-
-/// `4` → `4th`, for the dossier's "the 4th richest cradle" line.
-fn ordinal(n: usize) -> String {
-    let suffix = match (n % 10, n % 100) {
-        (1, 11) | (2, 12) | (3, 13) => "th",
-        (1, _) => "st",
-        (2, _) => "nd",
-        (3, _) => "rd",
-        _ => "th",
-    };
-    format!("{n}{suffix}")
 }
 
 // ─── THE PROSE POOLS ─────────────────────────────────────────────────────────
@@ -3068,7 +2792,6 @@ fn build_culture(
     sk: &Skeleton,
     scheme: Scheme,
     inherited: Option<&Culture>,
-    family: &str,
 ) -> Culture {
     let Scheme {
         subsistence,
@@ -3106,46 +2829,12 @@ fn build_culture(
         }
     }
 
-    let mut note = if sk.tier.is_state() {
-        format!(
-            "{} Its cradle: {} — {}.",
-            subsistence.describe(),
-            sk.cradle_kind.label().to_lowercase(),
-            sk.cradle_kind.describe()
-        )
-    } else {
-        format!(
-            "{} Its country: {} — {}.",
-            subsistence.describe(),
-            sk.environment.label().to_lowercase(),
-            sk.environment.describe()
-        )
-    };
-    let standing = if government.is_state() {
-        "a state with an apparatus behind it"
-    } else {
-        "a society with no state above its lineages"
-    };
-    note.push_str(&format!(
-        " It is organised as {} — {}, and its public temper is {} — it {}.",
-        government.label().to_lowercase(),
-        standing,
-        outlook.label().to_lowercase(),
-        outlook.disposition()
-    ));
-    if inherited.is_some() {
-        note.push_str(&format!(
-            " It shares its ancestral stock with the rest of the {family}, whose tongue, rites and arts it still echoes."
-        ));
-    }
-
     Culture {
         subsistence,
         government,
         outlook,
         architecture,
         arts,
-        note,
     }
 }
 
@@ -3157,9 +2846,9 @@ fn build_culture(
 /// plough or herd.
 fn choose_subsistence(rng: &mut ChaCha8Rng, sk: &Skeleton) -> Subsistence {
     match sk.cradle_kind {
-        CradleKind::RiverFloodplain
-        | CradleKind::RiverDelta
-        | CradleKind::DesertOasis => Subsistence::IrrigatedAgriculture,
+        CradleKind::RiverFloodplain | CradleKind::RiverDelta | CradleKind::DesertOasis => {
+            Subsistence::IrrigatedAgriculture
+        }
         CradleKind::Lacustrine => {
             if rng.random::<f32>() < 0.5 {
                 Subsistence::FishingAndSeafaring
@@ -3194,67 +2883,69 @@ fn choose_subsistence(rng: &mut ChaCha8Rng, sk: &Skeleton) -> Subsistence {
     }
 }
 
-/// What a realm values — its public temper, and the lens through which it treats
-/// its neighbours.
+/// What a realm values — its public temper.
 ///
 /// Weighted by how the realm eats, because a boat people and a herd people do not
-/// value the same things.
-fn choose_outlook(rng: &mut ChaCha8Rng, subsistence: Subsistence) -> Outlook {
-    let pool: &[Outlook] = match subsistence {
-        Subsistence::IrrigatedAgriculture => &[
-            Outlook::Agrarian,
+/// value the same things. Cosmopolitan is a state phenomenon: only a realm with
+/// cities, offices and strangers at the gate can draw it.
+fn choose_outlook(rng: &mut ChaCha8Rng, subsistence: Subsistence, tier: SocietyTier) -> Outlook {
+    let mut pool: Vec<Outlook> = match subsistence {
+        Subsistence::IrrigatedAgriculture => vec![
             Outlook::Ceremonial,
             Outlook::Ceremonial,
             Outlook::Scholarly,
-            Outlook::Agrarian,
             Outlook::Artistic,
+            Outlook::Mercantile,
         ],
-        Subsistence::DrylandFarming => &[
-            Outlook::Agrarian,
-            Outlook::Agrarian,
+        Subsistence::DrylandFarming => vec![
             Outlook::Isolationist,
             Outlook::Ceremonial,
             Outlook::Artistic,
             Outlook::Scholarly,
+            Outlook::Martial,
         ],
-        Subsistence::Pastoralism => &[
+        Subsistence::Pastoralism => vec![
             Outlook::Martial,
             Outlook::Martial,
             Outlook::Mercantile,
             Outlook::Isolationist,
             Outlook::Ceremonial,
         ],
-        Subsistence::FishingAndSeafaring => &[
+        Subsistence::FishingAndSeafaring => vec![
             Outlook::Mercantile,
             Outlook::Mercantile,
             Outlook::Artistic,
             Outlook::Scholarly,
             Outlook::Martial,
         ],
-        Subsistence::ShiftingCultivation => &[
+        Subsistence::ShiftingCultivation => vec![
             Outlook::Isolationist,
             Outlook::Artistic,
             Outlook::Ceremonial,
-            Outlook::Agrarian,
+            Outlook::Mercantile,
         ],
-        Subsistence::TerraceFarming => &[
+        Subsistence::TerraceFarming => vec![
             Outlook::Isolationist,
-            Outlook::Agrarian,
             Outlook::Martial,
             Outlook::Ceremonial,
             Outlook::Scholarly,
+            Outlook::Artistic,
         ],
         // A country read rather than worked breeds patience and self-reliance: the
         // band must know its ground better than any neighbour ever will.
-        Subsistence::Foraging => &[
+        Subsistence::Foraging => vec![
             Outlook::Isolationist,
             Outlook::Isolationist,
             Outlook::Artistic,
             Outlook::Ceremonial,
-            Outlook::Agrarian,
             Outlook::Martial,
+            Outlook::Scholarly,
         ],
     };
+    if tier.is_state() {
+        pool.push(Outlook::Cosmopolitan);
+        pool.push(Outlook::Cosmopolitan);
+    }
     *pool.choose(rng).unwrap()
 }
 
@@ -3324,9 +3015,10 @@ fn build_government(
                 Government::Tyranny | Government::Oligarchy => 1.8,
                 _ => 0.8,
             },
-            Outlook::Agrarian => match government {
-                Government::AristocraticRepublic | Government::DivineMonarchy => 1.4,
-                _ => 0.95,
+            Outlook::Cosmopolitan => match government {
+                Government::PlutocraticRepublic => 1.8,
+                Government::AristocraticRepublic | Government::Oligarchy => 1.2,
+                _ => 0.85,
             },
             Outlook::Artistic => match government {
                 Government::AristocraticRepublic | Government::PlutocraticRepublic => 1.3,
@@ -3430,11 +3122,7 @@ fn build_faith(rng: &mut ChaCha8Rng, sk: &Skeleton, inherited: Option<&Faith>) -
                 *pool.choose(rng).unwrap()
             }
             CradleKind::SavannaHeartland => {
-                let pool = [
-                    FaithKind::Solar,
-                    FaithKind::Solar,
-                    FaithKind::EarthMother,
-                ];
+                let pool = [FaithKind::Solar, FaithKind::Solar, FaithKind::EarthMother];
                 *pool.choose(rng).unwrap()
             }
             CradleKind::WoodlandHeartland => {
@@ -3539,238 +3227,12 @@ fn build_faith(rng: &mut ChaCha8Rng, sk: &Skeleton, inherited: Option<&Faith>) -
         }
     }
 
-    let note = format!(
-        "{} Its rites are kept by {}; a visitor would notice {}.",
-        kind.creed(),
-        clergy,
-        join_list(&practices)
-    );
-
     Faith {
         kind,
         clergy,
         practices,
-        note,
     }
 }
-
-/// Write the dossier's "why here" answer: the measurements behind the cradle.
-///
-/// Every bullet is a number the planet actually produced, so a reader can audit
-/// the choice instead of taking it on faith — which is the whole point of putting
-/// the reasoning in the tooltip rather than a placename.
-fn build_rise(
-    sk: &Skeleton,
-    hierarchy: &GeopoliticalHierarchy,
-    richest_rank: usize,
-    cradle_count: usize,
-    nearest_km: f32,
-    seat_latitude_deg: f32,
-    min_river_flow: f32,
-    great_river_flow: f32,
-) -> RiseProfile {
-    let s = &sk.seat_stats;
-    let node = &hierarchy.provinces[sk.cradle.prov as usize];
-    let kind = sk.cradle_kind;
-    let mut reasons: Vec<String> = Vec::new();
-
-    // A people are not a cradle story. Nobody chose their site: they were already
-    // there, and what the atlas owes the reader is what their country gives them.
-    if !sk.tier.is_state() {
-        return build_people_rise(sk, hierarchy, seat_latitude_deg);
-    }
-
-    if richest_rank == 0 {
-        reasons.push(format!(
-            "Habitability {:.2} — not a leading cradle in its own right: it is ground nobody had taken yet.",
-            s.hab_mean()
-        ));
-    } else {
-        reasons.push(format!(
-            "Habitability {:.2} — the {} richest of {} candidate cradles on this planet.",
-            s.hab_mean(),
-            ordinal(richest_rank),
-            thousands_u64(cradle_count as u64),
-        ));
-    }
-    if s.flow_max >= great_river_flow {
-        reasons.push(format!(
-            "A great river crosses it: peak discharge {} m³/s, several times the {} m³/s that already makes a river worth navigating and worth taxing.",
-            thousands(s.flow_max),
-            thousands(min_river_flow)
-        ));
-    } else if s.flow_max >= min_river_flow {
-        reasons.push(format!(
-            "A navigable river runs through it ({:.0} m³/s peak): water for the fields and a road for the boats.",
-            s.flow_max
-        ));
-    } else {
-        reasons.push(format!(
-            "No river worth the name — the fields live on {:.0} mm of rain a year, which is enough here.",
-            s.precip_mean() * 1200.0
-        ));
-    }
-    if s.is_coastal() {
-        reasons.push(format!(
-            "{} of its pixels touch the open sea: fish, salt, and a harbour nobody had to dig.",
-            thousands_u64(s.sea_px as u64)
-        ));
-    }
-    if s.lake_px > 0 {
-        reasons.push(format!(
-            "{} pixels of lake shore give fish, reeds and fresh water all year — and a road that carries a canoe.",
-            thousands_u64(s.lake_px as u64)
-        ));
-    }
-    reasons.push(format!(
-        "Mean {:.1} °C and {:.0} mm/yr of rain: grain country, neither desert nor ice.",
-        s.temp_mean(),
-        s.precip_mean() * 1200.0
-    ));
-    if s.elev_mean_m() >= 900.0 {
-        reasons.push(format!(
-            "High ground — {:.0} m mean elevation, {:.0} m at the highest point — terraced above the flood and hard to attack.",
-            s.elev_mean_m(),
-            s.elev_max_m
-        ));
-    } else {
-        reasons.push(format!(
-            "Gentle ground — {:.0} m mean elevation, {:.0} m at the highest point: ploughable plain rather than crag.",
-            s.elev_mean_m(),
-            s.elev_max_m
-        ));
-    }
-    if nearest_km.is_finite() {
-        reasons.push(format!(
-            "Nearest other cradle: about {} km away.",
-            thousands(nearest_km)
-        ));
-    }
-
-    // The same story in a handful of words, for the atlas hover card: no
-    // figures, no province ids, just the things a traveller would have noticed.
-    let mut highlights: Vec<String> = Vec::new();
-    if s.flow_max >= great_river_flow {
-        highlights.push("A great river at its door".to_string());
-    } else if s.flow_max >= min_river_flow {
-        highlights.push("A navigable river through its fields".to_string());
-    } else {
-        highlights.push("Rain-fed fields, no river needed".to_string());
-    }
-    if s.is_coastal() {
-        highlights.push("A shore for fish and salt".to_string());
-    }
-    if s.lake_px > 0 {
-        highlights.push("A lake for fish, reeds and fresh water".to_string());
-    }
-    if s.elev_mean_m() >= 900.0 {
-        highlights.push("High, defensible ground".to_string());
-    }
-    if richest_rank == 0 {
-        highlights.push("Ground nobody had taken".to_string());
-    }
-
-    RiseProfile {
-        kind,
-        headline: format!("{} — {}.", kind.label(), kind.describe()),
-        reasons,
-        highlights,
-        seat: format!(
-            "Seat province #{} · area #{} · region #{} · superregion #{} · continent #{} · {:.1}° {}",
-            sk.cradle.prov,
-            node.area_id,
-            node.region_id,
-            node.superregion_id,
-            node.continent_id,
-            seat_latitude_deg.abs(),
-            if seat_latitude_deg >= 0.0 { "N" } else { "S" },
-        ),
-    }
-}
-
-/// Why a *people* live where they live.
-///
-/// Not a cradle story at all: nobody founded them and nobody chose their site. What
-/// the atlas owes the reader instead is their country — what it gives, what it
-/// refuses, and why nobody ever turned it into fields.
-fn build_people_rise(
-    sk: &Skeleton,
-    hierarchy: &GeopoliticalHierarchy,
-    seat_latitude_deg: f32,
-) -> RiseProfile {
-    let s = &sk.seat_stats;
-    let prov = sk.cradle.prov;
-    let node = &hierarchy.provinces[prov as usize];
-    let mut reasons: Vec<String> = vec![format!(
-        "{} — {}.",
-        sk.environment.label(),
-        sk.environment.describe()
-    )];
-    reasons.push(format!(
-        "Habitability {:.2}: {}.",
-        s.hab_mean(),
-        if sk.tier == SocietyTier::HunterGatherers {
-            "too poor to plough, which is why nobody ever did"
-        } else {
-            "enough to feed the people who live here, and no more"
-        }
-    ));
-    if s.flow_max >= 1.0 {
-        reasons.push(format!(
-            "Its rivers peak at {} m³/s: fishing water, drinking water, and the road a people use where there is no track.",
-            thousands(s.flow_max)
-        ));
-    }
-    if s.is_coastal() || s.lake_px > 0 {
-        reasons.push(format!(
-            "{} pixels of shore — the water is the richest ground these people have.",
-            thousands_u64((s.sea_px + s.lake_px) as u64)
-        ));
-    }
-    reasons.push(format!(
-        "Mean {:.1} °C and {:.0} mm/yr of rain, over {:.0} m of mean elevation.",
-        s.temp_mean(),
-        s.precip_mean() * 1200.0,
-        s.elev_mean_m()
-    ));
-    reasons.push(format!(
-        "It sits at {:.1}° {}, which fixes the season the whole year turns on.",
-        seat_latitude_deg.abs(),
-        if seat_latitude_deg >= 0.0 { "N" } else { "S" }
-    ));
-
-    let mut highlights: Vec<String> = vec![sk.environment.label().to_string()];
-    if s.is_coastal() || s.lake_px > 0 {
-        highlights.push("Water for fish and for the road".to_string());
-    }
-    if s.flow_max >= 1.0 {
-        highlights.push("A river through the country".to_string());
-    } else {
-        highlights.push("Dry country: the water is underground".to_string());
-    }
-    highlights.push(format!(
-        "{} provinces of it",
-        thousands_u64(sk.provinces.len() as u64)
-    ));
-
-    RiseProfile {
-        kind: sk.cradle_kind,
-        headline: format!("A country of {}", sk.tier.label().to_lowercase()),
-        reasons,
-        highlights,
-        seat: format!(
-            "Heartland province #{} · area #{} · region #{} · superregion #{} · continent #{} · {:.1}° {}",
-            prov,
-            node.area_id,
-            node.region_id,
-            node.superregion_id,
-            node.continent_id,
-            seat_latitude_deg.abs(),
-            if seat_latitude_deg >= 0.0 { "N" } else { "S" },
-        ),
-    }
-}
-
 
 #[cfg(test)]
 mod tests {
@@ -3791,7 +3253,7 @@ mod tests {
     fn a_developed_realm_is_always_a_state() {
         for subsistence in ECONOMIES {
             for outlook in [
-                Outlook::Agrarian,
+                Outlook::Cosmopolitan,
                 Outlook::Mercantile,
                 Outlook::Martial,
                 Outlook::Scholarly,
@@ -3822,7 +3284,7 @@ mod tests {
             build_government(
                 &mut rng,
                 Subsistence::IrrigatedAgriculture,
-                Outlook::Agrarian,
+                Outlook::Ceremonial,
                 ScaleClass::Large,
                 0.02,
             ),
@@ -3832,7 +3294,7 @@ mod tests {
             build_government(
                 &mut rng,
                 Subsistence::IrrigatedAgriculture,
-                Outlook::Agrarian,
+                Outlook::Ceremonial,
                 ScaleClass::Large,
                 0.20,
             ),
@@ -3919,7 +3381,7 @@ mod tests {
             let village = build_government(
                 &mut rng,
                 Subsistence::DrylandFarming,
-                Outlook::Agrarian,
+                Outlook::Ceremonial,
                 ScaleClass::Small,
                 village_level,
             );
@@ -3932,7 +3394,7 @@ mod tests {
             let chiefdom = build_government(
                 &mut rng,
                 Subsistence::DrylandFarming,
-                Outlook::Agrarian,
+                Outlook::Ceremonial,
                 ScaleClass::Small,
                 chiefdom_level,
             );
@@ -4143,14 +3605,7 @@ mod tests {
         let (mut societies, mut tiers) = singletons(2, SocietyTier::ComplexFarmers);
         let mut config = CivilizationConfig::default();
         config.complex_farmer_merge_km2 = 15_000.0;
-        let merged = merge_peoples(
-            &mut societies,
-            &mut tiers,
-            0,
-            &stats,
-            &hierarchy,
-            &config,
-        );
+        let merged = merge_peoples(&mut societies, &mut tiers, 0, &stats, &hierarchy, &config);
         assert_eq!(merged, 0);
         assert_eq!(societies.len(), 2);
     }
@@ -4184,7 +3639,7 @@ mod tests {
                 &mut societies,
                 &mut tiers,
                 0,
-                    &stats,
+                &stats,
                 &hierarchy,
                 &CivilizationConfig::default(),
             );
@@ -4244,5 +3699,40 @@ mod tests {
         let owner = vec![0u16; 5];
         clean_tier_speckle(&mut tiers, &owner, &land, &stats, &hierarchy);
         assert_eq!(tiers[0], SocietyTier::HunterGatherers.index());
+    }
+
+    /// Cosmopolitan is a state phenomenon: no band, herd people or farming
+    /// village can draw it, and a state can.
+    #[test]
+    fn cosmopolitan_is_reserved_for_states() {
+        for tier in [
+            SocietyTier::HunterGatherers,
+            SocietyTier::NomadicPastoralists,
+            SocietyTier::SimpleFarmers,
+            SocietyTier::ComplexFarmers,
+        ] {
+            for subsistence in ECONOMIES {
+                let mut rng = ChaCha8Rng::seed_from_u64(31);
+                for _ in 0..200 {
+                    assert_ne!(
+                        choose_outlook(&mut rng, subsistence, tier),
+                        Outlook::Cosmopolitan,
+                        "{tier:?} under {subsistence:?} drew a cosmopolitan temper"
+                    );
+                }
+            }
+        }
+
+        let mut rng = ChaCha8Rng::seed_from_u64(31);
+        assert!(
+            (0..500).any(|_| {
+                choose_outlook(
+                    &mut rng,
+                    Subsistence::IrrigatedAgriculture,
+                    SocietyTier::States,
+                ) == Outlook::Cosmopolitan
+            }),
+            "no state ever drew a cosmopolitan temper"
+        );
     }
 }

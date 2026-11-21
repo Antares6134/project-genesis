@@ -1,6 +1,6 @@
 use crate::core::fmt::thousands;
-use crate::core::polar::{ICE_SHELF_TEMP, PACK_ICE_TEMP};
-use crate::core::{relief, Grid};
+use crate::core::polar::{GLACIAL_LAND_TEMP, ICE_SHELF_TEMP, PACK_ICE_TEMP};
+use crate::core::{Grid, relief};
 use crate::geopolitics::GeopoliticalHierarchy;
 use image::{ImageBuffer, Luma, RgbImage};
 use noise::{NoiseFn, OpenSimplex};
@@ -18,7 +18,15 @@ fn lerp_color(c1: [u8; 3], c2: [u8; 3], t: f32) -> [u8; 3] {
 }
 
 #[inline(always)]
-fn sample_3d_fbm(noise: &OpenSimplex, x: f64, y: f64, z: f64, octaves: usize, lacunarity: f64, persistence: f64) -> f32 {
+fn sample_3d_fbm(
+    noise: &OpenSimplex,
+    x: f64,
+    y: f64,
+    z: f64,
+    octaves: usize,
+    lacunarity: f64,
+    persistence: f64,
+) -> f32 {
     let mut total = 0.0f64;
     let mut amplitude = 1.0f64;
     let mut frequency = 1.0f64;
@@ -40,9 +48,9 @@ fn sample_3d_fbm(noise: &OpenSimplex, x: f64, y: f64, z: f64, octaves: usize, la
 /// *Topographic* scope, its legend panel and the headless topographic export all
 /// paint a pixel of a given elevation in exactly the same colour.
 pub const HYPSOMETRIC_EDGES: [f32; 21] = [
-    -11_000.0, -9_000.0, -8_000.0, -7_000.0, -6_000.0, -5_000.0, -4_000.0,
-    -3_000.0, -2_000.0, -1_000.0, -200.0, 0.0, 200.0, 500.0, 1_000.0, 2_000.0,
-    3_000.0, 4_500.0, 6_000.0, 8_000.0, 9_000.0,
+    -11_000.0, -9_000.0, -8_000.0, -7_000.0, -6_000.0, -5_000.0, -4_000.0, -3_000.0, -2_000.0,
+    -1_000.0, -200.0, 0.0, 200.0, 500.0, 1_000.0, 2_000.0, 3_000.0, 4_500.0, 6_000.0, 8_000.0,
+    9_000.0,
 ];
 
 /// Colour of each of the twenty bands between consecutive [`HYPSOMETRIC_EDGES`]:
@@ -138,7 +146,11 @@ mod tests {
         assert_eq!(hypsometric_band(50_000.0), HYPSOMETRIC_COLORS.len() - 1);
         for band in 0..HYPSOMETRIC_COLORS.len() {
             let midpoint = (HYPSOMETRIC_EDGES[band] + HYPSOMETRIC_EDGES[band + 1]) * 0.5;
-            assert_eq!(hypsometric_band(midpoint), band, "band {band} is unreachable");
+            assert_eq!(
+                hypsometric_band(midpoint),
+                band,
+                "band {band} is unreachable"
+            );
         }
     }
 
@@ -159,29 +171,52 @@ mod tests {
         assert_eq!(thousands(-5000.0), "-5 000");
         assert_eq!(thousands(200.0), "200");
     }
+
+    #[test]
+    fn glacial_ice_is_the_shared_biome_threshold() {
+        // The province generator reads `GLACIAL_LAND_TEMP` too, so the biome
+        // painter and the partition can never disagree about where the sheet
+        // begins. `-3.0` exactly is still tundra, not ice.
+        assert_eq!(
+            get_biome_name(GLACIAL_LAND_TEMP - 0.01, 0.5, 0.1),
+            "Glacial Ice Sheet"
+        );
+        assert_ne!(
+            get_biome_name(GLACIAL_LAND_TEMP, 0.5, 0.1),
+            "Glacial Ice Sheet"
+        );
+        assert_eq!(
+            get_atlas_biome_color(GLACIAL_LAND_TEMP - 0.01, 0.5, 0.1),
+            [242, 246, 250]
+        );
+    }
 }
 
 pub fn get_atlas_biome_color(temp: f32, precip: f32, altitude: f32) -> [u8; 3] {
-    if temp < -3.0 {
+    if temp < GLACIAL_LAND_TEMP {
         return [242, 246, 250];
     } else if temp < 0.5 && altitude > 0.16 {
         let t = (0.5 - temp) / 3.5;
         return lerp_color([125, 120, 115], [242, 246, 250], t);
     } else if altitude > 0.18 {
         let t = ((altitude - 0.18) / 0.14).clamp(0.0, 1.0);
-        let base = if precip < 0.35 { [165, 150, 120] } else { [85, 120, 80] };
+        let base = if precip < 0.35 {
+            [165, 150, 120]
+        } else {
+            [85, 120, 80]
+        };
         return lerp_color(base, [115, 105, 95], t);
     }
 
-    let ice_cap          = [242, 246, 250];
-    let tundra           = [158, 165, 142];
-    let taiga            = [56, 95, 68];
-    let cold_steppe      = [168, 160, 128];
-    let prairie          = [148, 168, 105];
+    let ice_cap = [242, 246, 250];
+    let tundra = [158, 165, 142];
+    let taiga = [56, 95, 68];
+    let cold_steppe = [168, 160, 128];
+    let prairie = [148, 168, 105];
     let deciduous_forest = [78, 138, 75];
-    let rainforest       = [28, 92, 44];
-    let savanna          = [178, 168, 98];
-    let desert           = [218, 192, 138];
+    let rainforest = [28, 92, 44];
+    let savanna = [178, 168, 98];
+    let desert = [218, 192, 138];
 
     if temp < 2.0 {
         let t = (temp + 3.0) / 5.0;
@@ -213,16 +248,24 @@ pub fn get_atlas_biome_color(temp: f32, precip: f32, altitude: f32) -> [u8; 3] {
 }
 
 pub fn get_biome_name(temp: f32, precip: f32, altitude: f32) -> &'static str {
-    if temp < -3.0 {
+    if temp < GLACIAL_LAND_TEMP {
         "Glacial Ice Sheet"
     } else if temp < 0.5 && altitude > 0.16 {
         "Alpine Snow Peak"
     } else if altitude > 0.18 {
-        if precip < 0.35 { "Arid Mountain Plateau" } else { "Alpine Mountain Ridge" }
+        if precip < 0.35 {
+            "Arid Mountain Plateau"
+        } else {
+            "Alpine Mountain Ridge"
+        }
     } else if temp < 2.0 {
         "Arctic Tundra"
     } else if temp < 14.0 {
-        if precip < 0.30 { "Cold Steppe" } else { "Boreal Taiga" }
+        if precip < 0.30 {
+            "Cold Steppe"
+        } else {
+            "Boreal Taiga"
+        }
     } else if temp < 24.0 {
         if precip < 0.16 {
             "Temperate Semi-Arid Scrub"
@@ -271,9 +314,15 @@ pub fn id_to_territory_color(id: u32) -> [f32; 3] {
 }
 
 pub fn save_physical_map<P: AsRef<Path>>(
-    heightmap: &Grid<f32>, temp_grid: &Grid<f32>, precip_grid: &Grid<f32>,
-    flow_grid: &Grid<f32>, is_lake: &Grid<bool>, sea_level: f32,
-    min_river_flow: f32, major_river_flow: f32, path: P,
+    heightmap: &Grid<f32>,
+    temp_grid: &Grid<f32>,
+    precip_grid: &Grid<f32>,
+    flow_grid: &Grid<f32>,
+    is_lake: &Grid<bool>,
+    sea_level: f32,
+    min_river_flow: f32,
+    major_river_flow: f32,
+    path: P,
 ) -> Result<(), image::ImageError> {
     let w = heightmap.width as u32;
     let h = heightmap.height as u32;
@@ -283,79 +332,91 @@ pub fn save_physical_map<P: AsRef<Path>>(
     let render_noise = OpenSimplex::new(777);
 
     let raw_pixels: &mut [u8] = img.as_mut();
-    raw_pixels.par_chunks_exact_mut((w * 3) as usize).enumerate().for_each(|(y_idx, row)| {
-        let y = y_idx as isize;
-        let v = y_idx as f32 / (h - 1) as f32;
-        let lat = (0.5 - v) * std::f32::consts::PI;
-        
-        for x_idx in 0..w {
-            let x = x_idx as isize;
-            let u = x_idx as f32 / w as f32;
-            let lon = (u - 0.5) * std::f32::consts::TAU;
+    raw_pixels
+        .par_chunks_exact_mut((w * 3) as usize)
+        .enumerate()
+        .for_each(|(y_idx, row)| {
+            let y = y_idx as isize;
+            let v = y_idx as f32 / (h - 1) as f32;
+            let lat = (0.5 - v) * std::f32::consts::PI;
 
-            let px = (lat.cos() * lon.cos()) as f64;
-            let py = lat.sin() as f64;
-            let pz = (lat.cos() * lon.sin()) as f64;
-            
-            // Fractal Micro-Climate: shatters the smooth temperature bounds!
-            let micro_noise = sample_3d_fbm(&render_noise, px * 35.0, py * 35.0, pz * 35.0, 4, 2.0, 0.5);
+            for x_idx in 0..w {
+                let x = x_idx as isize;
+                let u = x_idx as f32 / w as f32;
+                let lon = (u - 0.5) * std::f32::consts::TAU;
 
-            let elev = *heightmap.get(x, y);
-            let temp = *temp_grid.get(x, y);
-            let precip = *precip_grid.get(x, y);
-            
-            let display_temp = temp + micro_noise * 5.5;
+                let px = (lat.cos() * lon.cos()) as f64;
+                let py = lat.sin() as f64;
+                let pz = (lat.cos() * lon.sin()) as f64;
 
-            let (gx, gy) = heightmap.gradient(x as f32, y as f32);
-            let slope = (gx * gx + gy * gy).sqrt();
-            let hillshade = -(gx * lx + gy * ly);
-            let mut shade = (1.0 + hillshade * 5.5 - slope * 1.5).clamp(0.65, 1.38);
-            if y < 2 || y > (h as isize - 3) { shade = 1.0; }
+                // Fractal Micro-Climate: shatters the smooth temperature bounds!
+                let micro_noise =
+                    sample_3d_fbm(&render_noise, px * 35.0, py * 35.0, pz * 35.0, 4, 2.0, 0.5);
 
-            // A lake is fresh water wherever its surface sits — even below the
-            // datum, where a landlocked basin keeps a below-sea-level water line.
-            // Testing `is_lake` first keeps such a body lake-coloured instead of
-            // painting it as open sea.
-            let mut final_color: [f32; 3] = if *is_lake.get(x, y) {
-                [42.0, 125.0, 185.0]
-            } else if elev <= sea_level {
-                if display_temp < -8.0 {
-                    [245.0, 248.0, 255.0]
-                } else if display_temp < -3.0 {
-                    [165.0, 205.0, 235.0]
-                } else {
-                    let depth = (elev / sea_level).clamp(0.0, 1.0);
-                    let shelf = depth.powf(2.8);
-                    let sea_shade = (1.0 + hillshade * 2.2).clamp(0.85, 1.15);
-                    [
-                        (12.0 * (1.0 - shelf) + 45.0 * shelf) * sea_shade,
-                        (35.0 * (1.0 - shelf) + 125.0 * shelf) * sea_shade,
-                        (75.0 * (1.0 - shelf) + 185.0 * shelf) * sea_shade,
-                    ]
+                let elev = *heightmap.get(x, y);
+                let temp = *temp_grid.get(x, y);
+                let precip = *precip_grid.get(x, y);
+
+                let display_temp = temp + micro_noise * 5.5;
+
+                let (gx, gy) = heightmap.gradient(x as f32, y as f32);
+                let slope = (gx * gx + gy * gy).sqrt();
+                let hillshade = -(gx * lx + gy * ly);
+                let mut shade = (1.0 + hillshade * 5.5 - slope * 1.5).clamp(0.65, 1.38);
+                if y < 2 || y > (h as isize - 3) {
+                    shade = 1.0;
                 }
-            } else {
-                let altitude = elev - sea_level;
-                let base = get_atlas_biome_color(display_temp, precip, altitude);
-                [(base[0] as f32 * shade).clamp(0.0, 255.0), (base[1] as f32 * shade).clamp(0.0, 255.0), (base[2] as f32 * shade).clamp(0.0, 255.0)]
-            };
 
-            let flow = *flow_grid.get(x, y);
-            if elev > sea_level && !*is_lake.get(x, y) && flow >= min_river_flow {
-                let river_strength = ((flow - min_river_flow) / major_river_flow).sqrt().clamp(0.35, 1.0);
-                let blend = (river_strength * 1.5).clamp(0.0, 1.0);
-                final_color = [
-                    final_color[0] * (1.0 - blend) + 20.0 * blend,
-                    final_color[1] * (1.0 - blend) + 75.0 * blend,
-                    final_color[2] * (1.0 - blend) + 150.0 * blend,
-                ];
+                // A lake is fresh water wherever its surface sits — even below the
+                // datum, where a landlocked basin keeps a below-sea-level water line.
+                // Testing `is_lake` first keeps such a body lake-coloured instead of
+                // painting it as open sea.
+                let mut final_color: [f32; 3] = if *is_lake.get(x, y) {
+                    [42.0, 125.0, 185.0]
+                } else if elev <= sea_level {
+                    if display_temp < ICE_SHELF_TEMP {
+                        [245.0, 248.0, 255.0]
+                    } else if display_temp < PACK_ICE_TEMP {
+                        [165.0, 205.0, 235.0]
+                    } else {
+                        let depth = (elev / sea_level).clamp(0.0, 1.0);
+                        let shelf = depth.powf(2.8);
+                        let sea_shade = (1.0 + hillshade * 2.2).clamp(0.85, 1.15);
+                        [
+                            (12.0 * (1.0 - shelf) + 45.0 * shelf) * sea_shade,
+                            (35.0 * (1.0 - shelf) + 125.0 * shelf) * sea_shade,
+                            (75.0 * (1.0 - shelf) + 185.0 * shelf) * sea_shade,
+                        ]
+                    }
+                } else {
+                    let altitude = elev - sea_level;
+                    let base = get_atlas_biome_color(display_temp, precip, altitude);
+                    [
+                        (base[0] as f32 * shade).clamp(0.0, 255.0),
+                        (base[1] as f32 * shade).clamp(0.0, 255.0),
+                        (base[2] as f32 * shade).clamp(0.0, 255.0),
+                    ]
+                };
+
+                let flow = *flow_grid.get(x, y);
+                if elev > sea_level && !*is_lake.get(x, y) && flow >= min_river_flow {
+                    let river_strength = ((flow - min_river_flow) / major_river_flow)
+                        .sqrt()
+                        .clamp(0.35, 1.0);
+                    let blend = (river_strength * 1.5).clamp(0.0, 1.0);
+                    final_color = [
+                        final_color[0] * (1.0 - blend) + 20.0 * blend,
+                        final_color[1] * (1.0 - blend) + 75.0 * blend,
+                        final_color[2] * (1.0 - blend) + 150.0 * blend,
+                    ];
+                }
+
+                let pixel_idx = (x_idx * 3) as usize;
+                row[pixel_idx] = final_color[0] as u8;
+                row[pixel_idx + 1] = final_color[1] as u8;
+                row[pixel_idx + 2] = final_color[2] as u8;
             }
-
-            let pixel_idx = (x_idx * 3) as usize;
-            row[pixel_idx]     = final_color[0] as u8;
-            row[pixel_idx + 1] = final_color[1] as u8;
-            row[pixel_idx + 2] = final_color[2] as u8;
-        }
-    });
+        });
 
     img.save(path)
 }
@@ -371,9 +432,14 @@ pub fn save_physical_map<P: AsRef<Path>>(
 /// slope, broad abyssal plains, and trench floors dropping to −11 km. Rivers,
 /// lakes and the polar ice are drawn on top.
 pub fn save_topographic_map<P: AsRef<Path>>(
-    heightmap: &Grid<f32>, temp_grid: &Grid<f32>, flow_grid: &Grid<f32>,
-    is_lake: &Grid<bool>, sea_level: f32,
-    min_river_flow: f32, major_river_flow: f32, path: P,
+    heightmap: &Grid<f32>,
+    temp_grid: &Grid<f32>,
+    flow_grid: &Grid<f32>,
+    is_lake: &Grid<bool>,
+    sea_level: f32,
+    min_river_flow: f32,
+    major_river_flow: f32,
+    path: P,
 ) -> Result<(), image::ImageError> {
     let w = heightmap.width as u32;
     let h = heightmap.height as u32;
@@ -383,86 +449,98 @@ pub fn save_topographic_map<P: AsRef<Path>>(
     let render_noise = OpenSimplex::new(777);
 
     let raw_pixels: &mut [u8] = img.as_mut();
-    raw_pixels.par_chunks_exact_mut((w * 3) as usize).enumerate().for_each(|(y_idx, row)| {
-        let y = y_idx as isize;
-        let v = y_idx as f32 / (h - 1) as f32;
-        let lat = (0.5 - v) * std::f32::consts::PI;
+    raw_pixels
+        .par_chunks_exact_mut((w * 3) as usize)
+        .enumerate()
+        .for_each(|(y_idx, row)| {
+            let y = y_idx as isize;
+            let v = y_idx as f32 / (h - 1) as f32;
+            let lat = (0.5 - v) * std::f32::consts::PI;
 
-        for x_idx in 0..w {
-            let x = x_idx as isize;
-            let u = x_idx as f32 / w as f32;
-            let lon = (u - 0.5) * std::f32::consts::TAU;
+            for x_idx in 0..w {
+                let x = x_idx as isize;
+                let u = x_idx as f32 / w as f32;
+                let lon = (u - 0.5) * std::f32::consts::TAU;
 
-            let px = (lat.cos() * lon.cos()) as f64;
-            let py = lat.sin() as f64;
-            let pz = (lat.cos() * lon.sin()) as f64;
-            let micro_noise = sample_3d_fbm(&render_noise, px * 35.0, py * 35.0, pz * 35.0, 4, 2.0, 0.5);
+                let px = (lat.cos() * lon.cos()) as f64;
+                let py = lat.sin() as f64;
+                let pz = (lat.cos() * lon.sin()) as f64;
+                let micro_noise =
+                    sample_3d_fbm(&render_noise, px * 35.0, py * 35.0, pz * 35.0, 4, 2.0, 0.5);
 
-            let elev = *heightmap.get(x, y);
-            let display_temp = *temp_grid.get(x, y) + micro_noise * 5.5;
-            let metres = relief::to_metres(elev);
+                let elev = *heightmap.get(x, y);
+                let display_temp = *temp_grid.get(x, y) + micro_noise * 5.5;
+                let metres = relief::to_metres(elev);
 
-            let (gx, gy) = heightmap.gradient(x as f32, y as f32);
-            let slope = (gx * gx + gy * gy).sqrt();
-            let hillshade = -(gx * lx + gy * ly);
-            let mut shade = (1.0 + hillshade * 5.5 - slope * 1.5).clamp(0.65, 1.38);
-            if y < 2 || y > (h as isize - 3) { shade = 1.0; }
-
-            let is_lake_px = *is_lake.get(x, y);
-            let mut final_color: [f32; 3];
-
-            // Lake first: a landlocked basin may hold its surface below the datum,
-            // and it must still read as a lake rather than as sea floor.
-            if is_lake_px {
-                final_color = [42.0, 125.0, 185.0];
-            } else if elev <= sea_level {
-                let band = hypsometric_color(metres);
-                final_color = [band[0] as f32, band[1] as f32, band[2] as f32];
-                // Frozen seas read as "polar land": a drifting pack-ice veneer
-                // for the seasonal fringe, a solid ice shelf deeper inside.
-                if display_temp < ICE_SHELF_TEMP {
-                    final_color = blend(final_color, [246.0, 249.0, 255.0], 0.90);
-                } else if display_temp < PACK_ICE_TEMP {
-                    final_color = blend(final_color, [222.0, 236.0, 250.0], 0.70);
+                let (gx, gy) = heightmap.gradient(x as f32, y as f32);
+                let slope = (gx * gx + gy * gy).sqrt();
+                let hillshade = -(gx * lx + gy * ly);
+                let mut shade = (1.0 + hillshade * 5.5 - slope * 1.5).clamp(0.65, 1.38);
+                if y < 2 || y > (h as isize - 3) {
+                    shade = 1.0;
                 }
-            } else {
-                let band = hypsometric_color(metres);
-                final_color = [
-                    band[0] as f32 * shade,
-                    band[1] as f32 * shade,
-                    band[2] as f32 * shade,
-                ];
-                // Capped with permanent ice — keep the terrain readable
-                // underneath a translucent ice veneer instead of blanking it out.
-                if display_temp < -3.0 {
-                    final_color = blend(final_color, [238.0, 244.0, 252.0], 0.75);
+
+                let is_lake_px = *is_lake.get(x, y);
+                let mut final_color: [f32; 3];
+
+                // Lake first: a landlocked basin may hold its surface below the datum,
+                // and it must still read as a lake rather than as sea floor.
+                if is_lake_px {
+                    final_color = [42.0, 125.0, 185.0];
+                } else if elev <= sea_level {
+                    let band = hypsometric_color(metres);
+                    final_color = [band[0] as f32, band[1] as f32, band[2] as f32];
+                    // Frozen seas read as "polar land": a drifting pack-ice veneer
+                    // for the seasonal fringe, a solid ice shelf deeper inside.
+                    if display_temp < ICE_SHELF_TEMP {
+                        final_color = blend(final_color, [246.0, 249.0, 255.0], 0.90);
+                    } else if display_temp < PACK_ICE_TEMP {
+                        final_color = blend(final_color, [222.0, 236.0, 250.0], 0.70);
+                    }
+                } else {
+                    let band = hypsometric_color(metres);
+                    final_color = [
+                        band[0] as f32 * shade,
+                        band[1] as f32 * shade,
+                        band[2] as f32 * shade,
+                    ];
+                    // Capped with permanent ice — keep the terrain readable
+                    // underneath a translucent ice veneer instead of blanking it out.
+                    if display_temp < GLACIAL_LAND_TEMP {
+                        final_color = blend(final_color, [238.0, 244.0, 252.0], 0.75);
+                    }
+                    let flow = *flow_grid.get(x, y);
+                    if flow >= min_river_flow {
+                        let river_strength = ((flow - min_river_flow) / major_river_flow)
+                            .sqrt()
+                            .clamp(0.25, 1.0);
+                        let blend_t = (river_strength * 1.35).clamp(0.0, 1.0);
+                        final_color = blend(final_color, [20.0, 85.0, 160.0], blend_t);
+                    }
                 }
-                let flow = *flow_grid.get(x, y);
-                if flow >= min_river_flow {
-                    let river_strength = ((flow - min_river_flow) / major_river_flow).sqrt().clamp(0.25, 1.0);
-                    let blend_t = (river_strength * 1.35).clamp(0.0, 1.0);
-                    final_color = blend(final_color, [20.0, 85.0, 160.0], blend_t);
+
+                // A contour line along every hypsometric band boundary.
+                let band = hypsometric_band(metres);
+                let right = hypsometric_band(relief::to_metres(*heightmap.get(x + 1, y)));
+                let down = if y + 1 < h as isize {
+                    hypsometric_band(relief::to_metres(*heightmap.get(x, y + 1)))
+                } else {
+                    band
+                };
+                if right != band || down != band {
+                    final_color = [
+                        final_color[0] * 0.62,
+                        final_color[1] * 0.62,
+                        final_color[2] * 0.62,
+                    ];
                 }
+
+                let pixel_idx = (x_idx * 3) as usize;
+                row[pixel_idx] = final_color[0].clamp(0.0, 255.0) as u8;
+                row[pixel_idx + 1] = final_color[1].clamp(0.0, 255.0) as u8;
+                row[pixel_idx + 2] = final_color[2].clamp(0.0, 255.0) as u8;
             }
-
-            // A contour line along every hypsometric band boundary.
-            let band = hypsometric_band(metres);
-            let right = hypsometric_band(relief::to_metres(*heightmap.get(x + 1, y)));
-            let down = if y + 1 < h as isize {
-                hypsometric_band(relief::to_metres(*heightmap.get(x, y + 1)))
-            } else {
-                band
-            };
-            if right != band || down != band {
-                final_color = [final_color[0] * 0.62, final_color[1] * 0.62, final_color[2] * 0.62];
-            }
-
-            let pixel_idx = (x_idx * 3) as usize;
-            row[pixel_idx]     = final_color[0].clamp(0.0, 255.0) as u8;
-            row[pixel_idx + 1] = final_color[1].clamp(0.0, 255.0) as u8;
-            row[pixel_idx + 2] = final_color[2].clamp(0.0, 255.0) as u8;
-        }
-    });
+        });
 
     img.save(path)
 }
@@ -479,9 +557,17 @@ fn blend(base: [f32; 3], over: [f32; 3], t: f32) -> [f32; 3] {
 }
 
 pub fn save_hierarchical_political_map<P: AsRef<Path>>(
-    heightmap: &Grid<f32>, temp_grid: &Grid<f32>, precip_grid: &Grid<f32>,
-    flow_grid: &Grid<f32>, is_lake: &Grid<bool>, hierarchy: &GeopoliticalHierarchy,
-    province_grid: &Grid<u32>, sea_level: f32, min_river_flow: f32, major_river_flow: f32, path: P,
+    heightmap: &Grid<f32>,
+    temp_grid: &Grid<f32>,
+    precip_grid: &Grid<f32>,
+    flow_grid: &Grid<f32>,
+    is_lake: &Grid<bool>,
+    hierarchy: &GeopoliticalHierarchy,
+    province_grid: &Grid<u32>,
+    sea_level: f32,
+    min_river_flow: f32,
+    major_river_flow: f32,
+    path: P,
 ) -> Result<(), image::ImageError> {
     let w = heightmap.width as u32;
     let h = heightmap.height as u32;
@@ -494,7 +580,7 @@ pub fn save_hierarchical_political_map<P: AsRef<Path>>(
     let mut area_lut = vec![0u32; hierarchy.provinces.len()];
     let mut region_lut = vec![0u32; hierarchy.provinces.len()];
     let mut super_lut = vec![0u32; hierarchy.provinces.len()]; // FIXED: Now defined!
-    
+
     for p in &hierarchy.provinces {
         area_lut[p.id as usize] = p.area_id;
         region_lut[p.id as usize] = p.region_id;
@@ -502,141 +588,167 @@ pub fn save_hierarchical_political_map<P: AsRef<Path>>(
     }
 
     let raw_pixels: &mut [u8] = img.as_mut();
-    raw_pixels.par_chunks_exact_mut((w * 3) as usize).enumerate().for_each(|(y_idx, row)| {
-        let y = y_idx as isize;
-        let v = y_idx as f32 / (h - 1) as f32;
-        let lat = (0.5 - v) * std::f32::consts::PI;
+    raw_pixels
+        .par_chunks_exact_mut((w * 3) as usize)
+        .enumerate()
+        .for_each(|(y_idx, row)| {
+            let y = y_idx as isize;
+            let v = y_idx as f32 / (h - 1) as f32;
+            let lat = (0.5 - v) * std::f32::consts::PI;
 
-        for x_idx in 0..w {
-            let x = x_idx as isize;
-            let u = x_idx as f32 / w as f32;
-            let lon = (u - 0.5) * std::f32::consts::TAU;
+            for x_idx in 0..w {
+                let x = x_idx as isize;
+                let u = x_idx as f32 / w as f32;
+                let lon = (u - 0.5) * std::f32::consts::TAU;
 
-            let px = (lat.cos() * lon.cos()) as f64;
-            let py = lat.sin() as f64;
-            let pz = (lat.cos() * lon.sin()) as f64;
+                let px = (lat.cos() * lon.cos()) as f64;
+                let py = lat.sin() as f64;
+                let pz = (lat.cos() * lon.sin()) as f64;
 
-            let micro_noise = sample_3d_fbm(&render_noise, px * 35.0, py * 35.0, pz * 35.0, 4, 2.0, 0.5);
+                let micro_noise =
+                    sample_3d_fbm(&render_noise, px * 35.0, py * 35.0, pz * 35.0, 4, 2.0, 0.5);
 
-            let elev = *heightmap.get(x, y);
-            let temp = *temp_grid.get(x, y);
-            let precip = *precip_grid.get(x, y);
-            let display_temp = temp + micro_noise * 5.5;
+                let elev = *heightmap.get(x, y);
+                let temp = *temp_grid.get(x, y);
+                let precip = *precip_grid.get(x, y);
+                let display_temp = temp + micro_noise * 5.5;
 
-            let (gx, gy) = heightmap.gradient(x as f32, y as f32);
-            let slope = (gx * gx + gy * gy).sqrt();
-            let hillshade = -(gx * lx + gy * ly);
-            let mut shade = (1.0 + hillshade * 5.5 - slope * 1.5).clamp(0.65, 1.38);
-            if y < 2 || y > (h as isize - 3) { shade = 1.0; }
+                let (gx, gy) = heightmap.gradient(x as f32, y as f32);
+                let slope = (gx * gx + gy * gy).sqrt();
+                let hillshade = -(gx * lx + gy * ly);
+                let mut shade = (1.0 + hillshade * 5.5 - slope * 1.5).clamp(0.65, 1.38);
+                if y < 2 || y > (h as isize - 3) {
+                    shade = 1.0;
+                }
 
-            let mut final_color: [f32; 3];
+                let mut final_color: [f32; 3];
 
-            // Lakes first, exactly as the viewer's political scopes draw them: a
-            // landlocked basin below the datum is fresh water, not sea.
-            if *is_lake.get(x, y) {
-                final_color = [42.0, 125.0, 185.0];
-            } else if elev <= sea_level {
-                if display_temp < -8.0 {
-                    final_color = [245.0, 248.0, 255.0];
-                } else if display_temp < -3.0 {
-                    final_color = [175.0, 210.0, 235.0];
+                // Lakes first, exactly as the viewer's political scopes draw them: a
+                // landlocked basin below the datum is fresh water, not sea.
+                if *is_lake.get(x, y) {
+                    final_color = [42.0, 125.0, 185.0];
+                } else if elev <= sea_level {
+                    if display_temp < ICE_SHELF_TEMP {
+                        final_color = [245.0, 248.0, 255.0];
+                    } else if display_temp < PACK_ICE_TEMP {
+                        final_color = [175.0, 210.0, 235.0];
+                    } else {
+                        let depth = (elev / sea_level).clamp(0.0, 1.0);
+                        let shelf = depth.powf(2.8);
+                        let sea_shade = (1.0 + hillshade * 2.2).clamp(0.85, 1.15);
+                        final_color = [
+                            (12.0 * (1.0 - shelf) + 45.0 * shelf) * sea_shade,
+                            (35.0 * (1.0 - shelf) + 125.0 * shelf) * sea_shade,
+                            (75.0 * (1.0 - shelf) + 185.0 * shelf) * sea_shade,
+                        ];
+                    }
                 } else {
-                    let depth = (elev / sea_level).clamp(0.0, 1.0);
-                    let shelf = depth.powf(2.8);
-                    let sea_shade = (1.0 + hillshade * 2.2).clamp(0.85, 1.15);
+                    let altitude = elev - sea_level;
+                    let base = get_atlas_biome_color(display_temp, precip, altitude);
                     final_color = [
-                        (12.0 * (1.0 - shelf) + 45.0 * shelf) * sea_shade,
-                        (35.0 * (1.0 - shelf) + 125.0 * shelf) * sea_shade,
-                        (75.0 * (1.0 - shelf) + 185.0 * shelf) * sea_shade,
+                        (base[0] as f32 * shade).clamp(0.0, 255.0),
+                        (base[1] as f32 * shade).clamp(0.0, 255.0),
+                        (base[2] as f32 * shade).clamp(0.0, 255.0),
                     ];
                 }
-            } else {
-                let altitude = elev - sea_level;
-                let base = get_atlas_biome_color(display_temp, precip, altitude);
-                final_color = [(base[0] as f32 * shade).clamp(0.0, 255.0), (base[1] as f32 * shade).clamp(0.0, 255.0), (base[2] as f32 * shade).clamp(0.0, 255.0)];
-            }
 
-            let flow = *flow_grid.get(x, y);
-            if elev > sea_level && !*is_lake.get(x, y) && flow >= min_river_flow {
-                let river_strength = ((flow - min_river_flow) / major_river_flow).sqrt().clamp(0.25, 1.0);
-                let blend = (river_strength * 1.35).clamp(0.0, 1.0);
-                final_color = [
-                    final_color[0] * (1.0 - blend) + 20.0 * blend,
-                    final_color[1] * (1.0 - blend) + 85.0 * blend,
-                    final_color[2] * (1.0 - blend) + 160.0 * blend,
-                ];
-            }
+                let flow = *flow_grid.get(x, y);
+                if elev > sea_level && !*is_lake.get(x, y) && flow >= min_river_flow {
+                    let river_strength = ((flow - min_river_flow) / major_river_flow)
+                        .sqrt()
+                        .clamp(0.25, 1.0);
+                    let blend = (river_strength * 1.35).clamp(0.0, 1.0);
+                    final_color = [
+                        final_color[0] * (1.0 - blend) + 20.0 * blend,
+                        final_color[1] * (1.0 - blend) + 85.0 * blend,
+                        final_color[2] * (1.0 - blend) + 160.0 * blend,
+                    ];
+                }
 
-            // --- COHESIVE REGIONAL REALM COLOR BLEND ---
-            let my_id = *province_grid.get(x, y);
-            if my_id != 0 && elev > sea_level {
-                let my_reg = region_lut[my_id as usize];
-                let territory_rgb = id_to_territory_color(my_reg);
+                // --- COHESIVE REGIONAL REALM COLOR BLEND ---
+                let my_id = *province_grid.get(x, y);
+                if my_id != 0 && elev > sea_level {
+                    let my_reg = region_lut[my_id as usize];
+                    let territory_rgb = id_to_territory_color(my_reg);
 
-                final_color = [
-                    final_color[0] * 0.70 + territory_rgb[0] * 0.30,
-                    final_color[1] * 0.70 + territory_rgb[1] * 0.30,
-                    final_color[2] * 0.70 + territory_rgb[2] * 0.30,
-                ];
-            }
+                    final_color = [
+                        final_color[0] * 0.70 + territory_rgb[0] * 0.30,
+                        final_color[1] * 0.70 + territory_rgb[1] * 0.30,
+                        final_color[2] * 0.70 + territory_rgb[2] * 0.30,
+                    ];
+                }
 
-            // --- HIERARCHICAL BORDER RENDERING ---
-            if my_id != 0 {
-                let mut is_super = false;
-                let mut is_region = false;
-                let mut is_area = false;
-                let mut is_prov = false;
+                // --- HIERARCHICAL BORDER RENDERING ---
+                if my_id != 0 {
+                    let mut is_super = false;
+                    let mut is_region = false;
+                    let mut is_area = false;
+                    let mut is_prov = false;
 
-                for dy in -2..=2isize {
-                    for dx in -2..=2isize {
-                        if dx == 0 && dy == 0 { continue; }
-                        
-                        let nx = province_grid.wrap_x(x + dx) as isize;
-                        let ny = y + dy;
-                        if ny < 0 || ny >= h as isize { continue; }
+                    for dy in -2..=2isize {
+                        for dx in -2..=2isize {
+                            if dx == 0 && dy == 0 {
+                                continue;
+                            }
 
-                        let neighbor_id = *province_grid.get(nx, ny);
-                        let dist_sq = dx * dx + dy * dy;
+                            let nx = province_grid.wrap_x(x + dx) as isize;
+                            let ny = y + dy;
+                            if ny < 0 || ny >= h as isize {
+                                continue;
+                            }
 
-                        let target_elev = *heightmap.get(nx, ny);
-                        let is_wasteland_neighbor = neighbor_id == 0 && target_elev > sea_level && !*is_lake.get(nx, ny);
+                            let neighbor_id = *province_grid.get(nx, ny);
+                            let dist_sq = dx * dx + dy * dy;
 
-                        if is_wasteland_neighbor && dist_sq <= 1 {
-                            is_prov = true;
-                        } else if neighbor_id != 0 && neighbor_id != my_id {
-                            let n_sup = super_lut[neighbor_id as usize];
-                            let n_reg = region_lut[neighbor_id as usize];
-                            let n_area = area_lut[neighbor_id as usize];
+                            let target_elev = *heightmap.get(nx, ny);
+                            let is_wasteland_neighbor = neighbor_id == 0
+                                && target_elev > sea_level
+                                && !*is_lake.get(nx, ny);
 
-                            if n_sup != super_lut[my_id as usize] { is_super = true; }
-                            if n_reg != region_lut[my_id as usize] && dist_sq <= 4 { is_region = true; }
-                            if n_area != area_lut[my_id as usize] && dist_sq <= 2 { is_area = true; }
-                            if dist_sq <= 1 { is_prov = true; }
+                            if is_wasteland_neighbor && dist_sq <= 1 {
+                                is_prov = true;
+                            } else if neighbor_id != 0 && neighbor_id != my_id {
+                                let n_sup = super_lut[neighbor_id as usize];
+                                let n_reg = region_lut[neighbor_id as usize];
+                                let n_area = area_lut[neighbor_id as usize];
+
+                                if n_sup != super_lut[my_id as usize] {
+                                    is_super = true;
+                                }
+                                if n_reg != region_lut[my_id as usize] && dist_sq <= 4 {
+                                    is_region = true;
+                                }
+                                if n_area != area_lut[my_id as usize] && dist_sq <= 2 {
+                                    is_area = true;
+                                }
+                                if dist_sq <= 1 {
+                                    is_prov = true;
+                                }
+                            }
                         }
+                    }
+
+                    if is_super {
+                        final_color = [230.0, 235.0, 245.0];
+                    } else if is_region {
+                        final_color = [10.0, 10.0, 12.0];
+                    } else if is_area {
+                        final_color = [50.0, 50.0, 55.0];
+                    } else if is_prov {
+                        final_color = [
+                            final_color[0] * 0.55,
+                            final_color[1] * 0.55,
+                            final_color[2] * 0.55,
+                        ];
                     }
                 }
 
-                if is_super {
-                    final_color = [230.0, 235.0, 245.0];
-                } else if is_region {
-                    final_color = [10.0, 10.0, 12.0];
-                } else if is_area {
-                    final_color = [50.0, 50.0, 55.0];
-                } else if is_prov {
-                    final_color = [
-                        final_color[0] * 0.55,
-                        final_color[1] * 0.55,
-                        final_color[2] * 0.55,
-                    ];
-                }
+                let pixel_idx = (x_idx * 3) as usize;
+                row[pixel_idx] = final_color[0] as u8;
+                row[pixel_idx + 1] = final_color[1] as u8;
+                row[pixel_idx + 2] = final_color[2] as u8;
             }
-
-            let pixel_idx = (x_idx * 3) as usize;
-            row[pixel_idx]     = final_color[0] as u8;
-            row[pixel_idx + 1] = final_color[1] as u8;
-            row[pixel_idx + 2] = final_color[2] as u8;
-        }
-    });
+        });
 
     img.save(path)
 }
@@ -658,4 +770,3 @@ pub fn save_raw_heightmap_16bit<P: AsRef<Path>>(
 
     img.save(path)
 }
-

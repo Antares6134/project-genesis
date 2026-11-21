@@ -46,16 +46,6 @@ pub struct CivilizationConfig {
     /// Territory-to-territory reach (px) within which two realms still *know*
     /// of each other — a traveller's tale, a traded bead, an intermediary.
     pub rumour_distance_px: f32,
-    /// Province-to-province distance (px) that still counts as a shared land
-    /// frontier rather than a sea crossing.
-    pub frontier_distance_px: f32,
-    /// Province-to-province distance (px) up to which a contact is a sea route.
-    ///
-    /// Deliberately short: at the dawn of history a sea route is a strait or a
-    /// narrow sea, not an ocean passage. Province centres in one province sit
-    /// about twenty pixels apart, so a hundred and twenty pixels is a real water
-    /// gap of a few hundred kilometres at most.
-    pub searoute_distance_px: f32,
 
     /// Discharge, in m³/s, that makes a river *great*: the bar for a floodplain or
     /// delta cradle, and for calling a river the reason a civilization exists.
@@ -192,11 +182,10 @@ pub struct CivilizationConfig {
     pub simple_farmer_merge_km2: f32,
     /// Ground, in km², that one chiefdom people may span.
     pub complex_farmer_merge_km2: f32,
-    /// How many neighbours a society's dossier may list. A partitioned world has
-    /// hundreds of societies, so an uncapped list is unusable.
+    /// Most neighbours a realm may count when the epoch site is chosen. A
+    /// partitioned world has hundreds of societies, so an uncapped tally would
+    /// drown the signal.
     pub contact_limit: usize,
-    /// How many kin a society's dossier may name, for the same reason.
-    pub kin_limit: usize,
 
     /// Hard ceiling on the cost of a single expansion step. Stops a realm from
     /// vaulting a mountain wall or an ocean to grab a distant province: the
@@ -218,8 +207,6 @@ impl Default for CivilizationConfig {
             contact_distance_px: 430.0,
             isolated_distance_px: 620.0,
             rumour_distance_px: 1_500.0,
-            frontier_distance_px: 55.0,
-            searoute_distance_px: 120.0,
 
             great_river_flow: 3_000.0,
 
@@ -257,7 +244,6 @@ impl Default for CivilizationConfig {
             simple_farmer_merge_km2: 1.6e6,
             complex_farmer_merge_km2: 8.0e5,
             contact_limit: 8,
-            kin_limit: 6,
 
             max_step_cost: 900.0,
         }

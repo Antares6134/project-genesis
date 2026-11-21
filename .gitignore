@@ -15,3 +15,7 @@ saved_seeds/viewer_language.txt
 
 # Local statistics sandbox (not part of the project)
 Testing/
+
+# PNGs written by the atlas's Export control (the headless atlas_*.png
+# plates in the same directory are tracked)
+exports/world_*.png

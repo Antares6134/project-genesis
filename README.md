@@ -104,6 +104,16 @@ atlas with `--lang de`; the choice is remembered in `saved_seeds/viewer_language
 run follows the desktop's locale. What the world invents — its realms, language families and
 biomes — keeps the names the world gave it.
 
+Beside the language is **💾 Export**, which prints the map mode on screen as a PNG: the full
+plate of the active scope, with the tier, borders and civilizations overlay exactly as they are
+shown. Choose **2K · 2048 × 1024**, **8K · 8192 × 4096**, or **Native** when the world is another
+size (4K, 12K, 16K or a custom canvas). An export only ever downsamples — a size larger than the
+world is disabled, and a canvas that is not 2:1 is offered at its native size alone — and the
+plate is resampled with the same Lanczos3 filter as the headless plates. Painting and PNG
+compression run on a worker thread, so the atlas stays responsive; nothing is overwritten, and
+the file is written to `exports/world_<seed>_<mapmode>_<width>x<height>.png`, with the path shown
+in the top bar when it lands.
+
 | Act | What it makes |
 | :--- | :--- |
 | 1. Geology & Erosion | Tectonic plates, fractal detail, hydraulic + thermal erosion |
@@ -233,8 +243,10 @@ scaled up because it is one connected, far larger domain.
    accumulation into dendritic rivers ([`src/hydrology/`](src/hydrology/)).
 4. **Land provinces** — habitability-weighted seeding snapped to mountain crests, rivers and
    coasts. Geography-driven wastelands (desert hearts, high massifs, rainforest interiors,
-   polar ice) are impassable, but corridors and the sea leave every settled province a path to
-   water ([`src/geography/provinces.rs`](src/geography/provinces.rs)).
+   polar **and glacial** ice) are impassable, but corridors and the sea leave every settled
+   province a path to water. No province may exceed four times the mean settled area: the
+   largest are split by moving centres out of the smallest, so one shape can never swallow a
+   continent ([`src/geography/provinces.rs`](src/geography/provinces.rs)).
 5. **Ocean provinces** — Poisson-disc seeding plus a bathymetry-aware Dijkstra flood fill,
    across open **and** frozen seas ([`src/geography/oceans.rs`](src/geography/oceans.rs)).
 6. **Hierarchies** — each domain clustered upward: Areas → Regions → Superregions →

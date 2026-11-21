@@ -10,8 +10,8 @@
 //! — each of which grows a civilization outward along fertile ground until it is
 //! stopped by wilderness, mountains, or an older neighbour. Nothing is placed at
 //! random: every cradle is chosen because the province under it is measurably
-//! better than its neighbours, and the reason is reported to the reader verbatim
-//! (see [`RiseProfile::reasons`]).
+//! better than its neighbours, and the dossier reports the kind of country it was
+//! born into.
 //!
 //! ## The calendar
 //!
@@ -94,17 +94,17 @@ impl CradleKind {
     /// Short name of the cradle, for the atlas legend and the dossier header.
     pub fn label(self) -> &'static str {
         match self {
-            CradleKind::RiverFloodplain => "River floodplain",
-            CradleKind::RiverDelta => "River delta",
+            CradleKind::RiverFloodplain => "River Floodplain",
+            CradleKind::RiverDelta => "River Delta",
             CradleKind::Lacustrine => "Lakeshore",
-            CradleKind::CoastalMaritime => "Open coast",
-            CradleKind::HighlandValley => "Highland valley",
-            CradleKind::DesertOasis => "Desert oasis",
-            CradleKind::SteppeGrassland => "Steppe grassland",
-            CradleKind::SavannaHeartland => "Savanna heartland",
-            CradleKind::RainforestClearing => "Rainforest clearing",
-            CradleKind::WoodlandHeartland => "Woodland heartland",
-            CradleKind::IslandShore => "Island shore",
+            CradleKind::CoastalMaritime => "Open Coast",
+            CradleKind::HighlandValley => "Highland Valley",
+            CradleKind::DesertOasis => "Desert Oasis",
+            CradleKind::SteppeGrassland => "Steppe Grassland",
+            CradleKind::SavannaHeartland => "Savanna Heartland",
+            CradleKind::RainforestClearing => "Rainforest Clearing",
+            CradleKind::WoodlandHeartland => "Woodland Heartland",
+            CradleKind::IslandShore => "Island Shore",
         }
     }
 
@@ -123,23 +123,6 @@ impl CradleKind {
             CradleKind::RainforestClearing => "Rainforest",
             CradleKind::WoodlandHeartland => "Woodland",
             CradleKind::IslandShore => "Island",
-        }
-    }
-
-    /// One sentence on how such a civilization makes its living.
-    pub fn describe(self) -> &'static str {
-        match self {
-            CradleKind::RiverFloodplain => "the river rebuilds the soil every year, so nobody has to move and nobody can leave",
-            CradleKind::RiverDelta => "silt, fish and salt water meet in one place, so farming and shipping grow up in the same village",
-            CradleKind::Lacustrine => "the lake gives fish, reeds, fresh water and a road that carries a canoe in every direction",
-            CradleKind::CoastalMaritime => "there is no great river, but the sea feeds a shore that can sail rather than plough",
-            CradleKind::HighlandValley => "rock walls keep the neighbours out and springs keep the valley green",
-            CradleKind::DesertOasis => "one reliable spring, river reach or shore is the whole world, and whoever holds it holds the roads",
-            CradleKind::SteppeGrassland => "too dry for a plough, rich enough for herds: wealth walks, and so does the people who own it",
-            CradleKind::SavannaHeartland => "rain comes in one season, so grain, herds and game can all be husbanded in one country",
-            CradleKind::RainforestClearing => "the forest gives everything except open ground, so gardens are cut and abandoned as the soil runs out",
-            CradleKind::WoodlandHeartland => "rain, timber and soil all arrive together, so a village can clear a field, build a house and hunt the same woodlot",
-            CradleKind::IslandShore => "water is the only road, so every household is a boat and every coast is a frontier",
         }
     }
 }
@@ -192,20 +175,20 @@ impl Environment {
     /// Short name of the country, for the atlas legend and the dossier.
     pub fn label(self) -> &'static str {
         match self {
-            Environment::IceMargin => "Ice margin",
+            Environment::IceMargin => "Ice Margin",
             Environment::Tundra => "Tundra",
             Environment::Taiga => "Taiga",
             Environment::Woodland => "Woodland",
             Environment::Steppe => "Steppe",
             Environment::Savanna => "Savanna",
             Environment::Desert => "Desert",
-            Environment::TropicalForest => "Tropical forest",
+            Environment::TropicalForest => "Tropical Forest",
             Environment::Highland => "Highland",
-            Environment::IslandShore => "Island shore",
+            Environment::IslandShore => "Island Shore",
             Environment::Lacustrine => "Lakeshore",
-            Environment::Floodplain => "River floodplain",
-            Environment::Delta => "River delta",
-            Environment::Coast => "Open coast",
+            Environment::Floodplain => "River Floodplain",
+            Environment::Delta => "River Delta",
+            Environment::Coast => "Open Coast",
         }
     }
 
@@ -228,26 +211,6 @@ impl Environment {
             Environment::Coast => "coastal",
         }
     }
-
-    /// One sentence on what living here is like.
-    pub fn describe(self) -> &'static str {
-        match self {
-            Environment::IceMargin => "ice lies on the ground all year and only the sea's edge gives a living",
-            Environment::Tundra => "nothing grows tall enough to hide a man, so the summer herd is the whole harvest",
-            Environment::Taiga => "cold conifer forest and bog, where the rivers are the only roads",
-            Environment::Woodland => "rain, timber and soil arrive together, so a household can hunt, forage and clear a field in one country",
-            Environment::Steppe => "too dry for a plough, rich enough for herds: wealth walks, and so does the people who own it",
-            Environment::Savanna => "rain comes in one season, so grain, herds and game can all be husbanded in one country",
-            Environment::Desert => "rain almost never falls, so every crossing is measured in wells",
-            Environment::TropicalForest => "the forest gives everything except open ground, so gardens are cut and abandoned as the soil runs out",
-            Environment::Highland => "rock walls keep the neighbours out and springs keep the valley green",
-            Environment::IslandShore => "water is the only road, so every household is a boat and every coast is a frontier",
-            Environment::Lacustrine => "the lake gives fish, reeds, fresh water and a road that carries a canoe in every direction",
-            Environment::Floodplain => "the river rebuilds the soil every year, so nobody has to move and nobody can leave",
-            Environment::Delta => "silt, fish and salt water meet in one place, so farming and shipping grow up in the same village",
-            Environment::Coast => "there is no great river, but the sea feeds a shore that can sail rather than plough",
-        }
-    }
 }
 
 // ─── HOW A CIVILIZATION LIVES ────────────────────────────────────────────────
@@ -268,39 +231,13 @@ pub enum Subsistence {
 impl Subsistence {
     pub fn label(self) -> &'static str {
         match self {
-            Subsistence::IrrigatedAgriculture => "Irrigated agriculture",
-            Subsistence::DrylandFarming => "Dryland farming",
-            Subsistence::Pastoralism => "Herds and transhumance",
-            Subsistence::FishingAndSeafaring => "Fishing and seafaring",
-            Subsistence::ShiftingCultivation => "Shifting cultivation",
-            Subsistence::TerraceFarming => "Terrace farming",
-            Subsistence::Foraging => "Hunting and gathering",
-        }
-    }
-
-    /// Short noun used when one civilization borrows another's way of life.
-    pub fn hallmark(self) -> &'static str {
-        match self {
-            Subsistence::IrrigatedAgriculture => "flood-plain irrigation",
-            Subsistence::DrylandFarming => "rain-fed field farming",
-            Subsistence::Pastoralism => "herd transhumance",
-            Subsistence::FishingAndSeafaring => "the fishing boat",
-            Subsistence::ShiftingCultivation => "the forest garden plot",
-            Subsistence::TerraceFarming => "the terraced slope",
-            Subsistence::Foraging => "the hunting ground",
-        }
-    }
-
-    /// One sentence on the economy, quoted in the dossier.
-    pub fn describe(self) -> &'static str {
-        match self {
-            Subsistence::IrrigatedAgriculture => "Canals carry the river into fields that need no rain, so the harvest is a public work and the state is its foreman.",
-            Subsistence::DrylandFarming => "Fields drink only what the sky gives them, so villages hedge their luck across several soils and several gods.",
-            Subsistence::Pastoralism => "Wealth is counted in animals and measured in pasture, which makes the people mobile and the horizon a country.",
-            Subsistence::FishingAndSeafaring => "The catch is a daily tax on the water and the boat is the family's capital, so skill outranks land.",
-            Subsistence::ShiftingCultivation => "Forest soil gives two or three harvests and then rests for a generation, so the village moves on a slow, deliberate cycle.",
-            Subsistence::TerraceFarming => "Every field is a wall of stone built up the valley side, and every wall belongs to somebody's grandfather.",
-            Subsistence::Foraging => "Nothing is planted and nothing is herded: the country is read rather than worked, and a band knows one valley the way a farmer knows one field.",
+            Subsistence::IrrigatedAgriculture => "Irrigated Agriculture",
+            Subsistence::DrylandFarming => "Dryland Farming",
+            Subsistence::Pastoralism => "Herds and Transhumance",
+            Subsistence::FishingAndSeafaring => "Fishing and Seafaring",
+            Subsistence::ShiftingCultivation => "Shifting Cultivation",
+            Subsistence::TerraceFarming => "Terrace Farming",
+            Subsistence::Foraging => "Hunting and Gathering",
         }
     }
 }
@@ -352,7 +289,11 @@ fn rgb_to_hsv(rgb: [u8; 3]) -> (f32, f32, f32) {
     } else {
         60.0 * ((r - g) / chroma + 4.0)
     };
-    let saturation = if max <= f32::EPSILON { 0.0 } else { chroma / max };
+    let saturation = if max <= f32::EPSILON {
+        0.0
+    } else {
+        chroma / max
+    };
     (hue, saturation, max)
 }
 
@@ -416,11 +357,11 @@ impl SocietyTier {
     /// The name the atlas writes for this tier.
     pub fn label(self) -> &'static str {
         match self {
-            SocietyTier::HunterGatherers => "Hunter-gatherers",
-            SocietyTier::NomadicPastoralists => "Nomadic pastoralists",
-            SocietyTier::SimpleFarmers => "Simple farming societies",
-            SocietyTier::ComplexFarmers => "Complex farming societies",
-            SocietyTier::States => "State societies",
+            SocietyTier::HunterGatherers => "Hunter-Gatherers",
+            SocietyTier::NomadicPastoralists => "Nomadic Pastoralists",
+            SocietyTier::SimpleFarmers => "Simple Farming Societies",
+            SocietyTier::ComplexFarmers => "Complex Farming Societies",
+            SocietyTier::States => "State Societies",
         }
     }
 
@@ -502,23 +443,24 @@ impl SocietyTier {
         }
     }
 
-    /// One sentence on how such a people lives.
-    pub fn describe(self) -> &'static str {
+    /// The singular form the dossier uses for one society: `Organized State`.
+    pub fn form(self) -> &'static str {
         match self {
-            SocietyTier::HunterGatherers => {
-                "A country of bands: a few families read one valley, move with the season, and answer to nobody but their own elders."
-            }
-            SocietyTier::NomadicPastoralists => {
-                "A country of herders: wealth is counted in animals and measured in pasture, so the people move and the horizon is their border."
-            }
-            SocietyTier::SimpleFarmers => {
-                "A country of villages: fields are cleared and kept, the household is the unit of work, and no rank stands above it."
-            }
-            SocietyTier::ComplexFarmers => {
-                "A ranked farming country: chiefs and lineages hold the land, tribute flows upward, and a great man is buried with more than he could use."
-            }
-            SocietyTier::States => {
-                "A state: offices, archives and a standing apparatus, which can tax a harvest it never touched and raise a wall it will not live to see finished."
+            SocietyTier::HunterGatherers => "Hunter-Gatherers",
+            SocietyTier::NomadicPastoralists => "Nomadic Pastoralists",
+            SocietyTier::SimpleFarmers => "Simple Farmers",
+            SocietyTier::ComplexFarmers => "Complex Farmers",
+            SocietyTier::States => "Organized State",
+        }
+    }
+
+    /// How fixed a society is to its ground, for the dossier's summary line.
+    pub fn mobility(self) -> &'static str {
+        match self {
+            SocietyTier::HunterGatherers => "Mobile",
+            SocietyTier::NomadicPastoralists => "Nomadic",
+            SocietyTier::SimpleFarmers | SocietyTier::ComplexFarmers | SocietyTier::States => {
+                "Sedentary"
             }
         }
     }
@@ -561,13 +503,13 @@ pub enum Government {
 impl Government {
     pub fn label(self) -> &'static str {
         match self {
-            Government::Band => "Bands",
-            Government::Tribe => "Tribal councils",
+            Government::Band => "Band Society",
+            Government::Tribe => "Tribal Society",
             Government::Chiefdom => "Chiefdom",
-            Government::DivineMonarchy => "Divine monarchy",
-            Government::TheocraticRepublic => "Theocratic republic",
-            Government::AristocraticRepublic => "Aristocratic republic",
-            Government::PlutocraticRepublic => "Plutocratic republic",
+            Government::DivineMonarchy => "Divine Monarchy",
+            Government::TheocraticRepublic => "Theocratic Republic",
+            Government::AristocraticRepublic => "Aristocratic Republic",
+            Government::PlutocraticRepublic => "Plutocratic Republic",
             Government::Oligarchy => "Oligarchy",
             Government::Tyranny => "Tyranny",
         }
@@ -575,44 +517,12 @@ impl Government {
 
     /// True for a government with a centralised state apparatus behind it, false
     /// for the kinship societies that came before the state.
+    #[allow(dead_code)]
     pub fn is_state(self) -> bool {
         !matches!(
             self,
             Government::Band | Government::Tribe | Government::Chiefdom
         )
-    }
-
-    /// One sentence on how this society is governed.
-    pub fn describe(self) -> &'static str {
-        match self {
-            Government::Band => {
-                "A kinship band: no ranks and no offices, every decision taken by consent around a fire."
-            }
-            Government::Tribe => {
-                "A tribal society: councils of elders and lineages settle its matters, and no state stands above them."
-            }
-            Government::Chiefdom => {
-                "A chiefdom: a ranked society under a hereditary chief, still bound together by kinship."
-            }
-            Government::DivineMonarchy => {
-                "A divine monarchy: the king is the state's cult as well as its head, and law descends from his person."
-            }
-            Government::TheocraticRepublic => {
-                "A theocratic republic: priests hold the offices and the temple is the administration."
-            }
-            Government::AristocraticRepublic => {
-                "An aristocratic republic: a landed elite governs through councils and magistrates it fills itself."
-            }
-            Government::PlutocraticRepublic => {
-                "A plutocratic republic: wealth, not birth, buys the offices, and the merchants hold the state."
-            }
-            Government::Oligarchy => {
-                "An oligarchy: a narrow clique holds power and keeps the door shut behind it."
-            }
-            Government::Tyranny => {
-                "A tyranny: one man rules against the law, and holds on to the state by force."
-            }
-        }
     }
 
     /// The density bias a government lends to population: a canal state that
@@ -631,28 +541,12 @@ impl Government {
             Government::Tyranny => 0.10,
         }
     }
-
-    /// Short noun used when one civilization borrows another's way of governing.
-    pub fn hallmark(self) -> &'static str {
-        match self {
-            Government::Band => "the kinship band",
-            Government::Tribe => "the council of elders",
-            Government::Chiefdom => "the chief's court",
-            Government::DivineMonarchy => "the divine kingship",
-            Government::TheocraticRepublic => "the temple rule",
-            Government::AristocraticRepublic => "the aristocratic council",
-            Government::PlutocraticRepublic => "the merchants' assembly",
-            Government::Oligarchy => "the ruling clique",
-            Government::Tyranny => "the tyrant's court",
-        }
-    }
 }
 
-/// What a civilization values — its public character, and the lens through which
-/// it treats its neighbours.
+/// What a civilization values — its public character.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Outlook {
-    Agrarian,
+    Cosmopolitan,
     Mercantile,
     Martial,
     Scholarly,
@@ -664,7 +558,7 @@ pub enum Outlook {
 impl Outlook {
     pub fn label(self) -> &'static str {
         match self {
-            Outlook::Agrarian => "Agrarian",
+            Outlook::Cosmopolitan => "Cosmopolitan",
             Outlook::Mercantile => "Mercantile",
             Outlook::Martial => "Martial",
             Outlook::Scholarly => "Scholarly",
@@ -674,23 +568,10 @@ impl Outlook {
         }
     }
 
-    /// How the realm is likely to treat a neighbour it can reach.
-    pub fn disposition(self) -> &'static str {
-        match self {
-            Outlook::Agrarian => "prefers a quiet border and a full granary",
-            Outlook::Mercantile => "wants the road open and the tariff agreed",
-            Outlook::Martial => "counts the neighbour's cattle as its own",
-            Outlook::Scholarly => "sends scribes before soldiers",
-            Outlook::Ceremonial => "cares who holds the holy place, not where the border runs",
-            Outlook::Artistic => "trades styles and songs more readily than land",
-            Outlook::Isolationist => "would rather the neighbour stayed a rumour",
-        }
-    }
-
     /// The population bias of an ethos at the moment of the map.
     pub fn density_bias(self) -> f32 {
         match self {
-            Outlook::Agrarian => 0.06,
+            Outlook::Cosmopolitan => 0.14,
             Outlook::Mercantile => 0.12,
             Outlook::Scholarly => 0.06,
             Outlook::Ceremonial => 0.02,
@@ -703,10 +584,10 @@ impl Outlook {
     /// How much this ethos leans on borrowing from abroad.
     pub fn openness(self) -> f32 {
         match self {
+            Outlook::Cosmopolitan => 1.30,
             Outlook::Mercantile => 1.25,
             Outlook::Artistic => 1.15,
             Outlook::Scholarly => 1.10,
-            Outlook::Agrarian => 1.00,
             Outlook::Ceremonial => 0.95,
             Outlook::Martial => 0.85,
             Outlook::Isolationist => 0.45,
@@ -731,52 +612,13 @@ pub enum FaithKind {
 impl FaithKind {
     pub fn label(self) -> &'static str {
         match self {
-            FaithKind::RiverFertility => "River and fertility cult",
-            FaithKind::Solar => "Sun cult",
-            FaithKind::SkyAndStorm => "Sky and storm cult",
-            FaithKind::Ancestral => "Ancestor veneration",
-            FaithKind::SeaAndTide => "Sea and tide cult",
-            FaithKind::EarthMother => "Earth-mother cult",
-            FaithKind::StarAndOmen => "Star and omen lore",
-        }
-    }
-
-    pub fn hallmark(self) -> &'static str {
-        match self {
-            FaithKind::RiverFertility => "the river rite",
-            FaithKind::Solar => "the sun calendar",
-            FaithKind::SkyAndStorm => "the storm offering",
-            FaithKind::Ancestral => "the ancestor mask",
-            FaithKind::SeaAndTide => "the tide blessing",
-            FaithKind::EarthMother => "the harvest mother",
-            FaithKind::StarAndOmen => "the omen reading",
-        }
-    }
-
-    /// The heart of the creed, in one sentence.
-    pub fn creed(self) -> &'static str {
-        match self {
-            FaithKind::RiverFertility => {
-                "The river is the god: it dies every year and is born again, and so are the grain, the king and the people."
-            }
-            FaithKind::Solar => {
-                "The sun is the only power worth counting on, and every calendar is a prayer addressed to it."
-            }
-            FaithKind::SkyAndStorm => {
-                "The sky decides: rain is mercy, hail is judgement, and the mountain is where it speaks."
-            }
-            FaithKind::Ancestral => {
-                "The dead are the true citizens; the living only hold their land in trust for them."
-            }
-            FaithKind::SeaAndTide => {
-                "The tide is a debt that has to be settled every night, and no hull sails until it has been paid."
-            }
-            FaithKind::EarthMother => {
-                "The earth is a mother who must be fed before she will feed anyone else."
-            }
-            FaithKind::StarAndOmen => {
-                "Everything that will happen is already written in the sky, and the skilled can read it there."
-            }
+            FaithKind::RiverFertility => "River and Fertility Cult",
+            FaithKind::Solar => "Sun Cult",
+            FaithKind::SkyAndStorm => "Sky and Storm Cult",
+            FaithKind::Ancestral => "Ancestor Veneration",
+            FaithKind::SeaAndTide => "Sea and Tide Cult",
+            FaithKind::EarthMother => "Earth-Mother Cult",
+            FaithKind::StarAndOmen => "Star and Omen Lore",
         }
     }
 }
@@ -810,53 +652,9 @@ impl ScaleClass {
             ScaleClass::Small
         }
     }
-
-}
-
-/// How two realms know about each other.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ContactKind {
-    /// Their provinces touch across dry land.
-    LandFrontier,
-    /// Only water lies between their provinces.
-    SeaRoute,
-    /// Within reach of travellers, but not of armies.
-    DistantRumour,
-}
-
-impl ContactKind {
-    pub fn label(self) -> &'static str {
-        match self {
-            ContactKind::LandFrontier => "Land frontier",
-            ContactKind::SeaRoute => "Sea route",
-            ContactKind::DistantRumour => "Distant rumour",
-        }
-    }
 }
 
 // ─── THE DOSSIER ─────────────────────────────────────────────────────────────
-
-/// Why this civilization rose *here*, in the reader's own words.
-///
-/// [`RiseProfile::reasons`] is the answer the hover tooltip gives: every bullet
-/// is a real measurement of the seat province (habitability, river discharge,
-/// mean temperature, annual rainfall, elevation, distance to the nearest other
-/// cradle), so a reader can always audit why the world decided this spot was
-/// worth a civilization.
-#[derive(Clone, Debug)]
-pub struct RiseProfile {
-    pub kind: CradleKind,
-    /// One line: the country the civilization was born in.
-    pub headline: String,
-    /// Bullet points: the measurements behind the choice.
-    pub reasons: Vec<String>,
-    /// Two to four *short* phrases a hover card can carry without covering the
-    /// map: "A great river at its door", "A shore for fish and salt". These say
-    /// the same thing as [`RiseProfile::reasons`] without the figures.
-    pub highlights: Vec<String>,
-    /// Where the seat sits in the political hierarchy.
-    pub seat: String,
-}
 
 /// The material and social life of a civilization.
 #[derive(Clone, Debug)]
@@ -867,9 +665,8 @@ pub struct Culture {
     /// The form its monumental building takes.
     pub architecture: &'static str,
     /// Two or three arts the realm is known for.
+    #[allow(dead_code)]
     pub arts: Vec<&'static str>,
-    /// A sentence or two of prose built from the fields above.
-    pub note: String,
 }
 
 /// The faith of a civilization.
@@ -877,51 +674,19 @@ pub struct Culture {
 pub struct Faith {
     pub kind: FaithKind,
     /// Who performs the rites.
+    #[allow(dead_code)]
     pub clergy: &'static str,
     /// Three observances a visitor would notice.
+    #[allow(dead_code)]
     pub practices: Vec<&'static str>,
-    /// A sentence of prose built from the fields above.
-    pub note: String,
-}
-
-/// A realm this civilization can reach.
-#[derive(Clone, Debug)]
-pub struct Contact {
-    /// The other civilization's id.
-    pub other: u32,
-    pub kind: ContactKind,
-    /// Nearest surface distance between the two territories, in kilometres.
-    pub distance_km: f32,
-    /// How they treat each other — trade, rivalry, tribute, rumour.
-    pub relation: &'static str,
-    /// A sentence putting the relationship in context.
-    pub note: String,
-}
-
-/// Something a younger civilization had already taken up **before** it founded
-/// its own first city.
-///
-/// This is the quiet half of prehistory: a culture can inherit a crop, a rite or
-/// a script from an older neighbour centuries before it becomes a civilization in
-/// its own right — the way the ancestors of Egypt and the Levant took up farming
-/// and pottery from Mesopotamia long before Narmer.
-#[derive(Clone, Debug)]
-pub struct Influence {
-    /// The older civilization that gave.
-    pub other: u32,
-    /// What crossed the frontier before the borrower existed, in the older
-    /// realm's own terms (lower-cased so it reads inside a sentence).
-    pub borrowed: Vec<String>,
-    /// A sentence of prose built from the fields above.
-    pub note: String,
 }
 
 /// One civilization, from its founding year to the date the atlas portrays.
 ///
-/// A realm's *id* — the number used by [`Contact`], [`Influence`] and
-/// [`CivilizationWorld::name_of`] — is its 1-based position in
-/// [`CivilizationWorld::civilizations`], which is the founding order. There is
-/// deliberately no separate field for it, so the two can never drift apart.
+/// A realm's *id* — the number used by [`CivilizationWorld::name_of`] — is its
+/// 1-based position in [`CivilizationWorld::civilizations`], which is the
+/// founding order. There is deliberately no separate field for it, so the two
+/// can never drift apart.
 #[derive(Clone, Debug)]
 pub struct Civilization {
     /// Display name. Deliberately a placeholder: names come later in the
@@ -940,7 +705,6 @@ pub struct Civilization {
     /// population, never as a tier.
     #[allow(dead_code)]
     pub scale: ScaleClass,
-    pub rise: RiseProfile,
     pub culture: Culture,
     pub faith: Faith,
 
@@ -950,8 +714,10 @@ pub struct Civilization {
     pub seat_x: f32,
     pub seat_y: f32,
     /// Latitude of the seat, in degrees (negative = southern).
+    #[allow(dead_code)]
     pub seat_latitude_deg: f32,
     /// Longitude of the seat, in degrees east (negative = west of the prime meridian).
+    #[allow(dead_code)]
     pub seat_longitude_deg: f32,
     /// Every province the realm holds at the map date, ascending.
     pub provinces: Vec<u32>,
@@ -970,16 +736,10 @@ pub struct Civilization {
     /// rework exists to undo.
     pub founding_year: Option<i32>,
     /// Years elapsed between founding and the map date. Zero for a people.
+    #[allow(dead_code)]
     pub age_years: u32,
 
-    /// Every realm it can reach, ascending by id.
-    pub contacts: Vec<Contact>,
-    /// Inheritances from older realms, ascending by id.
-    pub influences: Vec<Influence>,
-    /// Realms that share this one's ancestral stock (see
-    /// [`Civilization::language_family`]), ascending by id.
-    pub kin: Vec<u32>,
-    /// The tongue family two kin realms share, e.g. `Riparian Tongue`.
+    /// The tongue family this realm belongs to, e.g. `Riparian Tongue`.
     pub language_family: String,
 
     /// Latitude-aware population density of the realm at the map date.
@@ -988,16 +748,12 @@ pub struct Civilization {
 
 impl Civilization {
     /// `Year 1 240` — the realm's own calendar at the map date.
-    pub fn year_label(&self) -> String {
-        format!("Year {}", crate::core::fmt::thousands(self.age_years as f32))
-    }
-
-    /// How the atlas opens a society's story: a founding date for a polity, a
-    /// statement of prior occupation for a people.
+    /// The founding date for a polity, or the bare fact of prior occupation for a
+    /// people. The dossier supplies the `Founded:` label.
     pub fn origin_label(&self) -> String {
         match self.founding_year {
-            Some(year) => format!("Founded {}", epoch::ce_label(year)),
-            None => "Older than any city: a people, not a polity".to_string(),
+            Some(year) => epoch::ce_label(year),
+            None => "Prehistoric".to_string(),
         }
     }
 }
@@ -1137,7 +893,8 @@ impl CivilizationWorld {
 
     /// Display name of a civilization id, or `unclaimed wilderness`.
     pub fn name_of(&self, id: u32) -> &str {
-        self.civilization(id).map_or("unclaimed", |c| c.name.as_str())
+        self.civilization(id)
+            .map_or("unclaimed", |c| c.name.as_str())
     }
 
     /// Colour of a civilization id; wilderness falls back to neutral grey.
@@ -1198,11 +955,7 @@ mod tests {
                 ((value + 0.055) / 1.055).powf(2.4)
             }
         };
-        let (r, g, b) = (
-            linear(colour[0]),
-            linear(colour[1]),
-            linear(colour[2]),
-        );
+        let (r, g, b) = (linear(colour[0]), linear(colour[1]), linear(colour[2]));
         let x = r * 0.4124 + g * 0.3576 + b * 0.1805;
         let y = r * 0.2126 + g * 0.7152 + b * 0.0722;
         let z = r * 0.0193 + g * 0.1192 + b * 0.9505;

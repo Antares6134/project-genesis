@@ -241,7 +241,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "🌍 Atlas do Mundo",
             "🌍 Atlas Görüntüleyici",
         ],
-        "🗺 Physical" => ["🗺 Físico", "🗺 Physique", "🗺 Physisch", "🗺 Físico", "🗺 Fiziki"],
+        "🗺 Physical" => [
+            "🗺 Físico",
+            "🗺 Physique",
+            "🗺 Physisch",
+            "🗺 Físico",
+            "🗺 Fiziki",
+        ],
         "⛰ Topographic" => [
             "⛰ Topográfico",
             "⛰ Topographique",
@@ -257,7 +263,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "🌡 Temperatura",
             "🌡 Sıcaklık",
         ],
-        "🪨 Terrain" => ["🪨 Relieve", "🪨 Relief", "🪨 Gelände", "🪨 Relevo", "🪨 Arazi"],
+        "🪨 Terrain" => [
+            "🪨 Relieve",
+            "🪨 Relief",
+            "🪨 Gelände",
+            "🪨 Relevo",
+            "🪨 Arazi",
+        ],
         "🏺 Civilizations" => [
             "🏺 Civilizaciones",
             "🏺 Civilisations",
@@ -265,7 +277,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "🏺 Civilizações",
             "🏺 Uygarlıklar",
         ],
-        "🗣 Languages" => ["🗣 Idiomas", "🗣 Langues", "🗣 Sprachen", "🗣 Línguas", "🗣 Diller"],
+        "🗣 Languages" => [
+            "🗣 Idiomas",
+            "🗣 Langues",
+            "🗣 Sprachen",
+            "🗣 Línguas",
+            "🗣 Diller",
+        ],
         "🏛 Land" => ["🏛 Tierra", "🏛 Terre", "🏛 Land", "🏛 Terra", "🏛 Kara"],
         "🌊 Water" => ["🌊 Agua", "🌊 Eau", "🌊 Wasser", "🌊 Água", "🌊 Su"],
         "🌍 Everywhere" => [
@@ -283,7 +301,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "“{}. {}” gerektirir — {}.",
         ],
         "Tier:" => ["Nivel:", "Niveau :", "Stufe:", "Nível:", "Düzey:"],
-        "Provinces" => ["Provincias", "Provinces", "Provinzen", "Províncias", "İller"],
+        "Provinces" => [
+            "Provincias",
+            "Provinces",
+            "Provinzen",
+            "Províncias",
+            "İller",
+        ],
         "Areas" => ["Áreas", "Zones", "Gebiete", "Áreas", "Bölgeler"],
         "Regions" => ["Regiones", "Régions", "Regionen", "Regiões", "Yöreler"],
         "Superregions" => [
@@ -293,8 +317,20 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Super-regiões",
             "Üst yöreler",
         ],
-        "Continents" => ["Continentes", "Continents", "Kontinente", "Continentes", "Kıtalar"],
-        "Borders" => ["Fronteras", "Frontières", "Grenzen", "Fronteiras", "Sınırlar"],
+        "Continents" => [
+            "Continentes",
+            "Continents",
+            "Kontinente",
+            "Continentes",
+            "Kıtalar",
+        ],
+        "Borders" => [
+            "Fronteras",
+            "Frontières",
+            "Grenzen",
+            "Fronteiras",
+            "Sınırlar",
+        ],
         "🏺 Civilizations ({})" => [
             "🏺 Civilizaciones ({})",
             "🏺 Civilisations ({})",
@@ -302,15 +338,29 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "🏺 Civilizações ({})",
             "🏺 Uygarlıklar ({})",
         ],
-        "{}\nAtlas date: {}\nThe overlay tints the provinces each realm holds, on top of whatever this scope already paints." => [
-            "{}\nFecha del atlas: {}\nLa superposición tiñe las provincias de cada reino sobre lo que ya pinta este modo.",
-            "{}\nDate de l'atlas : {}\nLa superposition teinte les provinces de chaque royaume par-dessus ce que ce mode peint déjà.",
-            "{}\nAtlas-Datum: {}\nDie Überlagerung tönt die Provinzen jedes Reiches über dem, was diese Ansicht ohnehin zeigt.",
-            "{}\nData do atlas: {}\nA sobreposição tinge as províncias de cada reino por cima do que este modo já pinta.",
-            "{}\nAtlas tarihi: {}\nKatman, her krallığın illerini bu görünümün üzerine renklendirir.",
+        "{}\nAtlas date: {}\nThe overlay tints the provinces each realm holds, on top of whatever this scope already paints." => {
+            [
+                "{}\nFecha del atlas: {}\nLa superposición tiñe las provincias de cada reino sobre lo que ya pinta este modo.",
+                "{}\nDate de l'atlas : {}\nLa superposition teinte les provinces de chaque royaume par-dessus ce que ce mode peint déjà.",
+                "{}\nAtlas-Datum: {}\nDie Überlagerung tönt die Provinzen jedes Reiches über dem, was diese Ansicht ohnehin zeigt.",
+                "{}\nData do atlas: {}\nA sobreposição tinge as províncias de cada reino por cima do que este modo já pinta.",
+                "{}\nAtlas tarihi: {}\nKatman, her krallığın illerini bu görünümün üzerine renklendirir.",
+            ]
+        }
+        "Zoom out" => [
+            "Alejar",
+            "Zoom arrière",
+            "Herauszoomen",
+            "Afastar",
+            "Uzaklaştır",
         ],
-        "Zoom out" => ["Alejar", "Zoom arrière", "Herauszoomen", "Afastar", "Uzaklaştır"],
-        "Zoom in" => ["Acercar", "Zoom avant", "Hineinzoomen", "Aproximar", "Yakınlaştır"],
+        "Zoom in" => [
+            "Acercar",
+            "Zoom avant",
+            "Hineinzoomen",
+            "Aproximar",
+            "Yakınlaştır",
+        ],
         "Fit" => ["Ajustar", "Ajuster", "Einpassen", "Ajustar", "Sığdır"],
         "Fit the whole world in the window" => [
             "Ajustar el mundo entero a la ventana",
@@ -361,8 +411,77 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Mostrar/ocultar o painel Génesis",
             "Yaratılış panelini göster/gizle",
         ],
+        "💾 Export" => [
+            "💾 Exportar",
+            "💾 Exporter",
+            "💾 Exportieren",
+            "💾 Exportar",
+            "💾 Dışa Aktar",
+        ],
+        "Export the current map as a PNG" => [
+            "Exportar el mapa actual como PNG",
+            "Exporter la carte actuelle en PNG",
+            "Die aktuelle Karte als PNG exportieren",
+            "Exportar o mapa atual como PNG",
+            "Geçerli haritayı PNG olarak dışa aktar",
+        ],
+        "Native · {} × {}" => [
+            "Nativo · {} × {}",
+            "Natif · {} × {}",
+            "Nativ · {} × {}",
+            "Nativo · {} × {}",
+            "Yerel · {} × {}",
+        ],
+        "This world is {} × {} — choose a size no larger than that" => [
+            "Este mundo mide {} × {}: elige un tamaño no mayor",
+            "Ce monde mesure {} × {} — choisissez une taille inférieure ou égale",
+            "Diese Welt ist {} × {} — wählen Sie eine höchstens gleich große Größe",
+            "Este mundo tem {} × {} — escolha um tamanho não maior",
+            "Bu dünya {} × {} — bundan büyük olmayan bir boyut seçin",
+        ],
+        "An export is already running" => [
+            "Ya hay una exportación en curso",
+            "Une exportation est déjà en cours",
+            "Ein Export läuft bereits",
+            "Já existe uma exportação em curso",
+            "Zaten bir dışa aktarma sürüyor",
+        ],
+        "⏳ Exporting {} × {}…" => [
+            "⏳ Exportando {} × {}…",
+            "⏳ Exportation de {} × {}…",
+            "⏳ Exportiere {} × {}…",
+            "⏳ A exportar {} × {}…",
+            "⏳ {} × {} dışa aktarılıyor…",
+        ],
+        "✔ Exported {} × {} PNG to '{}'" => [
+            "✔ PNG de {} × {} exportado en «{}»",
+            "✔ PNG {} × {} exporté vers « {} »",
+            "✔ PNG {} × {} exportiert nach ‚{}‘",
+            "✔ PNG {} × {} exportado para «{}»",
+            "✔ {} × {} PNG dışa aktarıldı: '{}'",
+        ],
+        "Export failed — {}" => [
+            "Error al exportar: {}",
+            "Échec de l'exportation — {}",
+            "Export fehlgeschlagen — {}",
+            "Falha na exportação — {}",
+            "Dışa aktarma başarısız — {}",
+        ],
+        "Export failed — the worker stopped" => [
+            "Error al exportar: el proceso se detuvo",
+            "Échec de l'exportation — le processus s'est arrêté",
+            "Export fehlgeschlagen — der Prozess wurde beendet",
+            "Falha na exportação — o processo parou",
+            "Dışa aktarma başarısız — süreç durdu",
+        ],
         // ── The genesis panel ────────────────────────────────────────────────
-        "🧬 Genesis" => ["🧬 Génesis", "🧬 Genèse", "🧬 Genesis", "🧬 Génesis", "🧬 Yaratılış"],
+        "🧬 Genesis" => [
+            "🧬 Génesis",
+            "🧬 Genèse",
+            "🧬 Genesis",
+            "🧬 Génesis",
+            "🧬 Yaratılış",
+        ],
         "💾 World data" => [
             "💾 Datos del mundo",
             "💾 Données du monde",
@@ -441,13 +560,15 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Tela {} × {} — a resolução fixa-se quando o ato 1 corre.",
             "Tuval {} × {} — çözünürlük 1. perdeyle sabitlenir.",
         ],
-        "Province, erosion and lake budgets scale with the canvas; advanced values are quoted at 16K." => [
-            "Los presupuestos de provincias, erosión y lagos se ajustan al lienzo; los valores avanzados se citan a 16K.",
-            "Les budgets de provinces, d'érosion et de lacs suivent le canevas ; les valeurs avancées sont citées à 16K.",
-            "Provinz-, Erosions- und Seebudgets skalieren mit der Leinwand; die Werte unter „Erweitert“ gelten für 16K.",
-            "Os orçamentos de províncias, erosão e lagos acompanham a tela; os valores avançados são indicados a 16K.",
-            "İl, erozyon ve göl bütçeleri tuvale göre ölçeklenir; gelişmiş değerler 16K için verilmiştir.",
-        ],
+        "Province, erosion and lake budgets scale with the canvas; advanced values are quoted at 16K." => {
+            [
+                "Los presupuestos de provincias, erosión y lagos se ajustan al lienzo; los valores avanzados se citan a 16K.",
+                "Les budgets de provinces, d'érosion et de lacs suivent le canevas ; les valeurs avancées sont citées à 16K.",
+                "Provinz-, Erosions- und Seebudgets skalieren mit der Leinwand; die Werte unter „Erweitert“ gelten für 16K.",
+                "Os orçamentos de províncias, erosão e lagos acompanham a tela; os valores avançados são indicados a 16K.",
+                "İl, erozyon ve göl bütçeleri tuvale göre ölçeklenir; gelişmiş değerler 16K için verilmiştir.",
+            ]
+        }
         "🌱 Canvas {} × {} — press “{}” to grow it." => [
             "🌱 Lienzo {} × {}: pulsa “{}” para generarlo.",
             "🌱 Canevas {} × {} — appuyez sur « {} » pour le générer.",
@@ -490,8 +611,20 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Gere o mundo primeiro — ainda não há nada para guardar",
             "Önce dünyayı oluşturun — henüz kaydedilecek bir şey yok",
         ],
-        "📂 Load" => ["📂 Cargar", "📂 Charger", "📂 Laden", "📂 Carregar", "📂 Yükle"],
-        "💾 Save" => ["💾 Guardar", "💾 Enregistrer", "💾 Speichern", "💾 Guardar", "💾 Kaydet"],
+        "📂 Load" => [
+            "📂 Cargar",
+            "📂 Charger",
+            "📂 Laden",
+            "📂 Carregar",
+            "📂 Yükle",
+        ],
+        "💾 Save" => [
+            "💾 Guardar",
+            "💾 Enregistrer",
+            "💾 Speichern",
+            "💾 Guardar",
+            "💾 Kaydet",
+        ],
         "Read {} and pick the panel up where it left off" => [
             "Leer {} y retomar el panel donde se quedó",
             "Lire {} et reprendre le panneau où il s'était arrêté",
@@ -506,13 +639,15 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Ler o mundo guardado desta semente",
             "Bu tohumun kayıtlı dünyasını oku",
         ],
-        "Write every act grown so far, up to act 6, to saved_seeds/world_<seed>_<width>x<height>.bin" => [
-            "Escribe cada acto ya generado, hasta el acto 6, en saved_seeds/world_<seed>_<width>x<height>.bin",
-            "Écrit chaque acte déjà généré, jusqu'à l'acte 6, dans saved_seeds/world_<seed>_<width>x<height>.bin",
-            "Schreibt jeden bisher gewachsenen Akt bis Akt 6 nach saved_seeds/world_<seed>_<width>x<height>.bin",
-            "Escreve cada ato já gerado, até ao ato 6, em saved_seeds/world_<seed>_<width>x<height>.bin",
-            "Şimdiye kadar oluşan her perdeyi, 6. perdeye kadar saved_seeds/world_<seed>_<width>x<height>.bin dosyasına yazar",
-        ],
+        "Write every act grown so far, up to act 6, to saved_seeds/world_<seed>_<width>x<height>.bin" => {
+            [
+                "Escribe cada acto ya generado, hasta el acto 6, en saved_seeds/world_<seed>_<width>x<height>.bin",
+                "Écrit chaque acte déjà généré, jusqu'à l'acte 6, dans saved_seeds/world_<seed>_<width>x<height>.bin",
+                "Schreibt jeden bisher gewachsenen Akt bis Akt 6 nach saved_seeds/world_<seed>_<width>x<height>.bin",
+                "Escreve cada ato já gerado, até ao ato 6, em saved_seeds/world_<seed>_<width>x<height>.bin",
+                "Şimdiye kadar oluşan her perdeyi, 6. perdeye kadar saved_seeds/world_<seed>_<width>x<height>.bin dosyasına yazar",
+            ]
+        }
         "A seed is a whole number — Load needs one." => [
             "Una semilla es un número entero: Cargar necesita una.",
             "Une graine est un nombre entier — Charger en a besoin.",
@@ -562,7 +697,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Carregar a semente {} em {} — {} · {} · {}\nRetoma o painel onde o guardado parou.",
             "{} tohumunu {} üzerinde yükle — {} · {} · {}\nPaneli kaydın bıraktığı yerden sürdürür.",
         ],
-        "acts 1–{}" => ["actos 1–{}", "actes 1–{}", "Akte 1–{}", "atos 1–{}", "perde 1–{}"],
+        "acts 1–{}" => [
+            "actos 1–{}",
+            "actes 1–{}",
+            "Akte 1–{}",
+            "atos 1–{}",
+            "perde 1–{}",
+        ],
         "a saved world" => [
             "un mundo guardado",
             "un monde enregistré",
@@ -570,8 +711,20 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "um mundo guardado",
             "kayıtlı bir dünya",
         ],
-        "· loaded" => ["· cargado", "· chargé", "· geladen", "· carregado", "· yüklendi"],
-        "· next" => ["· siguiente", "· suivant", "· als Nächstes", "· próximo", "· sıradaki"],
+        "· loaded" => [
+            "· cargado",
+            "· chargé",
+            "· geladen",
+            "· carregado",
+            "· yüklendi",
+        ],
+        "· next" => [
+            "· siguiente",
+            "· suivant",
+            "· als Nächstes",
+            "· próximo",
+            "· sıradaki",
+        ],
         "· {}s" => ["· {} s", "· {} s", "· {} s", "· {} s", "· {} sn"],
         "Redo from act {} — un-do it and everything after it" => [
             "Rehacer desde el acto {}: deshacerlo a él y a todo lo que le sigue",
@@ -622,7 +775,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Descarta este mundo e recomeça com a mesma semente",
             "Bu dünyayı at ve aynı tohumla yeniden başla",
         ],
-        "starting up" => ["iniciando", "démarrage", "startet", "a iniciar", "başlatılıyor"],
+        "starting up" => [
+            "iniciando",
+            "démarrage",
+            "startet",
+            "a iniciar",
+            "başlatılıyor",
+        ],
         "⏳ {}. {} — working…" => [
             "⏳ {}. {} — trabajando…",
             "⏳ {}. {} — en cours…",
@@ -644,20 +803,24 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "✔ {}. {} — {} s",
             "✔ {}. {} — {} sn",
         ],
-        "✔ Adopted the cached world for seed {} — acts 1–{} are already done; act {} is next" => [
-            "✔ Mundo en caché adoptado para la semilla {}: los actos 1–{} ya están hechos; el acto {} es el siguiente",
-            "✔ Monde en cache adopté pour la graine {} — les actes 1–{} sont déjà faits ; l'acte {} suit",
-            "✔ Zwischengespeicherte Welt für Startwert {} übernommen — Akte 1–{} sind bereits fertig; als Nächstes folgt Akt {}",
-            "✔ Mundo em cache adotado para a semente {} — os atos 1–{} já estão feitos; o ato {} é o próximo",
-            "✔ {} tohumu için önbellekteki dünya alındı — 1–{} perdeleri tamam; sırada {} perde var",
-        ],
-        "No saved world for seed {} — '{}' is not there. Press Save below, or pick a world from Saved worlds below." => [
-            "No hay un mundo guardado para la semilla {}: '{}' no existe. Pulsa Guardar abajo o elige un mundo en Mundos guardados.",
-            "Pas de monde enregistré pour la graine {} — '{}' est absent. Appuyez sur Enregistrer ci-dessous, ou choisissez un monde dans Mondes enregistrés.",
-            "Keine gespeicherte Welt für Startwert {} — '{}' fehlt. Drücken Sie unten Speichern oder wählen Sie eine Welt unter Gespeicherte Welten.",
-            "Não há um mundo guardado para a semente {} — '{}' não existe. Prima Guardar abaixo, ou escolha um mundo em Mundos guardados.",
-            "{} tohumu için kayıtlı dünya yok — '{}' bulunamadı. Aşağıdan Kaydet'e basın ya da Kayıtlı dünyalar listesinden seçin.",
-        ],
+        "✔ Adopted the cached world for seed {} — acts 1–{} are already done; act {} is next" => {
+            [
+                "✔ Mundo en caché adoptado para la semilla {}: los actos 1–{} ya están hechos; el acto {} es el siguiente",
+                "✔ Monde en cache adopté pour la graine {} — les actes 1–{} sont déjà faits ; l'acte {} suit",
+                "✔ Zwischengespeicherte Welt für Startwert {} übernommen — Akte 1–{} sind bereits fertig; als Nächstes folgt Akt {}",
+                "✔ Mundo em cache adotado para a semente {} — os atos 1–{} já estão feitos; o ato {} é o próximo",
+                "✔ {} tohumu için önbellekteki dünya alındı — 1–{} perdeleri tamam; sırada {} perde var",
+            ]
+        }
+        "No saved world for seed {} — '{}' is not there. Press Save below, or pick a world from Saved worlds below." => {
+            [
+                "No hay un mundo guardado para la semilla {}: '{}' no existe. Pulsa Guardar abajo o elige un mundo en Mundos guardados.",
+                "Pas de monde enregistré pour la graine {} — '{}' est absent. Appuyez sur Enregistrer ci-dessous, ou choisissez un monde dans Mondes enregistrés.",
+                "Keine gespeicherte Welt für Startwert {} — '{}' fehlt. Drücken Sie unten Speichern oder wählen Sie eine Welt unter Gespeicherte Welten.",
+                "Não há um mundo guardado para a semente {} — '{}' não existe. Prima Guardar abaixo, ou escolha um mundo em Mundos guardados.",
+                "{} tohumu için kayıtlı dünya yok — '{}' bulunamadı. Aşağıdan Kaydet'e basın ya da Kayıtlı dünyalar listesinden seçin.",
+            ]
+        }
         "'{}' could not be read, so there is nothing to load ({})." => [
             "No se pudo leer '{}', así que no hay nada que cargar ({}).",
             "'{}' n'a pas pu être lu, il n'y a donc rien à charger ({}).",
@@ -714,11 +877,41 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "num momento desconhecido",
             "bilinmeyen bir zamanda",
         ],
-        "just now" => ["ahora mismo", "à l'instant", "gerade eben", "agora mesmo", "az önce"],
-        "{} min ago" => ["hace {} min", "il y a {} min", "vor {} min", "há {} min", "{} dk önce"],
-        "{} h ago" => ["hace {} h", "il y a {} h", "vor {} h", "há {} h", "{} sa önce"],
-        "{} d ago" => ["hace {} d", "il y a {} j", "vor {} T", "há {} d", "{} gün önce"],
-        "{} mo ago" => ["hace {} meses", "il y a {} mois", "vor {} Mon.", "há {} meses", "{} ay önce"],
+        "just now" => [
+            "ahora mismo",
+            "à l'instant",
+            "gerade eben",
+            "agora mesmo",
+            "az önce",
+        ],
+        "{} min ago" => [
+            "hace {} min",
+            "il y a {} min",
+            "vor {} min",
+            "há {} min",
+            "{} dk önce",
+        ],
+        "{} h ago" => [
+            "hace {} h",
+            "il y a {} h",
+            "vor {} h",
+            "há {} h",
+            "{} sa önce",
+        ],
+        "{} d ago" => [
+            "hace {} d",
+            "il y a {} j",
+            "vor {} T",
+            "há {} d",
+            "{} gün önce",
+        ],
+        "{} mo ago" => [
+            "hace {} meses",
+            "il y a {} mois",
+            "vor {} Mon.",
+            "há {} meses",
+            "{} ay önce",
+        ],
         "{} GB" => ["{} GB", "{} Go", "{} GB", "{} GB", "{} GB"],
         "{} MB" => ["{} MB", "{} Mo", "{} MB", "{} MB", "{} MB"],
         "Growing a world…" => [
@@ -735,7 +928,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Ainda não há mundo",
             "Henüz dünya yok",
         ],
-        "working" => ["trabajando", "en cours", "läuft", "a trabalhar", "çalışıyor"],
+        "working" => [
+            "trabajando",
+            "en cours",
+            "läuft",
+            "a trabalhar",
+            "çalışıyor",
+        ],
         "Seed {}. Every act of creation is a button in the Genesis panel: begin with {}." => [
             "Semilla {}. Cada acto de creación es un botón del panel Génesis: empieza por {}.",
             "Graine {}. Chaque acte de création est un bouton du panneau Genèse : commencez par {}.",
@@ -743,7 +942,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Semente {}. Cada ato de criação é um botão no painel Génesis: comece por {}.",
             "Tohum {}. Her yaratılış perdesi Yaratılış panelinde bir düğmedir: {} ile başlayın.",
         ],
-        "🔴 {} — {}" => ["🔴 {} — {}", "🔴 {} — {}", "🔴 {} — {}", "🔴 {} — {}", "🔴 {} — {}"],
+        "🔴 {} — {}" => [
+            "🔴 {} — {}",
+            "🔴 {} — {}",
+            "🔴 {} — {}",
+            "🔴 {} — {}",
+            "🔴 {} — {}",
+        ],
         "🔴 live: {} · {}" => [
             "🔴 en vivo: {} · {}",
             "🔴 en direct : {} · {}",
@@ -752,27 +957,33 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "🔴 canlı: {} · {}",
         ],
         // ── The status bar ───────────────────────────────────────────────────
-        "🏛 LAND — Continents: {} · Superregions: {} · Regions: {} · Areas: {} · Provinces: {}" => [
-            "🏛 TIERRA — Continentes: {} · Superregiones: {} · Regiones: {} · Áreas: {} · Provincias: {}",
-            "🏛 TERRES — Continents : {} · Superrégions : {} · Régions : {} · Zones : {} · Provinces : {}",
-            "🏛 LAND — Kontinente: {} · Superregionen: {} · Regionen: {} · Gebiete: {} · Provinzen: {}",
-            "🏛 TERRA — Continentes: {} · Super-regiões: {} · Regiões: {} · Áreas: {} · Províncias: {}",
-            "🏛 KARA — Kıtalar: {} · Üst yöreler: {} · Yöreler: {} · Bölgeler: {} · İller: {}",
-        ],
-        "🌊 OCEAN — Basins: {} · Superregions: {} · Regions: {} · Areas: {} · Provinces: {}" => [
-            "🌊 OCÉANO — Cuencas: {} · Superregiones: {} · Regiones: {} · Áreas: {} · Provincias: {}",
-            "🌊 OCÉAN — Bassins : {} · Superrégions : {} · Régions : {} · Zones : {} · Provinces : {}",
-            "🌊 OZEAN — Becken: {} · Superregionen: {} · Regionen: {} · Gebiete: {} · Provinzen: {}",
-            "🌊 OCEANO — Bacias: {} · Super-regiões: {} · Regiões: {} · Áreas: {} · Províncias: {}",
-            "🌊 OKYANUS — Havzalar: {} · Üst yöreler: {} · Yöreler: {} · Bölgeler: {} · İller: {}",
-        ],
-        "🏺 CIVILIZATIONS — {} · Atlas date: {} · {} · {} realms · {} civilized provinces · population {} · {} people/km²" => [
-            "🏺 CIVILIZACIONES — {} · Fecha del atlas: {} · {} · {} reinos · {} provincias civilizadas · población {} · {} hab./km²",
-            "🏺 CIVILISATIONS — {} · Date de l'atlas : {} · {} · {} royaumes · {} provinces civilisées · population {} · {} hab./km²",
-            "🏺 ZIVILISATIONEN — {} · Atlas-Datum: {} · {} · {} Reiche · {} zivilisierte Provinzen · Bevölkerung {} · {} Einw./km²",
-            "🏺 CIVILIZAÇÕES — {} · Data do atlas: {} · {} · {} reinos · {} províncias civilizadas · população {} · {} hab./km²",
-            "🏺 UYGARLIKLAR — {} · Atlas tarihi: {} · {} · {} krallık · {} uygar il · nüfus {} · {} kişi/km²",
-        ],
+        "🏛 LAND — Continents: {} · Superregions: {} · Regions: {} · Areas: {} · Provinces: {}" => {
+            [
+                "🏛 TIERRA — Continentes: {} · Superregiones: {} · Regiones: {} · Áreas: {} · Provincias: {}",
+                "🏛 TERRES — Continents : {} · Superrégions : {} · Régions : {} · Zones : {} · Provinces : {}",
+                "🏛 LAND — Kontinente: {} · Superregionen: {} · Regionen: {} · Gebiete: {} · Provinzen: {}",
+                "🏛 TERRA — Continentes: {} · Super-regiões: {} · Regiões: {} · Áreas: {} · Províncias: {}",
+                "🏛 KARA — Kıtalar: {} · Üst yöreler: {} · Yöreler: {} · Bölgeler: {} · İller: {}",
+            ]
+        }
+        "🌊 OCEAN — Basins: {} · Superregions: {} · Regions: {} · Areas: {} · Provinces: {}" => {
+            [
+                "🌊 OCÉANO — Cuencas: {} · Superregiones: {} · Regiones: {} · Áreas: {} · Provincias: {}",
+                "🌊 OCÉAN — Bassins : {} · Superrégions : {} · Régions : {} · Zones : {} · Provinces : {}",
+                "🌊 OZEAN — Becken: {} · Superregionen: {} · Regionen: {} · Gebiete: {} · Provinzen: {}",
+                "🌊 OCEANO — Bacias: {} · Super-regiões: {} · Regiões: {} · Áreas: {} · Províncias: {}",
+                "🌊 OKYANUS — Havzalar: {} · Üst yöreler: {} · Yöreler: {} · Bölgeler: {} · İller: {}",
+            ]
+        }
+        "🏺 CIVILIZATIONS — {} · Atlas date: {} · {} · {} realms · {} civilized provinces · population {} · {} people/km²" => {
+            [
+                "🏺 CIVILIZACIONES — {} · Fecha del atlas: {} · {} · {} reinos · {} provincias civilizadas · población {} · {} hab./km²",
+                "🏺 CIVILISATIONS — {} · Date de l'atlas : {} · {} · {} royaumes · {} provinces civilisées · population {} · {} hab./km²",
+                "🏺 ZIVILISATIONEN — {} · Atlas-Datum: {} · {} · {} Reiche · {} zivilisierte Provinzen · Bevölkerung {} · {} Einw./km²",
+                "🏺 CIVILIZAÇÕES — {} · Data do atlas: {} · {} · {} reinos · {} províncias civilizadas · população {} · {} hab./km²",
+                "🏺 UYGARLIKLAR — {} · Atlas tarihi: {} · {} · {} krallık · {} uygar il · nüfus {} · {} kişi/km²",
+            ]
+        }
         // ── The legends ──────────────────────────────────────────────────────
         "⛰ Topographic Scale" => [
             "⛰ Escala topográfica",
@@ -823,8 +1034,20 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "🌦 Zonas climáticas",
             "🌦 İklim Bölgeleri",
         ],
-        "Frozen sea" => ["Mar helado", "Mer gelée", "Gefrorenes Meer", "Mar gelado", "Donmuş deniz"],
-        "Polar sea" => ["Mar polar", "Mer polaire", "Polarmeer", "Mar polar", "Kutup denizi"],
+        "Frozen sea" => [
+            "Mar helado",
+            "Mer gelée",
+            "Gefrorenes Meer",
+            "Mar gelado",
+            "Donmuş deniz",
+        ],
+        "Polar sea" => [
+            "Mar polar",
+            "Mer polaire",
+            "Polarmeer",
+            "Mar polar",
+            "Kutup denizi",
+        ],
         "Cold temperate sea" => [
             "Mar templado frío",
             "Mer tempérée froide",
@@ -839,7 +1062,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Mar temperado quente",
             "Ilık ılıman deniz",
         ],
-        "Tropical sea" => ["Mar tropical", "Mer tropicale", "Tropisches Meer", "Mar tropical", "Tropik deniz"],
+        "Tropical sea" => [
+            "Mar tropical",
+            "Mer tropicale",
+            "Tropisches Meer",
+            "Mar tropical",
+            "Tropik deniz",
+        ],
         "Equatorial sea" => [
             "Mar ecuatorial",
             "Mer équatoriale",
@@ -953,8 +1182,20 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "{} línguas · {} províncias · {} pessoas",
             "{} dil · {} il · {} kişi",
         ],
-        "Urheimat: {}" => ["Urheimat: {}", "Urheimat : {}", "Urheimat: {}", "Urheimat: {}", "Urheimat: {}"],
-        "{} provinces" => ["{} provincias", "{} provinces", "{} Provinzen", "{} províncias", "{} il"],
+        "Urheimat: {}" => [
+            "Urheimat: {}",
+            "Urheimat : {}",
+            "Urheimat: {}",
+            "Urheimat: {}",
+            "Urheimat: {}",
+        ],
+        "{} provinces" => [
+            "{} provincias",
+            "{} provinces",
+            "{} Provinzen",
+            "{} províncias",
+            "{} il",
+        ],
         // ── The hover cards ──────────────────────────────────────────────────
         "💧 Inland Freshwater Lake" => [
             "💧 Lago interior de agua dulce",
@@ -991,7 +1232,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "🌊 Mar não civilizado",
             "🌊 Uygarlıksız Deniz",
         ],
-        "Depth: {} m" => ["Profundidad: {} m", "Profondeur : {} m", "Tiefe: {} m", "Profundidade: {} m", "Derinlik: {} m"],
+        "Depth: {} m" => [
+            "Profundidad: {} m",
+            "Profondeur : {} m",
+            "Tiefe: {} m",
+            "Profundidade: {} m",
+            "Derinlik: {} m",
+        ],
         "🏔️ Wasteland Beyond History" => [
             "🏔️ Yermo más allá de la historia",
             "🏔️ Terre désolée hors de l'histoire",
@@ -1034,14 +1281,22 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Aqui não surgiu nenhuma civilização",
             "Burada hiçbir uygarlık doğmadı",
         ],
-        "Fertile enough to live on, but never the best ground in reach: nothing here outperformed the cradles." => [
-            "Suficientemente fértil para vivir, pero nunca la mejor tierra al alcance: nada aquí superó a las cunas.",
-            "Assez fertile pour y vivre, mais jamais la meilleure terre à portée : rien ici n'a surpassé les berceaux.",
-            "Fruchtbar genug zum Leben, aber nie der beste erreichbare Boden: Nichts hier übertraf die Wiegen.",
-            "Fértil o bastante para viver, mas nunca a melhor terra ao alcance: nada aqui superou os berços.",
-            "Yaşamaya yetecek kadar verimli, ama erişilebilir en iyi toprak değil: burada hiçbir şey beşikleri geçemedi.",
+        "Fertile enough to live on, but never the best ground in reach: nothing here outperformed the cradles." => {
+            [
+                "Suficientemente fértil para vivir, pero nunca la mejor tierra al alcance: nada aquí superó a las cunas.",
+                "Assez fertile pour y vivre, mais jamais la meilleure terre à portée : rien ici n'a surpassé les berceaux.",
+                "Fruchtbar genug zum Leben, aber nie der beste erreichbare Boden: Nichts hier übertraf die Wiegen.",
+                "Fértil o bastante para viver, mas nunca a melhor terra ao alcance: nada aqui superou os berços.",
+                "Yaşamaya yetecek kadar verimli, ama erişilebilir en iyi toprak değil: burada hiçbir şey beşikleri geçemedi.",
+            ]
+        }
+        "🌊 Open Water" => [
+            "🌊 Aguas abiertas",
+            "🌊 Pleine mer",
+            "🌊 Offenes Wasser",
+            "🌊 Águas abertas",
+            "🌊 Açık Su",
         ],
-        "🌊 Open Water" => ["🌊 Aguas abiertas", "🌊 Pleine mer", "🌊 Offenes Wasser", "🌊 Águas abertas", "🌊 Açık Su"],
         "No land, and so no tongue of its own." => [
             "No hay tierra y, por tanto, ninguna lengua propia.",
             "Pas de terre, donc pas de langue propre.",
@@ -1056,11 +1311,41 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "A água em si não pertence a nenhuma língua.",
             "Suyun kendisi hiçbir dile ait değildir.",
         ],
-        "Language: {}" => ["Idioma: {}", "Langue : {}", "Sprache: {}", "Língua: {}", "Dil: {}"],
-        "Autonym: {}" => ["Endónimo: {}", "Autonyme : {}", "Autonym: {}", "Autónimo: {}", "Öz ad: {}"],
-        "Province: {}" => ["Provincia: {}", "Province : {}", "Provinz: {}", "Província: {}", "İl: {}"],
-        "Society: {}" => ["Sociedad: {}", "Société : {}", "Gesellschaft: {}", "Sociedade: {}", "Toplum: {}"],
-        "Size: {} px" => ["Tamaño: {} px", "Taille : {} px", "Größe: {} px", "Tamanho: {} px", "Boyut: {} px"],
+        "Language: {}" => [
+            "Idioma: {}",
+            "Langue : {}",
+            "Sprache: {}",
+            "Língua: {}",
+            "Dil: {}",
+        ],
+        "Autonym: {}" => [
+            "Endónimo: {}",
+            "Autonyme : {}",
+            "Autonym: {}",
+            "Autónimo: {}",
+            "Öz ad: {}",
+        ],
+        "Province: {}" => [
+            "Provincia: {}",
+            "Province : {}",
+            "Provinz: {}",
+            "Província: {}",
+            "İl: {}",
+        ],
+        "Society: {}" => [
+            "Sociedad: {}",
+            "Société : {}",
+            "Gesellschaft: {}",
+            "Sociedade: {}",
+            "Toplum: {}",
+        ],
+        "Size: {} px" => [
+            "Tamaño: {} px",
+            "Taille : {} px",
+            "Größe: {} px",
+            "Tamanho: {} px",
+            "Boyut: {} px",
+        ],
         "🏔️ Beyond the Tongues" => [
             "🏔️ Más allá de las lenguas",
             "🏔️ Au-delà des langues",
@@ -1075,7 +1360,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Nenhuma língua se fixou nesta terra",
             "Bu toprağa hiçbir dil yerleşmedi",
         ],
-        "Open Ocean" => ["Océano abierto", "Haute mer", "Offener Ozean", "Oceano aberto", "Açık Okyanus"],
+        "Open Ocean" => [
+            "Océano abierto",
+            "Haute mer",
+            "Offener Ozean",
+            "Oceano aberto",
+            "Açık Okyanus",
+        ],
         "Inland Freshwater Lake" => [
             "Lago interior de agua dulce",
             "Lac d'eau douce intérieur",
@@ -1183,7 +1474,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Precipitação anual: {} mm/ano",
             "Yıllık yağış: {} mm/yıl",
         ],
-        "Sea ice" => ["Hielo marino", "Glace de mer", "Meereis", "Gelo marinho", "Deniz buzu"],
+        "Sea ice" => [
+            "Hielo marino",
+            "Glace de mer",
+            "Meereis",
+            "Gelo marinho",
+            "Deniz buzu",
+        ],
         "Sea surface" => [
             "Superficie del mar",
             "Surface de la mer",
@@ -1221,7 +1518,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "İzoterm kuşağı: {}",
         ],
         "🪨 {}" => ["🪨 {}", "🪨 {}", "🪨 {}", "🪨 {}", "🪨 {}"],
-        "Band: {}" => ["Banda: {}", "Bande : {}", "Band: {}", "Faixa: {}", "Kuşak: {}"],
+        "Band: {}" => [
+            "Banda: {}",
+            "Bande : {}",
+            "Band: {}",
+            "Faixa: {}",
+            "Kuşak: {}",
+        ],
         "Ground: {} ({} m rise per pixel)" => [
             "Terreno: {} ({} m de desnivel por píxel)",
             "Sol : {} ({} m de dénivelé par pixel)",
@@ -1267,7 +1570,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Bacia oceânica:",
             "Okyanus havzası:",
         ],
-        "Continent:" => ["Continente:", "Continent :", "Kontinent:", "Continente:", "Kıta:"],
+        "Continent:" => [
+            "Continente:",
+            "Continent :",
+            "Kontinent:",
+            "Continente:",
+            "Kıta:",
+        ],
         "Anchor Coast:" => [
             "Costa de anclaje:",
             "Côte d'ancrage :",
@@ -1275,7 +1584,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Costa de ancoragem:",
             "Bağlantı kıyısı:",
         ],
-        "Province #{}" => ["Provincia #{}", "Province n° {}", "Provinz #{}", "Província #{}", "İl #{}"],
+        "Province #{}" => [
+            "Provincia #{}",
+            "Province n° {}",
+            "Provinz #{}",
+            "Província #{}",
+            "İl #{}",
+        ],
         "Sea Floor Depth: {} m" => [
             "Profundidad del fondo marino: {} m",
             "Profondeur du fond marin : {} m",
@@ -1298,7 +1613,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Kalıcı Buz Tabakası / Geçilemez Vahşi Doğa",
         ],
         "#{}" => ["#{}", "n° {}", "#{}", "#{}", "#{}"],
-        "🏔️ Wasteland" => ["🏔️ Yermo", "🏔️ Terre désolée", "🏔️ Ödland", "🏔️ Ermo", "🏔️ Çoraklık"],
+        "🏔️ Wasteland" => [
+            "🏔️ Yermo",
+            "🏔️ Terre désolée",
+            "🏔️ Ödland",
+            "🏔️ Ermo",
+            "🏔️ Çoraklık",
+        ],
         "Impassable / Uninhabited Wilderness" => [
             "Naturaleza infranqueable / deshabitada",
             "Nature infranchissable / inhabitée",
@@ -1306,7 +1627,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Natureza intransitável / desabitada",
             "Geçilemez / Issız Vahşi Doğa",
         ],
-        "📍 Province #{}" => ["📍 Provincia #{}", "📍 Province n° {}", "📍 Provinz #{}", "📍 Província #{}", "📍 İl #{}"],
+        "📍 Province #{}" => [
+            "📍 Provincia #{}",
+            "📍 Province n° {}",
+            "📍 Provinz #{}",
+            "📍 Província #{}",
+            "📍 İl #{}",
+        ],
         "Population: {} people ({}/km²)" => [
             "Población: {} personas ({}/km²)",
             "Population : {} habitants ({}/km²)",
@@ -1321,10 +1648,28 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "População da sociedade: {} pessoas",
             "Toplum nüfusu: {} kişi",
         ],
-        "🌊 Ocean" => ["🌊 Océano", "🌊 Océan", "🌊 Ozean", "🌊 Oceano", "🌊 Okyanus"],
-        "{} · {} — {}" => ["{} · {} — {}", "{} · {} — {}", "{} · {} — {}", "{} · {} — {}", "{} · {} — {}"],
+        "🌊 Ocean" => [
+            "🌊 Océano",
+            "🌊 Océan",
+            "🌊 Ozean",
+            "🌊 Oceano",
+            "🌊 Okyanus",
+        ],
+        "{} · {} — {}" => [
+            "{} · {} — {}",
+            "{} · {} — {}",
+            "{} · {} — {}",
+            "{} · {} — {}",
+            "{} · {} — {}",
+        ],
         "• {}" => ["• {}", "• {}", "• {}", "• {}", "• {}"],
-        "A state" => ["Un estado", "Un État", "Ein Staat", "Um estado", "Bir devlet"],
+        "A state" => [
+            "Un estado",
+            "Un État",
+            "Ein Staat",
+            "Um estado",
+            "Bir devlet",
+        ],
         "A pre-state society" => [
             "Una sociedad preestatal",
             "Une société pré-étatique",
@@ -1346,11 +1691,29 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Nenhum vizinho ao alcance.",
             "Erişilebilecek komşu yok.",
         ],
-        "Neighbours: {}" => ["Vecinos: {}", "Voisins : {}", "Nachbarn: {}", "Vizinhos: {}", "Komşular: {}"],
+        "Neighbours: {}" => [
+            "Vecinos: {}",
+            "Voisins : {}",
+            "Nachbarn: {}",
+            "Vizinhos: {}",
+            "Komşular: {}",
+        ],
         // ── The world's vocabulary: climate, terrain, slope ──────────────────
-        "Ice cap" => ["Casco de hielo", "Calotte glaciaire", "Eiskappe", "Calota de gelo", "Buz Örtüsü"],
+        "Ice cap" => [
+            "Casco de hielo",
+            "Calotte glaciaire",
+            "Eiskappe",
+            "Calota de gelo",
+            "Buz Örtüsü",
+        ],
         "Tundra" => ["Tundra", "Tundra", "Tundra", "Tundra", "Tundra"],
-        "Cold steppe" => ["Estepa fría", "Steppe froide", "Kaltsteppe", "Estepe fria", "Soğuk bozkır"],
+        "Cold steppe" => [
+            "Estepa fría",
+            "Steppe froide",
+            "Kaltsteppe",
+            "Estepe fria",
+            "Soğuk bozkır",
+        ],
         "Boreal forest" => [
             "Bosque boreal",
             "Forêt boréale",
@@ -1358,7 +1721,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Floresta boreal",
             "Boreal orman",
         ],
-        "Highland" => ["Tierras altas", "Hautes terres", "Hochland", "Terras altas", "Yayla"],
+        "Highland" => [
+            "Tierras altas",
+            "Hautes terres",
+            "Hochland",
+            "Terras altas",
+            "Yayla",
+        ],
         "Temperate desert" => [
             "Desierto templado",
             "Désert tempéré",
@@ -1387,7 +1756,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Floresta pluvial temperada",
             "Ilıman yağmur ormanı",
         ],
-        "Hot desert" => ["Desierto cálido", "Désert chaud", "Heiße Wüste", "Deserto quente", "Sıcak çöl"],
+        "Hot desert" => [
+            "Desierto cálido",
+            "Désert chaud",
+            "Heiße Wüste",
+            "Deserto quente",
+            "Sıcak çöl",
+        ],
         "Savanna" => ["Sabana", "Savane", "Savanne", "Savana", "Savan"],
         "Tropical rainforest" => [
             "Selva tropical",
@@ -1510,7 +1885,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Terras baixas costeiras",
             "Kıyı ovası",
         ],
-        "Lowland" => ["Tierras bajas", "Plaines", "Tiefland", "Terras baixas", "Ova"],
+        "Lowland" => [
+            "Tierras bajas",
+            "Plaines",
+            "Tiefland",
+            "Terras baixas",
+            "Ova",
+        ],
         "Hill country" => [
             "Región de colinas",
             "Pays de collines",
@@ -1518,7 +1899,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Região de colinas",
             "Tepelik bölge",
         ],
-        "Upland" => ["Altiplano", "Hauts plateaux", "Hochland", "Planalto", "Yüksek ova"],
+        "Upland" => [
+            "Altiplano",
+            "Hauts plateaux",
+            "Hochland",
+            "Planalto",
+            "Yüksek ova",
+        ],
         "Mountain" => ["Montaña", "Montagne", "Bergland", "Montanha", "Dağ"],
         "High mountain" => [
             "Alta montaña",
@@ -1541,7 +1928,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "−3 000 … −200 m",
             "−3 000 … −200 m",
         ],
-        "−200 … 0 m" => ["−200 … 0 m", "−200 … 0 m", "−200 … 0 m", "−200 … 0 m", "−200 … 0 m"],
+        "−200 … 0 m" => [
+            "−200 … 0 m",
+            "−200 … 0 m",
+            "−200 … 0 m",
+            "−200 … 0 m",
+            "−200 … 0 m",
+        ],
         "lake surface" => [
             "superficie del lago",
             "surface du lac",
@@ -1556,10 +1949,34 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "solo ou mar gelado",
             "donmuş toprak veya deniz",
         ],
-        "0 … 150 m" => ["0 … 150 m", "0 … 150 m", "0 … 150 m", "0 … 150 m", "0 … 150 m"],
-        "150 … {} m" => ["150 … {} m", "150 … {} m", "150 … {} m", "150 … {} m", "150 … {} m"],
-        "{} … {} m" => ["{} … {} m", "{} … {} m", "{} … {} m", "{} … {} m", "{} … {} m"],
-        "{} m +" => ["{} m y más", "{} m et plus", "{} m +", "{} m +", "{} m ve üzeri"],
+        "0 … 150 m" => [
+            "0 … 150 m",
+            "0 … 150 m",
+            "0 … 150 m",
+            "0 … 150 m",
+            "0 … 150 m",
+        ],
+        "150 … {} m" => [
+            "150 … {} m",
+            "150 … {} m",
+            "150 … {} m",
+            "150 … {} m",
+            "150 … {} m",
+        ],
+        "{} … {} m" => [
+            "{} … {} m",
+            "{} … {} m",
+            "{} … {} m",
+            "{} … {} m",
+            "{} … {} m",
+        ],
+        "{} m +" => [
+            "{} m y más",
+            "{} m et plus",
+            "{} m +",
+            "{} m +",
+            "{} m ve üzeri",
+        ],
         "gentle" => ["suave", "douce", "sanft", "suave", "hafif"],
         "rolling" => ["ondulada", "vallonnée", "wellig", "ondulada", "dalgalı"],
         "steep" => ["empinada", "raide", "steil", "íngreme", "dik"],
@@ -1571,13 +1988,15 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "uçurum gibi",
         ],
         // ── The configuration panel ──────────────────────────────────────────
-        "Every constant of the engine, in the order the acts apply it. A value applies to the acts not yet grown — press ↺ on an act to grow it again." => [
-            "Todas las constantes del motor, en el orden en que las aplican los actos. Un valor afecta a los actos aún no generados: pulsa ↺ en un acto para generarlo de nuevo.",
-            "Toutes les constantes du moteur, dans l'ordre où les actes les appliquent. Une valeur s'applique aux actes pas encore générés — appuyez sur ↺ sur un acte pour le régénérer.",
-            "Jede Konstante der Engine, in der Reihenfolge, in der die Akte sie anwenden. Ein Wert gilt für noch nicht gewachsene Akte — drücken Sie ↺ bei einem Akt, um ihn erneut zu erzeugen.",
-            "Todas as constantes do motor, na ordem em que os atos as aplicam. Um valor aplica-se aos atos ainda não gerados — prima ↺ num ato para o gerar de novo.",
-            "Motorun tüm sabitleri, perdelerin uyguladığı sırayla. Bir değer henüz oluşmamış perdeler için geçerlidir — bir perdeyi yeniden oluşturmak için ↺ düğmesine basın.",
-        ],
+        "Every constant of the engine, in the order the acts apply it. A value applies to the acts not yet grown — press ↺ on an act to grow it again." => {
+            [
+                "Todas las constantes del motor, en el orden en que las aplican los actos. Un valor afecta a los actos aún no generados: pulsa ↺ en un acto para generarlo de nuevo.",
+                "Toutes les constantes du moteur, dans l'ordre où les actes les appliquent. Une valeur s'applique aux actes pas encore générés — appuyez sur ↺ sur un acte pour le régénérer.",
+                "Jede Konstante der Engine, in der Reihenfolge, in der die Akte sie anwenden. Ein Wert gilt für noch nicht gewachsene Akte — drücken Sie ↺ bei einem Akt, um ihn erneut zu erzeugen.",
+                "Todas as constantes do motor, na ordem em que os atos as aplicam. Um valor aplica-se aos atos ainda não gerados — prima ↺ num ato para o gerar de novo.",
+                "Motorun tüm sabitleri, perdelerin uyguladığı sırayla. Bir değer henüz oluşmamış perdeler için geçerlidir — bir perdeyi yeniden oluşturmak için ↺ düğmesine basın.",
+            ]
+        }
         "↺ Reset all" => [
             "↺ Restablecer todo",
             "↺ Tout réinitialiser",
@@ -1767,14 +2186,22 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Modo de rotação planetária",
             "Gezegen dönüş modu",
         ],
-        "Controls the planetary dynamic: a conventional rotating globe with Hadley/Ferrel circulation, or an eyeball world tidally locked to its sun, with a permanent day face and a permanent night face." => [
-            "Controla la dinámica planetaria: un globo en rotación convencional con circulación de Hadley/Ferrel, o un mundo globo ocular anclado marealmente a su sol, con una cara diurna y otra nocturna permanentes.",
-            "Contrôle la dynamique planétaire : un globe en rotation classique avec circulation de Hadley/Ferrel, ou un monde « œil » verrouillé par effet de marée à son soleil, avec une face jour et une face nuit permanentes.",
-            "Steuert die planetare Dynamik: ein konventionell rotierender Globus mit Hadley/Ferrel-Zirkulation oder eine an ihre Sonne gebundene Augapfelwelt mit dauerhafter Tag- und Nachtseite.",
-            "Controla a dinâmica planetária: um globo em rotação convencional com circulação de Hadley/Ferrel, ou um mundo «olho» bloqueado por maré ao seu sol, com uma face diurna e outra noturna permanentes.",
-            "Gezegen dinamiklerini denetler: Hadley/Ferrel dolaşımı olan normal dönen bir küre ya da güneşine kilitlenmiş, kalıcı gündüz ve gece yüzleri olan bir göz küresi dünya.",
+        "Controls the planetary dynamic: a conventional rotating globe with Hadley/Ferrel circulation, or an eyeball world tidally locked to its sun, with a permanent day face and a permanent night face." => {
+            [
+                "Controla la dinámica planetaria: un globo en rotación convencional con circulación de Hadley/Ferrel, o un mundo globo ocular anclado marealmente a su sol, con una cara diurna y otra nocturna permanentes.",
+                "Contrôle la dynamique planétaire : un globe en rotation classique avec circulation de Hadley/Ferrel, ou un monde « œil » verrouillé par effet de marée à son soleil, avec une face jour et une face nuit permanentes.",
+                "Steuert die planetare Dynamik: ein konventionell rotierender Globus mit Hadley/Ferrel-Zirkulation oder eine an ihre Sonne gebundene Augapfelwelt mit dauerhafter Tag- und Nachtseite.",
+                "Controla a dinâmica planetária: um globo em rotação convencional com circulação de Hadley/Ferrel, ou um mundo «olho» bloqueado por maré ao seu sol, com uma face diurna e outra noturna permanentes.",
+                "Gezegen dinamiklerini denetler: Hadley/Ferrel dolaşımı olan normal dönen bir küre ya da güneşine kilitlenmiş, kalıcı gündüz ve gece yüzleri olan bir göz küresi dünya.",
+            ]
+        }
+        "Rotating" => [
+            "En rotación",
+            "En rotation",
+            "Rotierend",
+            "Em rotação",
+            "Dönen",
         ],
-        "Rotating" => ["En rotación", "En rotation", "Rotierend", "Em rotação", "Dönen"],
         "Tidally locked (eyeball)" => [
             "Anclado marealmente (globo ocular)",
             "Verrouillé par marée (œil)",
@@ -1979,153 +2406,195 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Continentes máximos",
             "En fazla kıta",
         ],
-        "Sea-level surface temperature at the equator. Higher values expand the tropical belt; lower values begin a global cooling." => [
-            "Temperatura superficial al nivel del mar en el ecuador. Valores más altos amplían el cinturón tropical; los más bajos inician un enfriamiento global.",
-            "Température de surface au niveau de la mer à l'équateur. Des valeurs plus élevées élargissent la ceinture tropicale ; les plus basses amorcent un refroidissement global.",
-            "Oberflächentemperatur auf Meereshöhe am Äquator. Höhere Werte weiten den Tropengürtel aus, niedrigere beginnen eine globale Abkühlung.",
-            "Temperatura à superfície ao nível do mar no equador. Valores mais altos ampliam o cinturão tropical; os mais baixos iniciam um arrefecimento global.",
-            "Ekvator'da deniz seviyesindeki yüzey sıcaklığı. Yüksek değerler tropik kuşağı genişletir; düşük değerler küresel bir soğuma başlatır.",
-        ],
-        "Sea-level surface temperature at the poles. Above 0 °C the world is a greenhouse without permanent ice." => [
-            "Temperatura superficial al nivel del mar en los polos. Por encima de 0 °C el mundo es un invernadero sin hielo permanente.",
-            "Température de surface au niveau de la mer aux pôles. Au-dessus de 0 °C, le monde est un effet de serre sans glace permanente.",
-            "Oberflächentemperatur auf Meereshöhe an den Polen. Über 0 °C ist die Welt ein Treibhaus ohne dauerhaftes Eis.",
-            "Temperatura à superfície ao nível do mar nos polos. Acima de 0 °C o mundo é uma estufa sem gelo permanente.",
-            "Kutuplarda deniz seviyesindeki yüzey sıcaklığı. 0 °C'nin üzerinde dünya, kalıcı buzu olmayan bir sera olur.",
-        ],
-        "The latitude where the thick continental ice caps begin to form. Lower it for an ice age; raise it to keep the glaciers at the poles. The sheet reaches solid ice 0.18 rad (≈ 10°) further poleward." => [
-            "La latitud donde empiezan a formarse los gruesos casquetes glaciares continentales. Bájala para una edad de hielo; súbela para mantener los glaciares en los polos. La capa alcanza hielo sólido 0,18 rad (≈ 10°) más hacia el polo.",
-            "La latitude où les épaisses calottes glaciaires continentales commencent à se former. Abaissez-la pour un âge glaciaire ; élevez-la pour garder les glaciers aux pôles. La calotte atteint la glace solide 0,18 rad (≈ 10°) plus loin vers le pôle.",
-            "Die Breite, in der die dicken kontinentalen Eiskappen zu entstehen beginnen. Niedriger für eine Eiszeit, höher, um die Gletscher an den Polen zu halten. Der Schild erreicht festes Eis 0,18 rad (≈ 10°) weiter polwärts.",
-            "A latitude onde as espessas calotas polares continentais começam a formar-se. Baixe-a para uma era glaciar; suba-a para manter os glaciares nos polos. O manto atinge gelo sólido 0,18 rad (≈ 10°) mais para o polo.",
-            "Kalın kıta buz örtülerinin oluşmaya başladığı enlem. Buzul çağı için düşürün; buzulları kutuplarda tutmak için yükseltin. Tabaka, kutba doğru 0,18 rad (≈ 10°) daha ileride katı buza ulaşır.",
-        ],
-        "The latitude where permanent pack ice forms over the ocean. The sea freezes slightly equatorward of the land ice, so this edge is held at or below the ice cap's." => [
-            "La latitud donde se forma hielo marino permanente sobre el océano. El mar se congela ligeramente hacia el ecuador respecto al hielo terrestre, así que este borde se mantiene igual o por debajo del casquete.",
-            "La latitude où la banquise permanente se forme sur l'océan. La mer gèle légèrement plus près de l'équateur que la glace terrestre ; cette limite est donc maintenue au niveau de la calotte ou en dessous.",
-            "Die Breite, in der sich ständiges Packeis auf dem Ozean bildet. Das Meer gefriert etwas äquatorwärts des Landeises, daher liegt dieser Rand auf oder unter dem der Eiskappe.",
-            "A latitude onde se forma gelo marinho permanente sobre o oceano. O mar congela ligeiramente mais perto do equador do que o gelo terrestre, pelo que este limite fica igual ou abaixo do da calota.",
-            "Okyanus üzerinde kalıcı deniz buzunun oluştuğu enlem. Deniz, kara buzuna göre ekvatora biraz daha yakın donar; bu sınır buz örtüsünün sınırında ya da altında tutulur.",
-        ],
-        "The sea-ice edge is poleward of the ice cap: the sea freezes first, so the belt is pulled back to the cap when the act runs." => [
-            "El borde del hielo marino está más al polo que el casquete: el mar se congela antes, así que la franja se ajusta al casquete cuando se ejecuta el acto.",
-            "La limite de la banquise est plus polaire que la calotte : la mer gèle d'abord, la ceinture est donc ramenée à la calotte à l'exécution de l'acte.",
-            "Der Meereisrand liegt polwärts der Eiskappe: Das Meer gefriert zuerst, daher wird der Gürtel beim Lauf des Akts auf die Kappe zurückgezogen.",
-            "O limite do gelo marinho está mais para o polo do que a calota: o mar congela primeiro, pelo que a faixa é recuada até à calota quando o ato corre.",
-            "Deniz buzu sınırı buz örtüsünün kutup tarafında: deniz önce donduğu için perde çalıştığında kuşak buz örtüsüne çekilir.",
-        ],
-        "Shifts the continental datum against the water line: 0.02 drains the ocean basins to reveal land bridges and inland seas, 0.11 is Earth, 0.22 drowns the continents into archipelagos." => [
-            "Desplaza el datum continental respecto a la línea de agua: 0,02 drena las cuencas oceánicas y revela puentes de tierra y mares interiores, 0,11 es la Tierra, 0,22 ahoga los continentes en archipiélagos.",
-            "Décale le datum continental par rapport à la ligne d'eau : 0,02 draine les bassins océaniques et révèle des ponts terrestres et des mers intérieures, 0,11 c'est la Terre, 0,22 noie les continents en archipels.",
-            "Verschiebt das kontinentale Datum gegen die Wasserlinie: 0,02 entleert die Ozeanbecken und legt Landbrücken und Binnenmeere frei, 0,11 ist die Erde, 0,22 ertränkt die Kontinente in Archipele.",
-            "Desloca o datum continental em relação à linha de água: 0,02 drena as bacias oceânicas e revela pontes de terra e mares interiores, 0,11 é a Terra, 0,22 afoga os continentes em arquipélagos.",
-            "Kıta datumunu su çizgisine göre kaydırır: 0,02 okyanus havzalarını boşaltıp kara köprülerini ve iç denizleri açığa çıkarır, 0,11 Dünya'dır, 0,22 kıtaları takımadalara boğar.",
-        ],
-        "Frequency of the continental field: 0.40 aggregates the crust into one or two supercontinents, 1.05 is Earth's continents, 4.50 shatters the land into hundreds of islands." => [
-            "Frecuencia del campo continental: 0,40 agrupa la corteza en uno o dos supercontinentes, 1,05 son los continentes terrestres, 4,50 fragmenta la tierra en cientos de islas.",
-            "Fréquence du champ continental : 0,40 regroupe la croûte en un ou deux supercontinents, 1,05 correspond aux continents terrestres, 4,50 fragmente la terre en centaines d'îles.",
-            "Frequenz des Kontinentalfelds: 0,40 bündelt die Kruste zu einem oder zwei Superkontinenten, 1,05 sind die Kontinente der Erde, 4,50 zersplittert das Land in Hunderte Inseln.",
-            "Frequência do campo continental: 0,40 agrupa a crusta em um ou dois supercontinentes, 1,05 são os continentes da Terra, 4,50 fragmenta a terra em centenas de ilhas.",
-            "Kıta alanının frekansı: 0,40 kabuğu bir ya da iki süper kıtada toplar, 1,05 Dünya'nın kıtalarıdır, 4,50 karayı yüzlerce adaya parçalar.",
-        ],
-        "Fractal persistence across the continental field's octaves. Low values give smooth, gentle shorelines; high values craggy, rugged coasts with abundant micro-islands." => [
-            "Persistencia fractal entre las octavas del campo continental. Valores bajos dan costas suaves y amables; valores altos, costas escarpadas y abruptas con abundantes microislas.",
-            "Persistance fractale entre les octaves du champ continental. Des valeurs basses donnent des rivages lisses et doux ; des valeurs hautes, des côtes escarpées et accidentées riches en micro-îles.",
-            "Fraktale Persistenz über die Oktaven des Kontinentalfelds. Niedrige Werte ergeben glatte, sanfte Küsten; hohe Werte zerklüftete, raue Küsten mit vielen Mikroinseln.",
-            "Persistência fractal entre as oitavas do campo continental. Valores baixos dão costas suaves e gentis; valores altos, costas escarpadas e acidentadas com muitas microilhas.",
-            "Kıta alanının oktavları arasında fraktal kalıcılık. Düşük değerler pürüzsüz, yumuşak kıyılar; yüksek değerler bol mikro adalı, sarp ve engebeli kıyılar verir.",
-        ],
-        "Strength of the coordinate warp on the crust. At 0.00 the landmasses are regular and rounded; at high values coastlines fold into deep fjords, sweeping bays and chaotic peninsulas." => [
-            "Fuerza de la deformación de coordenadas sobre la corteza. Con 0,00 las masas de tierra son regulares y redondeadas; con valores altos las costas se pliegan en fiordos profundos, bahías amplias y penínsulas caóticas.",
-            "Force de la déformation des coordonnées sur la croûte. À 0,00, les masses continentales sont régulières et arrondies ; à des valeurs élevées, les côtes se plissent en fjords profonds, baies amples et presqu'îles chaotiques.",
-            "Stärke der Koordinatenkrümmung auf der Kruste. Bei 0,00 sind die Landmassen regelmäßig und rund; bei hohen Werten falten sich die Küsten zu tiefen Fjorden, weiten Buchten und chaotischen Halbinseln.",
-            "Força da distorção de coordenadas na crusta. A 0,00 as massas de terra são regulares e arredondadas; com valores altos as costas dobram-se em fiordes profundos, baías amplas e penínsulas caóticas.",
-            "Kabuk üzerindeki koordinat bükülmesinin gücü. 0,00'da kara kütleleri düzenli ve yuvarlaktır; yüksek değerlerde kıyılar derin fiyortlara, geniş koylara ve kaotik yarımadalara katlanır.",
-        ],
-        "Maximum vertical uplift along a fault line. Low values leave weathered, low-relief shield plains; high values thrust up towering, impassable Alpine ridges." => [
-            "Levantamiento vertical máximo a lo largo de una falla. Valores bajos dejan llanuras escudadas y desgastadas; valores altos alzan crestas alpinas imponentes e intransitables.",
-            "Soulèvement vertical maximal le long d'une faille. Des valeurs basses laissent des plaines de bouclier altérées et peu accidentées ; des valeurs hautes dressent de hautes crêtes alpines infranchissables.",
-            "Maximale vertikale Hebung entlang einer Verwerfung. Niedrige Werte hinterlassen verwitterte Schildplainen mit geringem Relief; hohe Werte türmen gewaltige, unpassierbare Alpenkämme auf.",
-            "Levantamento vertical máximo ao longo de uma falha. Valores baixos deixam planícies de escudo desgastadas; valores altos erguem cristas alpinas imponentes e intransitáveis.",
-            "Bir fay hattı boyunca en yüksek dikey yükselme. Düşük değerler aşınmış, az engebeli kalkan ovaları bırakır; yüksek değerler görkemli, geçilemez Alp sırtları yükseltir.",
-        ],
-        "Density of the tectonic fault lines across the globe. Low values yield a few isolated mountain belts; high values a dense, criss-crossed web of ranges." => [
-            "Densidad de las fallas tectónicas en el globo. Valores bajos producen unas pocas cordilleras aisladas; valores altos, una red densa y entrecruzada de sierras.",
-            "Densité des failles tectoniques sur le globe. Des valeurs basses donnent quelques chaînes isolées ; des valeurs hautes un réseau dense et entrecroisé de montagnes.",
-            "Dichte der tektonischen Verwerfungen auf dem Globus. Niedrige Werte ergeben wenige isolierte Gebirgsgürtel; hohe Werte ein dichtes, gekreuztes Netz von Ketten.",
-            "Densidade das falhas tectónicas no globo. Valores baixos dão poucas cordilheiras isoladas; valores altos, uma rede densa e entrecruzada de serras.",
-            "Dünya genelindeki tektonik fay hatlarının yoğunluğu. Düşük değerler birkaç yalıtılmış dağ kuşağı; yüksek değerler yoğun, çapraz bir sıradağ ağı verir.",
-        ],
-        "Thickness of the orogenic collision zone. Small values draw sharp, narrow mountain spines; large values build broad, sprawling highland plateaus." => [
-            "Grosor de la zona de colisión orogénica. Valores pequeños dibujan crestas afiladas y estrechas; valores grandes construyen amplias mesetas elevadas y extensas.",
-            "Épaisseur de la zone de collision orogénique. De petites valeurs dessinent des crêtes acérées et étroites ; de grandes valeurs bâtissent de vastes plateaux d'altitude.",
-            "Dicke der orogenen Kollisionszone. Kleine Werte zeichnen scharfe, schmale Gebirgskämme; große Werte bauen breite, ausgedehnte Hochplateaus.",
-            "Espessura da zona de colisão orogénica. Valores pequenos desenham cristas afiadas e estreitas; valores grandes constroem amplos planaltos elevados.",
-            "Orojenik çarpışma bölgesinin kalınlığı. Küçük değerler keskin, dar dağ sırtları çizer; büyük değerler geniş, yayılmış yüksek platolar oluşturur.",
-        ],
-        "Number of simulated raindrops running downhill. Low values leave freshly uplifted, jagged crags; high values carve deep canyons, sediment basins and mature dendritic valleys. This is the dominant cost of act 1." => [
-            "Número de gotas de lluvia simuladas que corren cuesta abajo. Valores bajos dejan crestas escarpadas recién elevadas; valores altos excavan cañones profundos, cuencas de sedimento y valles dendríticos maduros. Es el coste dominante del acto 1.",
-            "Nombre de gouttes de pluie simulées dévalant les pentes. Des valeurs basses laissent des crêtes dentelées fraîchement soulevées ; des valeurs hautes creusent de profonds canyons, des bassins sédimentaires et des vallées dendritiques matures. C'est le coût dominant de l'acte 1.",
-            "Anzahl der simulierten Regentropfen, die bergab laufen. Niedrige Werte hinterlassen frisch gehobene, zackige Kämme; hohe Werte graben tiefe Canyons, Sedimentbecken und reife dendritische Täler. Dies ist der dominante Aufwand von Akt 1.",
-            "Número de gotas de chuva simuladas a descer a encosta. Valores baixos deixam cristas dentadas recém-elevadas; valores altos escavam canhões profundos, bacias de sedimento e vales dendríticos maduros. É o custo dominante do ato 1.",
-            "Yokuş aşağı akan benzetilmiş yağmur damlalarının sayısı. Düşük değerler yeni yükselmiş, sivri kayalıklar bırakır; yüksek değerler derin kanyonlar, tortul havzalar ve olgun dallanan vadiler oyar. 1. perdenin baskın maliyetidir.",
-        ],
-        "Iterations of talus slumping downhill. At 0 the cliffs stay near-vertical and jagged; higher values soften them into stable, natural scree slopes." => [
-            "Iteraciones de deslizamiento de derrubios cuesta abajo. Con 0 los acantilados quedan casi verticales y escarpados; valores mayores los suavizan en laderas de grava estables y naturales.",
-            "Itérations d'éboulement des talus vers le bas. À 0, les falaises restent quasi verticales et déchiquetées ; des valeurs plus hautes les adoucissent en pentes d'éboulis stables et naturelles.",
-            "Durchläufe des Hangrutschens von Schutt. Bei 0 bleiben die Klippen fast senkrecht und zackig; höhere Werte glätten sie zu stabilen, natürlichen Schutthängen.",
-            "Iterações de deslizamento de detritos encosta abaixo. A 0 as falésias ficam quase verticais e dentadas; valores mais altos suavizam-nas em vertentes de pedra solta estáveis e naturais.",
-            "Yamaç molozunun aşağı kayma yinelemesi. 0'da uçurumlar neredeyse dikey ve sivri kalır; yüksek değerler onları kararlı, doğal moloz yamaçlarına yumuşatır.",
-        ],
-        "Baseline precipitation before latitude belts, rain shadows and distance from the sea are accounted for. Sets how lush or dry the planet is." => [
-            "Precipitación base antes de considerar cinturones de latitud, sombras de lluvia y distancia al mar. Determina cuán frondoso o seco es el planeta.",
-            "Précipitations de base avant prise en compte des ceintures de latitude, des ombres pluviométriques et de la distance à la mer. Détermine la luxuriance ou la sécheresse de la planète.",
-            "Grundniederschlag, bevor Breitengürtel, Regenschatten und Meeresferne berücksichtigt werden. Legt fest, wie üppig oder trocken der Planet ist.",
-            "Precipitação base antes de considerar cinturões de latitude, sombras de chuva e distância ao mar. Determina quão exuberante ou seco é o planeta.",
-            "Enlem kuşakları, yağmur gölgeleri ve denize uzaklık hesaba katılmadan önceki temel yağış. Gezegenin ne kadar yemyeşil ya da kurak olduğunu belirler.",
-        ],
-        "How deeply the descending limb of the Hadley cell dries the subtropics (around ±26°). At 0.00 subtropical deserts disappear; high values girdle the globe in Sahara-like belts." => [
-            "Cuánto seca los subtrópicos la rama descendente de la célula de Hadley (alrededor de ±26°). Con 0,00 los desiertos subtropicales desaparecen; valores altos rodean el globo con franjas tipo Sahara.",
-            "À quel point la branche descendante de la cellule de Hadley assèche les subtropiques (autour de ±26°). À 0,00, les déserts subtropicaux disparaissent ; des valeurs hautes ceinturent le globe de bandes sahariennes.",
-            "Wie stark der absteigende Ast der Hadley-Zelle die Subtropen austrocknet (um ±26°). Bei 0,00 verschwinden die subtropischen Wüsten; hohe Werte umgürten den Globus mit Sahara-artigen Gürteln.",
-            "Até que ponto o ramo descendente da célula de Hadley seca os subtrópicos (em torno de ±26°). A 0,00 os desertos subtropicais desaparecem; valores altos cingem o globo com faixas tipo Sara.",
-            "Hadley hücresinin alçalan kolunun subtropikleri ne kadar kuruttuğu (yaklaşık ±26°). 0,00'da subtropik çöller yok olur; yüksek değerler dünyayı Sahra benzeri kuşaklarla sarar.",
-        ],
-        "Share of oceanic moisture retained in the deepest continental interior. Low values dry out supercontinent hearts into steppes and salt flats; high values let the sea's rain reach far inland." => [
-            "Proporción de humedad oceánica que se conserva en el interior continental más profundo. Valores bajos convierten los corazones de los supercontinentes en estepas y salinas; valores altos permiten que la lluvia marina llegue muy tierra adentro.",
-            "Part de l'humidité océanique retenue au plus profond de l'intérieur continental. Des valeurs basses transforment le cœur des supercontinents en steppes et salines ; des valeurs hautes laissent la pluie marine pénétrer loin à l'intérieur.",
-            "Anteil der ozeanischen Feuchte, der im tiefsten Kontinentinneren erhalten bleibt. Niedrige Werte trocknen die Herzen der Superkontinente zu Steppen und Salzpfannen aus; hohe Werte lassen den Regen des Meeres weit ins Landesinnere reichen.",
-            "Proporção de humidade oceânica retida no interior continental mais profundo. Valores baixos transformam os corações dos supercontinentes em estepes e salinas; valores altos deixam a chuva do mar chegar muito para o interior.",
-            "En derin kıta içlerinde tutulan okyanus nemi oranı. Düşük değerler süper kıtaların kalbini bozkırlara ve tuz düzlüklerine çevirir; yüksek değerler denizin yağmurunun iç kesimlere kadar ulaşmasını sağlar.",
-        ],
-        "Multiplier on mountain-induced precipitation. High values create heavy deluges on the windward slopes and severe rain-shadow deserts on the lee." => [
-            "Multiplicador de la precipitación inducida por montañas. Valores altos crean diluvios en las laderas de barlovento y severos desiertos de sombra de lluvia en sotavento.",
-            "Multiplicateur des précipitations induites par les montagnes. Des valeurs hautes créent de fortes averses sur les versants au vent et de sévères déserts d'ombre pluviométrique sous le vent.",
-            "Multiplikator für niederschlagsauslösende Berge. Hohe Werte erzeugen heftige Güsse an den Luvhängen und strenge Regenschattenwüsten im Lee.",
-            "Multiplicador da precipitação induzida pelas montanhas. Valores altos criam chuvadas fortes nas encostas de barlavento e desertos severos de sombra de chuva a sotavento.",
-            "Dağ kaynaklı yağışın çarpanı. Yüksek değerler rüzgâr üstü yamaçlarda şiddetli sağanaklar, rüzgâr altı yamaçlarda sert yağmur gölgesi çölleri yaratır.",
-        ],
-        "Share of rainfall that becomes surface river discharge rather than soaking away or evaporating. Higher values mean fuller, wider rivers." => [
-            "Proporción de lluvia que se convierte en caudal superficial en lugar de infiltrarse o evaporarse. Valores más altos significan ríos más llenos y anchos.",
-            "Part des précipitations qui devient ruissellement de surface au lieu de s'infiltrer ou de s'évaporer. Des valeurs plus hautes signifient des rivières plus pleines et plus larges.",
-            "Anteil des Regens, der als Oberflächenabfluss in die Flüsse gelangt, statt zu versickern oder zu verdunsten. Höhere Werte bedeuten vollere, breitere Flüsse.",
-            "Proporção de chuva que se torna escoamento superficial em vez de se infiltrar ou evaporar. Valores mais altos significam rios mais cheios e largos.",
-            "Sızmak ya da buharlaşmak yerine yüzey akışına dönüşen yağış oranı. Yüksek değerler daha dolu, daha geniş nehirler demektir.",
-        ],
-        "Smallest discharge, in m³/s, worth drawing as a river. Lower values reveal fine capillary tributaries; higher values display only the great arterial rivers." => [
-            "Caudal mínimo, en m³/s, que merece dibujarse como río. Valores bajos revelan finos afluentes capilares; valores altos muestran solo los grandes ríos arteriales.",
-            "Débit minimal, en m³/s, qui mérite d'être dessiné comme rivière. Des valeurs basses révèlent de fins affluents capillaires ; des valeurs hautes n'affichent que les grands fleuves artériels.",
-            "Kleinster Abfluss in m³/s, der noch als Fluss gezeichnet wird. Niedrige Werte zeigen feine kapillare Nebenflüsse; hohe Werte nur die großen arteriellen Ströme.",
-            "Caudal mínimo, em m³/s, que merece ser desenhado como rio. Valores baixos revelam finos afluentes capilares; valores altos mostram apenas os grandes rios arteriais.",
-            "Nehir olarak çizilmeye değer en küçük debi (m³/s). Düşük değerler ince kılcal kolları; yüksek değerler yalnızca büyük ana nehirleri gösterir.",
-        ],
-        "Land provinces across the planet. Drives cell spacing, polygon detail and the fineness of the political boundaries." => [
-            "Provincias terrestres del planeta. Determinan el espaciado de celdas, el detalle de los polígonos y la finura de las fronteras políticas.",
-            "Provinces terrestres de la planète. Détermine l'espacement des cellules, le détail des polygones et la finesse des frontières politiques.",
-            "Landprovinzen auf dem Planeten. Bestimmt Zellabstand, Polygondetail und die Feinheit der politischen Grenzen.",
-            "Províncias terrestres do planeta. Determinam o espaçamento das células, o detalhe dos polígonos e a finura das fronteiras políticas.",
-            "Gezegendeki kara illeri. Hücre aralığını, poligon ayrıntısını ve siyasi sınırların inceliğini belirler.",
-        ],
+        "Sea-level surface temperature at the equator. Higher values expand the tropical belt; lower values begin a global cooling." => {
+            [
+                "Temperatura superficial al nivel del mar en el ecuador. Valores más altos amplían el cinturón tropical; los más bajos inician un enfriamiento global.",
+                "Température de surface au niveau de la mer à l'équateur. Des valeurs plus élevées élargissent la ceinture tropicale ; les plus basses amorcent un refroidissement global.",
+                "Oberflächentemperatur auf Meereshöhe am Äquator. Höhere Werte weiten den Tropengürtel aus, niedrigere beginnen eine globale Abkühlung.",
+                "Temperatura à superfície ao nível do mar no equador. Valores mais altos ampliam o cinturão tropical; os mais baixos iniciam um arrefecimento global.",
+                "Ekvator'da deniz seviyesindeki yüzey sıcaklığı. Yüksek değerler tropik kuşağı genişletir; düşük değerler küresel bir soğuma başlatır.",
+            ]
+        }
+        "Sea-level surface temperature at the poles. Above 0 °C the world is a greenhouse without permanent ice." => {
+            [
+                "Temperatura superficial al nivel del mar en los polos. Por encima de 0 °C el mundo es un invernadero sin hielo permanente.",
+                "Température de surface au niveau de la mer aux pôles. Au-dessus de 0 °C, le monde est un effet de serre sans glace permanente.",
+                "Oberflächentemperatur auf Meereshöhe an den Polen. Über 0 °C ist die Welt ein Treibhaus ohne dauerhaftes Eis.",
+                "Temperatura à superfície ao nível do mar nos polos. Acima de 0 °C o mundo é uma estufa sem gelo permanente.",
+                "Kutuplarda deniz seviyesindeki yüzey sıcaklığı. 0 °C'nin üzerinde dünya, kalıcı buzu olmayan bir sera olur.",
+            ]
+        }
+        "The latitude where the thick continental ice caps begin to form. Lower it for an ice age; raise it to keep the glaciers at the poles. The sheet reaches solid ice 0.18 rad (≈ 10°) further poleward." => {
+            [
+                "La latitud donde empiezan a formarse los gruesos casquetes glaciares continentales. Bájala para una edad de hielo; súbela para mantener los glaciares en los polos. La capa alcanza hielo sólido 0,18 rad (≈ 10°) más hacia el polo.",
+                "La latitude où les épaisses calottes glaciaires continentales commencent à se former. Abaissez-la pour un âge glaciaire ; élevez-la pour garder les glaciers aux pôles. La calotte atteint la glace solide 0,18 rad (≈ 10°) plus loin vers le pôle.",
+                "Die Breite, in der die dicken kontinentalen Eiskappen zu entstehen beginnen. Niedriger für eine Eiszeit, höher, um die Gletscher an den Polen zu halten. Der Schild erreicht festes Eis 0,18 rad (≈ 10°) weiter polwärts.",
+                "A latitude onde as espessas calotas polares continentais começam a formar-se. Baixe-a para uma era glaciar; suba-a para manter os glaciares nos polos. O manto atinge gelo sólido 0,18 rad (≈ 10°) mais para o polo.",
+                "Kalın kıta buz örtülerinin oluşmaya başladığı enlem. Buzul çağı için düşürün; buzulları kutuplarda tutmak için yükseltin. Tabaka, kutba doğru 0,18 rad (≈ 10°) daha ileride katı buza ulaşır.",
+            ]
+        }
+        "The latitude where permanent pack ice forms over the ocean. The sea freezes slightly equatorward of the land ice, so this edge is held at or below the ice cap's." => {
+            [
+                "La latitud donde se forma hielo marino permanente sobre el océano. El mar se congela ligeramente hacia el ecuador respecto al hielo terrestre, así que este borde se mantiene igual o por debajo del casquete.",
+                "La latitude où la banquise permanente se forme sur l'océan. La mer gèle légèrement plus près de l'équateur que la glace terrestre ; cette limite est donc maintenue au niveau de la calotte ou en dessous.",
+                "Die Breite, in der sich ständiges Packeis auf dem Ozean bildet. Das Meer gefriert etwas äquatorwärts des Landeises, daher liegt dieser Rand auf oder unter dem der Eiskappe.",
+                "A latitude onde se forma gelo marinho permanente sobre o oceano. O mar congela ligeiramente mais perto do equador do que o gelo terrestre, pelo que este limite fica igual ou abaixo do da calota.",
+                "Okyanus üzerinde kalıcı deniz buzunun oluştuğu enlem. Deniz, kara buzuna göre ekvatora biraz daha yakın donar; bu sınır buz örtüsünün sınırında ya da altında tutulur.",
+            ]
+        }
+        "The sea-ice edge is poleward of the ice cap: the sea freezes first, so the belt is pulled back to the cap when the act runs." => {
+            [
+                "El borde del hielo marino está más al polo que el casquete: el mar se congela antes, así que la franja se ajusta al casquete cuando se ejecuta el acto.",
+                "La limite de la banquise est plus polaire que la calotte : la mer gèle d'abord, la ceinture est donc ramenée à la calotte à l'exécution de l'acte.",
+                "Der Meereisrand liegt polwärts der Eiskappe: Das Meer gefriert zuerst, daher wird der Gürtel beim Lauf des Akts auf die Kappe zurückgezogen.",
+                "O limite do gelo marinho está mais para o polo do que a calota: o mar congela primeiro, pelo que a faixa é recuada até à calota quando o ato corre.",
+                "Deniz buzu sınırı buz örtüsünün kutup tarafında: deniz önce donduğu için perde çalıştığında kuşak buz örtüsüne çekilir.",
+            ]
+        }
+        "Shifts the continental datum against the water line: 0.02 drains the ocean basins to reveal land bridges and inland seas, 0.11 is Earth, 0.22 drowns the continents into archipelagos." => {
+            [
+                "Desplaza el datum continental respecto a la línea de agua: 0,02 drena las cuencas oceánicas y revela puentes de tierra y mares interiores, 0,11 es la Tierra, 0,22 ahoga los continentes en archipiélagos.",
+                "Décale le datum continental par rapport à la ligne d'eau : 0,02 draine les bassins océaniques et révèle des ponts terrestres et des mers intérieures, 0,11 c'est la Terre, 0,22 noie les continents en archipels.",
+                "Verschiebt das kontinentale Datum gegen die Wasserlinie: 0,02 entleert die Ozeanbecken und legt Landbrücken und Binnenmeere frei, 0,11 ist die Erde, 0,22 ertränkt die Kontinente in Archipele.",
+                "Desloca o datum continental em relação à linha de água: 0,02 drena as bacias oceânicas e revela pontes de terra e mares interiores, 0,11 é a Terra, 0,22 afoga os continentes em arquipélagos.",
+                "Kıta datumunu su çizgisine göre kaydırır: 0,02 okyanus havzalarını boşaltıp kara köprülerini ve iç denizleri açığa çıkarır, 0,11 Dünya'dır, 0,22 kıtaları takımadalara boğar.",
+            ]
+        }
+        "Frequency of the continental field: 0.40 aggregates the crust into one or two supercontinents, 1.05 is Earth's continents, 4.50 shatters the land into hundreds of islands." => {
+            [
+                "Frecuencia del campo continental: 0,40 agrupa la corteza en uno o dos supercontinentes, 1,05 son los continentes terrestres, 4,50 fragmenta la tierra en cientos de islas.",
+                "Fréquence du champ continental : 0,40 regroupe la croûte en un ou deux supercontinents, 1,05 correspond aux continents terrestres, 4,50 fragmente la terre en centaines d'îles.",
+                "Frequenz des Kontinentalfelds: 0,40 bündelt die Kruste zu einem oder zwei Superkontinenten, 1,05 sind die Kontinente der Erde, 4,50 zersplittert das Land in Hunderte Inseln.",
+                "Frequência do campo continental: 0,40 agrupa a crusta em um ou dois supercontinentes, 1,05 são os continentes da Terra, 4,50 fragmenta a terra em centenas de ilhas.",
+                "Kıta alanının frekansı: 0,40 kabuğu bir ya da iki süper kıtada toplar, 1,05 Dünya'nın kıtalarıdır, 4,50 karayı yüzlerce adaya parçalar.",
+            ]
+        }
+        "Fractal persistence across the continental field's octaves. Low values give smooth, gentle shorelines; high values craggy, rugged coasts with abundant micro-islands." => {
+            [
+                "Persistencia fractal entre las octavas del campo continental. Valores bajos dan costas suaves y amables; valores altos, costas escarpadas y abruptas con abundantes microislas.",
+                "Persistance fractale entre les octaves du champ continental. Des valeurs basses donnent des rivages lisses et doux ; des valeurs hautes, des côtes escarpées et accidentées riches en micro-îles.",
+                "Fraktale Persistenz über die Oktaven des Kontinentalfelds. Niedrige Werte ergeben glatte, sanfte Küsten; hohe Werte zerklüftete, raue Küsten mit vielen Mikroinseln.",
+                "Persistência fractal entre as oitavas do campo continental. Valores baixos dão costas suaves e gentis; valores altos, costas escarpadas e acidentadas com muitas microilhas.",
+                "Kıta alanının oktavları arasında fraktal kalıcılık. Düşük değerler pürüzsüz, yumuşak kıyılar; yüksek değerler bol mikro adalı, sarp ve engebeli kıyılar verir.",
+            ]
+        }
+        "Strength of the coordinate warp on the crust. At 0.00 the landmasses are regular and rounded; at high values coastlines fold into deep fjords, sweeping bays and chaotic peninsulas." => {
+            [
+                "Fuerza de la deformación de coordenadas sobre la corteza. Con 0,00 las masas de tierra son regulares y redondeadas; con valores altos las costas se pliegan en fiordos profundos, bahías amplias y penínsulas caóticas.",
+                "Force de la déformation des coordonnées sur la croûte. À 0,00, les masses continentales sont régulières et arrondies ; à des valeurs élevées, les côtes se plissent en fjords profonds, baies amples et presqu'îles chaotiques.",
+                "Stärke der Koordinatenkrümmung auf der Kruste. Bei 0,00 sind die Landmassen regelmäßig und rund; bei hohen Werten falten sich die Küsten zu tiefen Fjorden, weiten Buchten und chaotischen Halbinseln.",
+                "Força da distorção de coordenadas na crusta. A 0,00 as massas de terra são regulares e arredondadas; com valores altos as costas dobram-se em fiordes profundos, baías amplas e penínsulas caóticas.",
+                "Kabuk üzerindeki koordinat bükülmesinin gücü. 0,00'da kara kütleleri düzenli ve yuvarlaktır; yüksek değerlerde kıyılar derin fiyortlara, geniş koylara ve kaotik yarımadalara katlanır.",
+            ]
+        }
+        "Maximum vertical uplift along a fault line. Low values leave weathered, low-relief shield plains; high values thrust up towering, impassable Alpine ridges." => {
+            [
+                "Levantamiento vertical máximo a lo largo de una falla. Valores bajos dejan llanuras escudadas y desgastadas; valores altos alzan crestas alpinas imponentes e intransitables.",
+                "Soulèvement vertical maximal le long d'une faille. Des valeurs basses laissent des plaines de bouclier altérées et peu accidentées ; des valeurs hautes dressent de hautes crêtes alpines infranchissables.",
+                "Maximale vertikale Hebung entlang einer Verwerfung. Niedrige Werte hinterlassen verwitterte Schildplainen mit geringem Relief; hohe Werte türmen gewaltige, unpassierbare Alpenkämme auf.",
+                "Levantamento vertical máximo ao longo de uma falha. Valores baixos deixam planícies de escudo desgastadas; valores altos erguem cristas alpinas imponentes e intransitáveis.",
+                "Bir fay hattı boyunca en yüksek dikey yükselme. Düşük değerler aşınmış, az engebeli kalkan ovaları bırakır; yüksek değerler görkemli, geçilemez Alp sırtları yükseltir.",
+            ]
+        }
+        "Density of the tectonic fault lines across the globe. Low values yield a few isolated mountain belts; high values a dense, criss-crossed web of ranges." => {
+            [
+                "Densidad de las fallas tectónicas en el globo. Valores bajos producen unas pocas cordilleras aisladas; valores altos, una red densa y entrecruzada de sierras.",
+                "Densité des failles tectoniques sur le globe. Des valeurs basses donnent quelques chaînes isolées ; des valeurs hautes un réseau dense et entrecroisé de montagnes.",
+                "Dichte der tektonischen Verwerfungen auf dem Globus. Niedrige Werte ergeben wenige isolierte Gebirgsgürtel; hohe Werte ein dichtes, gekreuztes Netz von Ketten.",
+                "Densidade das falhas tectónicas no globo. Valores baixos dão poucas cordilheiras isoladas; valores altos, uma rede densa e entrecruzada de serras.",
+                "Dünya genelindeki tektonik fay hatlarının yoğunluğu. Düşük değerler birkaç yalıtılmış dağ kuşağı; yüksek değerler yoğun, çapraz bir sıradağ ağı verir.",
+            ]
+        }
+        "Thickness of the orogenic collision zone. Small values draw sharp, narrow mountain spines; large values build broad, sprawling highland plateaus." => {
+            [
+                "Grosor de la zona de colisión orogénica. Valores pequeños dibujan crestas afiladas y estrechas; valores grandes construyen amplias mesetas elevadas y extensas.",
+                "Épaisseur de la zone de collision orogénique. De petites valeurs dessinent des crêtes acérées et étroites ; de grandes valeurs bâtissent de vastes plateaux d'altitude.",
+                "Dicke der orogenen Kollisionszone. Kleine Werte zeichnen scharfe, schmale Gebirgskämme; große Werte bauen breite, ausgedehnte Hochplateaus.",
+                "Espessura da zona de colisão orogénica. Valores pequenos desenham cristas afiadas e estreitas; valores grandes constroem amplos planaltos elevados.",
+                "Orojenik çarpışma bölgesinin kalınlığı. Küçük değerler keskin, dar dağ sırtları çizer; büyük değerler geniş, yayılmış yüksek platolar oluşturur.",
+            ]
+        }
+        "Number of simulated raindrops running downhill. Low values leave freshly uplifted, jagged crags; high values carve deep canyons, sediment basins and mature dendritic valleys. This is the dominant cost of act 1." => {
+            [
+                "Número de gotas de lluvia simuladas que corren cuesta abajo. Valores bajos dejan crestas escarpadas recién elevadas; valores altos excavan cañones profundos, cuencas de sedimento y valles dendríticos maduros. Es el coste dominante del acto 1.",
+                "Nombre de gouttes de pluie simulées dévalant les pentes. Des valeurs basses laissent des crêtes dentelées fraîchement soulevées ; des valeurs hautes creusent de profonds canyons, des bassins sédimentaires et des vallées dendritiques matures. C'est le coût dominant de l'acte 1.",
+                "Anzahl der simulierten Regentropfen, die bergab laufen. Niedrige Werte hinterlassen frisch gehobene, zackige Kämme; hohe Werte graben tiefe Canyons, Sedimentbecken und reife dendritische Täler. Dies ist der dominante Aufwand von Akt 1.",
+                "Número de gotas de chuva simuladas a descer a encosta. Valores baixos deixam cristas dentadas recém-elevadas; valores altos escavam canhões profundos, bacias de sedimento e vales dendríticos maduros. É o custo dominante do ato 1.",
+                "Yokuş aşağı akan benzetilmiş yağmur damlalarının sayısı. Düşük değerler yeni yükselmiş, sivri kayalıklar bırakır; yüksek değerler derin kanyonlar, tortul havzalar ve olgun dallanan vadiler oyar. 1. perdenin baskın maliyetidir.",
+            ]
+        }
+        "Iterations of talus slumping downhill. At 0 the cliffs stay near-vertical and jagged; higher values soften them into stable, natural scree slopes." => {
+            [
+                "Iteraciones de deslizamiento de derrubios cuesta abajo. Con 0 los acantilados quedan casi verticales y escarpados; valores mayores los suavizan en laderas de grava estables y naturales.",
+                "Itérations d'éboulement des talus vers le bas. À 0, les falaises restent quasi verticales et déchiquetées ; des valeurs plus hautes les adoucissent en pentes d'éboulis stables et naturelles.",
+                "Durchläufe des Hangrutschens von Schutt. Bei 0 bleiben die Klippen fast senkrecht und zackig; höhere Werte glätten sie zu stabilen, natürlichen Schutthängen.",
+                "Iterações de deslizamento de detritos encosta abaixo. A 0 as falésias ficam quase verticais e dentadas; valores mais altos suavizam-nas em vertentes de pedra solta estáveis e naturais.",
+                "Yamaç molozunun aşağı kayma yinelemesi. 0'da uçurumlar neredeyse dikey ve sivri kalır; yüksek değerler onları kararlı, doğal moloz yamaçlarına yumuşatır.",
+            ]
+        }
+        "Baseline precipitation before latitude belts, rain shadows and distance from the sea are accounted for. Sets how lush or dry the planet is." => {
+            [
+                "Precipitación base antes de considerar cinturones de latitud, sombras de lluvia y distancia al mar. Determina cuán frondoso o seco es el planeta.",
+                "Précipitations de base avant prise en compte des ceintures de latitude, des ombres pluviométriques et de la distance à la mer. Détermine la luxuriance ou la sécheresse de la planète.",
+                "Grundniederschlag, bevor Breitengürtel, Regenschatten und Meeresferne berücksichtigt werden. Legt fest, wie üppig oder trocken der Planet ist.",
+                "Precipitação base antes de considerar cinturões de latitude, sombras de chuva e distância ao mar. Determina quão exuberante ou seco é o planeta.",
+                "Enlem kuşakları, yağmur gölgeleri ve denize uzaklık hesaba katılmadan önceki temel yağış. Gezegenin ne kadar yemyeşil ya da kurak olduğunu belirler.",
+            ]
+        }
+        "How deeply the descending limb of the Hadley cell dries the subtropics (around ±26°). At 0.00 subtropical deserts disappear; high values girdle the globe in Sahara-like belts." => {
+            [
+                "Cuánto seca los subtrópicos la rama descendente de la célula de Hadley (alrededor de ±26°). Con 0,00 los desiertos subtropicales desaparecen; valores altos rodean el globo con franjas tipo Sahara.",
+                "À quel point la branche descendante de la cellule de Hadley assèche les subtropiques (autour de ±26°). À 0,00, les déserts subtropicaux disparaissent ; des valeurs hautes ceinturent le globe de bandes sahariennes.",
+                "Wie stark der absteigende Ast der Hadley-Zelle die Subtropen austrocknet (um ±26°). Bei 0,00 verschwinden die subtropischen Wüsten; hohe Werte umgürten den Globus mit Sahara-artigen Gürteln.",
+                "Até que ponto o ramo descendente da célula de Hadley seca os subtrópicos (em torno de ±26°). A 0,00 os desertos subtropicais desaparecem; valores altos cingem o globo com faixas tipo Sara.",
+                "Hadley hücresinin alçalan kolunun subtropikleri ne kadar kuruttuğu (yaklaşık ±26°). 0,00'da subtropik çöller yok olur; yüksek değerler dünyayı Sahra benzeri kuşaklarla sarar.",
+            ]
+        }
+        "Share of oceanic moisture retained in the deepest continental interior. Low values dry out supercontinent hearts into steppes and salt flats; high values let the sea's rain reach far inland." => {
+            [
+                "Proporción de humedad oceánica que se conserva en el interior continental más profundo. Valores bajos convierten los corazones de los supercontinentes en estepas y salinas; valores altos permiten que la lluvia marina llegue muy tierra adentro.",
+                "Part de l'humidité océanique retenue au plus profond de l'intérieur continental. Des valeurs basses transforment le cœur des supercontinents en steppes et salines ; des valeurs hautes laissent la pluie marine pénétrer loin à l'intérieur.",
+                "Anteil der ozeanischen Feuchte, der im tiefsten Kontinentinneren erhalten bleibt. Niedrige Werte trocknen die Herzen der Superkontinente zu Steppen und Salzpfannen aus; hohe Werte lassen den Regen des Meeres weit ins Landesinnere reichen.",
+                "Proporção de humidade oceânica retida no interior continental mais profundo. Valores baixos transformam os corações dos supercontinentes em estepes e salinas; valores altos deixam a chuva do mar chegar muito para o interior.",
+                "En derin kıta içlerinde tutulan okyanus nemi oranı. Düşük değerler süper kıtaların kalbini bozkırlara ve tuz düzlüklerine çevirir; yüksek değerler denizin yağmurunun iç kesimlere kadar ulaşmasını sağlar.",
+            ]
+        }
+        "Multiplier on mountain-induced precipitation. High values create heavy deluges on the windward slopes and severe rain-shadow deserts on the lee." => {
+            [
+                "Multiplicador de la precipitación inducida por montañas. Valores altos crean diluvios en las laderas de barlovento y severos desiertos de sombra de lluvia en sotavento.",
+                "Multiplicateur des précipitations induites par les montagnes. Des valeurs hautes créent de fortes averses sur les versants au vent et de sévères déserts d'ombre pluviométrique sous le vent.",
+                "Multiplikator für niederschlagsauslösende Berge. Hohe Werte erzeugen heftige Güsse an den Luvhängen und strenge Regenschattenwüsten im Lee.",
+                "Multiplicador da precipitação induzida pelas montanhas. Valores altos criam chuvadas fortes nas encostas de barlavento e desertos severos de sombra de chuva a sotavento.",
+                "Dağ kaynaklı yağışın çarpanı. Yüksek değerler rüzgâr üstü yamaçlarda şiddetli sağanaklar, rüzgâr altı yamaçlarda sert yağmur gölgesi çölleri yaratır.",
+            ]
+        }
+        "Share of rainfall that becomes surface river discharge rather than soaking away or evaporating. Higher values mean fuller, wider rivers." => {
+            [
+                "Proporción de lluvia que se convierte en caudal superficial en lugar de infiltrarse o evaporarse. Valores más altos significan ríos más llenos y anchos.",
+                "Part des précipitations qui devient ruissellement de surface au lieu de s'infiltrer ou de s'évaporer. Des valeurs plus hautes signifient des rivières plus pleines et plus larges.",
+                "Anteil des Regens, der als Oberflächenabfluss in die Flüsse gelangt, statt zu versickern oder zu verdunsten. Höhere Werte bedeuten vollere, breitere Flüsse.",
+                "Proporção de chuva que se torna escoamento superficial em vez de se infiltrar ou evaporar. Valores mais altos significam rios mais cheios e largos.",
+                "Sızmak ya da buharlaşmak yerine yüzey akışına dönüşen yağış oranı. Yüksek değerler daha dolu, daha geniş nehirler demektir.",
+            ]
+        }
+        "Smallest discharge, in m³/s, worth drawing as a river. Lower values reveal fine capillary tributaries; higher values display only the great arterial rivers." => {
+            [
+                "Caudal mínimo, en m³/s, que merece dibujarse como río. Valores bajos revelan finos afluentes capilares; valores altos muestran solo los grandes ríos arteriales.",
+                "Débit minimal, en m³/s, qui mérite d'être dessiné comme rivière. Des valeurs basses révèlent de fins affluents capillaires ; des valeurs hautes n'affichent que les grands fleuves artériels.",
+                "Kleinster Abfluss in m³/s, der noch als Fluss gezeichnet wird. Niedrige Werte zeigen feine kapillare Nebenflüsse; hohe Werte nur die großen arteriellen Ströme.",
+                "Caudal mínimo, em m³/s, que merece ser desenhado como rio. Valores baixos revelam finos afluentes capilares; valores altos mostram apenas os grandes rios arteriais.",
+                "Nehir olarak çizilmeye değer en küçük debi (m³/s). Düşük değerler ince kılcal kolları; yüksek değerler yalnızca büyük ana nehirleri gösterir.",
+            ]
+        }
+        "Land provinces across the planet. Drives cell spacing, polygon detail and the fineness of the political boundaries." => {
+            [
+                "Provincias terrestres del planeta. Determinan el espaciado de celdas, el detalle de los polígonos y la finura de las fronteras políticas.",
+                "Provinces terrestres de la planète. Détermine l'espacement des cellules, le détail des polygones et la finesse des frontières politiques.",
+                "Landprovinzen auf dem Planeten. Bestimmt Zellabstand, Polygondetail und die Feinheit der politischen Grenzen.",
+                "Províncias terrestres do planeta. Determinam o espaçamento das células, o detalhe dos polígonos e a finura das fronteiras políticas.",
+                "Gezegendeki kara illeri. Hücre aralığını, poligon ayrıntısını ve siyasi sınırların inceliğini belirler.",
+            ]
+        }
         "Sea zones partitioned across oceans and gulfs for naval and trade routing." => [
             "Zonas marinas repartidas entre océanos y golfos para el trazado naval y comercial.",
             "Zones marines réparties entre océans et golfes pour le routage naval et commercial.",
@@ -2133,27 +2602,33 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Zonas marinhas repartidas entre oceanos e golfos para o traçado naval e comercial.",
             "Deniz ve ticaret güzergâhları için okyanuslara ve körfezlere bölünmüş deniz bölgeleri.",
         ],
-        "Most of the ice-free land that may become impassable wasteland — the deep desert hearts, the glaciated crags, the interior jungle. Set it to 0% for a completely settled planet. Polar ice is not counted: it is geography, not a choice." => [
-            "La mayor parte de la tierra libre de hielo que puede volverse yermo intransitable: los corazones de los desiertos profundos, las cumbres glaciares, la selva interior. Ponlo al 0% para un planeta totalmente poblado. El hielo polar no cuenta: es geografía, no una elección.",
-            "La plus grande part des terres libres de glace pouvant devenir des terres désolées infranchissables — les cœurs des déserts profonds, les cimes englacées, la jungle intérieure. Mettez 0 % pour une planète entièrement peuplée. La glace polaire ne compte pas : c'est la géographie, pas un choix.",
-            "Der größte Teil des eisfreien Landes, das unpassierbares Ödland werden kann — die tiefen Wüstenherzen, die vergletscherten Grate, der Binnen-Dschungel. Bei 0 % ist der Planet vollständig besiedelt. Polareis zählt nicht: Es ist Geografie, keine Entscheidung.",
-            "A maior parte da terra livre de gelo que pode tornar-se ermo intransitável — os corações dos desertos profundos, as cristas glaciares, a selva interior. Ponha 0% para um planeta totalmente povoado. O gelo polar não conta: é geografia, não uma escolha.",
-            "Geçilemez çoraklığa dönüşebilecek buzsuz karanın çoğu — derin çöl kalpleri, buzullu kayalıklar, iç ormanlar. Tamamen yerleşilmiş bir gezegen için %0 yapın. Kutup buzu sayılmaz: o coğrafyadır, bir seçim değil.",
-        ],
-        "Environmental hostility above which a province is abandoned to the wild. Lowering it makes the planet harsher and harder to colonise." => [
-            "Hostilidad ambiental por encima de la cual una provincia se abandona a la naturaleza. Bajarla hace el planeta más duro y difícil de colonizar.",
-            "Hostilité environnementale au-delà de laquelle une province est abandonnée à la nature. L'abaisser rend la planète plus rude et plus difficile à coloniser.",
-            "Umweltfeindlichkeit, oberhalb derer eine Provinz der Wildnis überlassen wird. Niedrigere Werte machen den Planeten härter und schwerer zu besiedeln.",
-            "Hostilidade ambiental acima da qual uma província é abandonada à natureza. Baixá-la torna o planeta mais duro e difícil de colonizar.",
-            "Bir ilin vahşi doğaya bırakıldığı çevresel düşmanlık eşiği. Düşürmek gezegeni daha sert ve kolonileştirmesi daha zor yapar.",
-        ],
-        "Ceiling on the major continental cores found by the topological clustering. 1 gives a single Pangaean hierarchy, 7 an Earth-like fractured world. Landmasses beyond the ceiling are anchored to the nearest core, exactly as an island is." => [
-            "Tope de los núcleos continentales principales hallados por el agrupamiento topológico. 1 da una sola jerarquía pangéica; 7, un mundo fragmentado como la Tierra. Las masas de tierra más allá del tope se anclan al núcleo más cercano, igual que una isla.",
-            "Plafond des principaux cœurs continentaux trouvés par le regroupement topologique. 1 donne une hiérarchie pangéenne unique, 7 un monde fracturé comme la Terre. Les masses terrestres au-delà du plafond sont ancrées au cœur le plus proche, exactement comme une île.",
-            "Obergrenze der großen kontinentalen Kerne, die die topologische Gruppierung findet. 1 ergibt eine einzige pangäische Hierarchie, 7 eine erdähnlich zersplitterte Welt. Landmassen jenseits der Grenze werden an den nächsten Kern verankert, genau wie eine Insel.",
-            "Limite dos principais núcleos continentais encontrados pelo agrupamento topológico. 1 dá uma única hierarquia pangeia; 7, um mundo fraturado como a Terra. As massas de terra além do limite ancoram-se ao núcleo mais próximo, tal como uma ilha.",
-            "Topolojik kümelemenin bulduğu büyük kıta çekirdeklerinin üst sınırı. 1 tek bir Pangea hiyerarşisi, 7 Dünya benzeri parçalanmış bir dünya verir. Sınırın ötesindeki kara kütleleri, tıpkı bir ada gibi en yakın çekirdeğe bağlanır.",
-        ],
+        "Most of the ice-free land that may become impassable wasteland — the deep desert hearts, the glaciated crags, the interior jungle. Set it to 0% for a completely settled planet. Polar ice is not counted: it is geography, not a choice." => {
+            [
+                "La mayor parte de la tierra libre de hielo que puede volverse yermo intransitable: los corazones de los desiertos profundos, las cumbres glaciares, la selva interior. Ponlo al 0% para un planeta totalmente poblado. El hielo polar no cuenta: es geografía, no una elección.",
+                "La plus grande part des terres libres de glace pouvant devenir des terres désolées infranchissables — les cœurs des déserts profonds, les cimes englacées, la jungle intérieure. Mettez 0 % pour une planète entièrement peuplée. La glace polaire ne compte pas : c'est la géographie, pas un choix.",
+                "Der größte Teil des eisfreien Landes, das unpassierbares Ödland werden kann — die tiefen Wüstenherzen, die vergletscherten Grate, der Binnen-Dschungel. Bei 0 % ist der Planet vollständig besiedelt. Polareis zählt nicht: Es ist Geografie, keine Entscheidung.",
+                "A maior parte da terra livre de gelo que pode tornar-se ermo intransitável — os corações dos desertos profundos, as cristas glaciares, a selva interior. Ponha 0% para um planeta totalmente povoado. O gelo polar não conta: é geografia, não uma escolha.",
+                "Geçilemez çoraklığa dönüşebilecek buzsuz karanın çoğu — derin çöl kalpleri, buzullu kayalıklar, iç ormanlar. Tamamen yerleşilmiş bir gezegen için %0 yapın. Kutup buzu sayılmaz: o coğrafyadır, bir seçim değil.",
+            ]
+        }
+        "Environmental hostility above which a province is abandoned to the wild. Lowering it makes the planet harsher and harder to colonise." => {
+            [
+                "Hostilidad ambiental por encima de la cual una provincia se abandona a la naturaleza. Bajarla hace el planeta más duro y difícil de colonizar.",
+                "Hostilité environnementale au-delà de laquelle une province est abandonnée à la nature. L'abaisser rend la planète plus rude et plus difficile à coloniser.",
+                "Umweltfeindlichkeit, oberhalb derer eine Provinz der Wildnis überlassen wird. Niedrigere Werte machen den Planeten härter und schwerer zu besiedeln.",
+                "Hostilidade ambiental acima da qual uma província é abandonada à natureza. Baixá-la torna o planeta mais duro e difícil de colonizar.",
+                "Bir ilin vahşi doğaya bırakıldığı çevresel düşmanlık eşiği. Düşürmek gezegeni daha sert ve kolonileştirmesi daha zor yapar.",
+            ]
+        }
+        "Ceiling on the major continental cores found by the topological clustering. 1 gives a single Pangaean hierarchy, 7 an Earth-like fractured world. Landmasses beyond the ceiling are anchored to the nearest core, exactly as an island is." => {
+            [
+                "Tope de los núcleos continentales principales hallados por el agrupamiento topológico. 1 da una sola jerarquía pangéica; 7, un mundo fragmentado como la Tierra. Las masas de tierra más allá del tope se anclan al núcleo más cercano, igual que una isla.",
+                "Plafond des principaux cœurs continentaux trouvés par le regroupement topologique. 1 donne une hiérarchie pangéenne unique, 7 un monde fracturé comme la Terre. Les masses terrestres au-delà du plafond sont ancrées au cœur le plus proche, exactement comme une île.",
+                "Obergrenze der großen kontinentalen Kerne, die die topologische Gruppierung findet. 1 ergibt eine einzige pangäische Hierarchie, 7 eine erdähnlich zersplitterte Welt. Landmassen jenseits der Grenze werden an den nächsten Kern verankert, genau wie eine Insel.",
+                "Limite dos principais núcleos continentais encontrados pelo agrupamento topológico. 1 dá uma única hierarquia pangeia; 7, um mundo fraturado como a Terra. As massas de terra além do limite ancoram-se ao núcleo mais próximo, tal como uma ilha.",
+                "Topolojik kümelemenin bulduğu büyük kıta çekirdeklerinin üst sınırı. 1 tek bir Pangea hiyerarşisi, 7 Dünya benzeri parçalanmış bir dünya verir. Sınırın ötesindeki kara kütleleri, tıpkı bir ada gibi en yakın çekirdeğe bağlanır.",
+            ]
+        }
         "N" => ["N", "N", "N", "N", "K"],
         "S" => ["S", "S", "S", "S", "G"],
         "E" => ["E", "E", "O", "L", "D"],
@@ -2229,13 +2704,15 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Insolação, circulação e sombras de chuva: temperatura, ventos e precipitação.",
             "Güneşlenme, dolaşım ve yağmur gölgeleri: sıcaklık, rüzgârlar ve yağış.",
         ],
-        "Depressions fill into lakes and rainfall gathers into rivers. The world cache is written here." => [
-            "Las depresiones se llenan de lagos y la lluvia se reúne en ríos. Aquí se escribe la caché del mundo.",
-            "Les dépressions se remplissent de lacs et les pluies se rassemblent en rivières. Le cache du monde s'écrit ici.",
-            "Senken füllen sich zu Seen, und Regen sammelt sich in Flüssen. Hier wird der Welt-Cache geschrieben.",
-            "As depressões enchem-se de lagos e a chuva junta-se em rios. É aqui que a cache do mundo é escrita.",
-            "Çukurlar göllere dolar, yağmur nehirlere toplanır. Dünya önbelleği burada yazılır.",
-        ],
+        "Depressions fill into lakes and rainfall gathers into rivers. The world cache is written here." => {
+            [
+                "Las depresiones se llenan de lagos y la lluvia se reúne en ríos. Aquí se escribe la caché del mundo.",
+                "Les dépressions se remplissent de lacs et les pluies se rassemblent en rivières. Le cache du monde s'écrit ici.",
+                "Senken füllen sich zu Seen, und Regen sammelt sich in Flüssen. Hier wird der Welt-Cache geschrieben.",
+                "As depressões enchem-se de lagos e a chuva junta-se em rios. É aqui que a cache do mundo é escrita.",
+                "Çukurlar göllere dolar, yağmur nehirlere toplanır. Dünya önbelleği burada yazılır.",
+            ]
+        }
         "The inhabited land divided into provinces, its wilderness mapped." => [
             "La tierra habitada dividida en provincias y su naturaleza salvaje cartografiada.",
             "La terre habitée divisée en provinces, ses étendues sauvages cartographiées.",
@@ -2271,75 +2748,40 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Fonologias, proto-léxicos, Urheimats e as línguas que deles se espalham.",
             "Sesbilimler, ön sözlükler, Urheimat'lar ve onlardan yayılan diller.",
         ],
-        "Hunter-gatherers" => [
+        "Hunter-Gatherers" => [
             "Cazadores-recolectores",
             "Chasseurs-cueilleurs",
             "Jäger und Sammler",
             "Caçadores-recolectores",
             "Avcı-toplayıcılar",
         ],
-        "Nomadic pastoralists" => [
+        "Nomadic Pastoralists" => [
             "Pastores nómadas",
             "Pasteurs nomades",
             "Nomadische Hirten",
             "Pastores nómadas",
             "Göçebe çobanlar",
         ],
-        "Simple farming societies" => [
+        "Simple Farming Societies" => [
             "Sociedades agrícolas simples",
             "Sociétés agricoles simples",
             "Einfache Agrargesellschaften",
             "Sociedades agrícolas simples",
             "Basit tarım toplumları",
         ],
-        "Complex farming societies" => [
+        "Complex Farming Societies" => [
             "Sociedades agrícolas complejas",
             "Sociétés agricoles complexes",
             "Komplexe Agrargesellschaften",
             "Sociedades agrícolas complexas",
             "Karmaşık tarım toplumları",
         ],
-        "State societies" => [
+        "State Societies" => [
             "Sociedades estatales",
             "Sociétés étatiques",
             "Staatsgesellschaften",
             "Sociedades estatais",
             "Devlet toplumları",
-        ],
-        "A country of bands: a few families read one valley, move with the season, and answer to nobody but their own elders." => [
-            "Un país de bandas: unas pocas familias leen un valle, se mueven con la estación y no responden ante nadie salvo sus propios ancianos.",
-            "Un pays de bandes : quelques familles lisent une vallée, suivent la saison et ne répondent qu'à leurs propres anciens.",
-            "Ein Land der Verbände: wenige Familien lesen ein Tal, ziehen mit der Jahreszeit und sind niemandem außer ihren eigenen Ältesten Rechenschaft schuldig.",
-            "Um país de bandos: poucas famílias leem um vale, movem-se com a estação e não respondem perante ninguém além dos seus anciãos.",
-            "Kabileler ülkesi: birkaç aile bir vadiyi okur, mevsimle göç eder ve kendi büyüklerinden başkasına hesap vermez.",
-        ],
-        "A country of herders: wealth is counted in animals and measured in pasture, so the people move and the horizon is their border." => [
-            "Un país de pastores: la riqueza se cuenta en animales y se mide en pastos, así que el pueblo se mueve y el horizonte es su frontera.",
-            "Un pays d'éleveurs : la richesse se compte en bêtes et se mesure en pâturages ; le peuple se déplace et l'horizon est sa frontière.",
-            "Ein Land der Hirten: Reichtum wird in Tieren gezählt und in Weideland gemessen, also zieht das Volk, und der Horizont ist seine Grenze.",
-            "Um país de pastores: a riqueza conta-se em animais e mede-se em pastagem, por isso o povo move-se e o horizonte é a sua fronteira.",
-            "Çobanlar ülkesi: servet hayvanla sayılır, otlakla ölçülür; halk göç eder ve ufuk onların sınırıdır.",
-        ],
-        "A country of villages: fields are cleared and kept, the household is the unit of work, and no rank stands above it." => [
-            "Un país de aldeas: los campos se desbrozan y se conservan, el hogar es la unidad de trabajo y ningún rango está por encima de él.",
-            "Un pays de villages : les champs sont défrichés et gardés, le foyer est l'unité de travail, et nul rang ne s'élève au-dessus.",
-            "Ein Land der Dörfer: Felder werden gerodet und gehalten, der Haushalt ist die Arbeitseinheit, und kein Rang steht darüber.",
-            "Um país de aldeias: os campos são desbravados e mantidos, o agregado é a unidade de trabalho e nenhum posto está acima dele.",
-            "Köyler ülkesi: tarlalar açılır ve korunur, çalışma birimi hane halkıdır ve onun üstünde hiçbir makam yoktur.",
-        ],
-        "A ranked farming country: chiefs and lineages hold the land, tribute flows upward, and a great man is buried with more than he could use." => [
-            "Un país agrícola jerarquizado: jefes y linajes poseen la tierra, el tributo fluye hacia arriba y un gran hombre es enterrado con más de lo que podía usar.",
-            "Un pays agricole hiérarchisé : chefs et lignages tiennent la terre, le tribut remonte, et un grand homme est enterré avec plus qu'il ne pouvait user.",
-            "Ein ranggeordnetes Ackerland: Häuptlinge und Linien halten das Land, Tribut fließt nach oben, und ein großer Mann wird mit mehr begraben, als er verbrauchen konnte.",
-            "Um país agrícola hierarquizado: chefes e linhagens detêm a terra, o tributo flui para cima, e um grande homem é enterrado com mais do que poderia usar.",
-            "Sınıflı bir tarım ülkesi: reisler ve soylar toprağı tutar, haraç yukarı akar ve büyük bir adam kullanabileceğinden fazlasıyla gömülür.",
-        ],
-        "A state: offices, archives and a standing apparatus, which can tax a harvest it never touched and raise a wall it will not live to see finished." => [
-            "Un estado: cargos, archivos y un aparato permanente, capaz de gravar una cosecha que nunca tocó y levantar una muralla que no verá terminar.",
-            "Un État : des offices, des archives et un appareil permanent, capable de taxer une récolte qu'il n'a jamais touchée et d'élever une muraille qu'il ne verra pas finir.",
-            "Ein Staat: Ämter, Archive und ein stehender Apparat, der eine Ernte besteuern kann, die er nie berührt hat, und eine Mauer errichtet, deren Vollendung er nicht erleben wird.",
-            "Um estado: cargos, arquivos e um aparelho permanente, capaz de taxar uma colheita que nunca tocou e erguer uma muralha que não verá terminada.",
-            "Bir devlet: makamlar, arşivler ve daimi bir aygıt; hiç dokunmadığı bir hasadı vergilendirebilir ve bitişini göremeyeceği bir sur inşa edebilir.",
         ],
         _ => return None,
     };
@@ -2392,10 +2834,7 @@ mod tests {
 
     #[test]
     fn english_is_returned_untouched_and_unknown_lines_fall_back() {
-        assert_eq!(
-            Language::English.text("🌍 Atlas Viewer"),
-            "🌍 Atlas Viewer"
-        );
+        assert_eq!(Language::English.text("🌍 Atlas Viewer"), "🌍 Atlas Viewer");
         assert_eq!(
             Language::Spanish.text("🌍 Atlas Viewer"),
             "🌍 Atlas del Mundo"
@@ -2445,7 +2884,10 @@ mod tests {
 
         // The command line only accepts a language the atlas actually speaks.
         assert_eq!(Language::from_known_tag("de-DE"), Some(Language::German));
-        assert_eq!(Language::from_known_tag("pt_BR.UTF-8"), Some(Language::Portuguese));
+        assert_eq!(
+            Language::from_known_tag("pt_BR.UTF-8"),
+            Some(Language::Portuguese)
+        );
         assert_eq!(Language::from_known_tag("ja_JP"), None);
         assert_eq!(Language::from_known_tag("klingon"), None);
     }
@@ -2481,4 +2923,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-

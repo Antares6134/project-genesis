@@ -119,8 +119,7 @@ pub fn generate_languages(
             &family.autonym.clone(),
             &family.lexicon,
         );
-        let name =
-            family_registry.unique_rooted(&autonym, &family.name.clone(), &family.lexicon);
+        let name = family_registry.unique_rooted(&autonym, &family.name.clone(), &family.lexicon);
         family.autonym = autonym;
         family.name = name;
         families.push(family);
@@ -236,11 +235,8 @@ pub fn generate_languages(
 
         // The proto-language: the family's own voice, at its Urheimat.
         let proto_id = languages.len() as u16 + 1;
-        let proto_name = language_registry.unique_rooted(
-            &family.name,
-            &family.name.clone(),
-            &family.lexicon,
-        );
+        let proto_name =
+            language_registry.unique_rooted(&family.name, &family.name.clone(), &family.lexicon);
         let proto_autonym = language_registry.unique_rooted(
             &family.autonym,
             &family.autonym.clone(),
@@ -496,57 +492,18 @@ pub fn generate_languages(
     (languages_world, renamed)
 }
 
-/// Republish a civilization world with the names and kin its languages gave it.
+/// Republish a civilization world with the names its languages gave it.
 ///
 /// Stage 8 never mutates the dawn's published world: it clones it and replaces
-/// only the display strings, the family label and the kin list. Every other
-/// measurement — seat, provinces, population, contacts, age — is untouched.
+/// only the display strings and the family label. Every other measurement — seat,
+/// provinces, population, age — is untouched.
 pub fn apply_language_names(
     civilizations: &CivilizationWorld,
     languages: &LanguagesWorld,
-    width: usize,
-    config: &LanguageConfig,
+    _width: usize,
+    _config: &LanguageConfig,
 ) -> CivilizationWorld {
     let mut renamed = civilizations.clone();
-    let seats: Vec<(f32, f32, SocietyTier)> = renamed
-        .civilizations
-        .iter()
-        .map(|civ| (civ.seat_x, civ.seat_y, civ.tier))
-        .collect();
-    let kin_of: Vec<Vec<u32>> = (0..seats.len())
-        .map(|index| {
-            let family_id = languages.family_of_realm.get(index).copied().unwrap_or(0);
-            let mut kin: Vec<(f32, u32)> = seats
-                .iter()
-                .enumerate()
-                .filter(|(other, candidate)| {
-                    *other != index
-                        && family_id != 0
-                        && languages.family_of_realm.get(*other).copied().unwrap_or(0) == family_id
-                        && candidate.2 == seats[index].2
-                })
-                .map(|(other, candidate)| {
-                    (
-                        sphere::wrap_distance_px(
-                            seats[index].0,
-                            seats[index].1,
-                            candidate.0,
-                            candidate.1,
-                            width,
-                        ),
-                        other as u32 + 1,
-                    )
-                })
-                .collect();
-            kin.sort_by(|a, b| {
-                a.0.partial_cmp(&b.0)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then(a.1.cmp(&b.1))
-            });
-            kin.truncate(config.contact_limit);
-            kin.into_iter().map(|(_, id)| id).collect()
-        })
-        .collect();
     for (index, civ) in renamed.civilizations.iter_mut().enumerate() {
         if let Some(name) = languages.realm_names.get(index) {
             civ.name = name.clone();
@@ -555,7 +512,6 @@ pub fn apply_language_names(
         if let Some(family) = languages.family(family_id) {
             civ.language_family = family.name.clone();
         }
-        civ.kin = kin_of[index].clone();
     }
     renamed
 }

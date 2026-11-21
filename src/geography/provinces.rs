@@ -1,6 +1,7 @@
-use crate::core::progress::Progress;
-use crate::core::sphere::CanvasScale;
 use crate::core::Grid;
+use crate::core::polar::is_glacial_land;
+use crate::core::progress::Progress;
+use crate::core::sphere::{CanvasScale, wrap_distance_px};
 use crate::export::live;
 use crate::geography::config::GeographyConfig;
 use noise::{NoiseFn, OpenSimplex};
@@ -36,7 +37,9 @@ struct ExpandState {
 
 impl Ord for ExpandState {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other.cost.cmp(&self.cost)
+        other
+            .cost
+            .cmp(&self.cost)
             .then_with(|| self.x.cmp(&other.x))
             .then_with(|| self.y.cmp(&other.y))
     }
@@ -93,7 +96,11 @@ pub fn generate_provinces(
                 if dist_slice[idx] > 0 {
                     let left_idx = if x > 0 { idx - 1 } else { row_offset + w - 1 };
                     let left = dist_slice[left_idx];
-                    let up = if y > 0 { dist_slice[up_offset + x] } else { 255 };
+                    let up = if y > 0 {
+                        dist_slice[up_offset + x]
+                    } else {
+                        255
+                    };
                     let d = left.min(up).saturating_add(1);
                     if d < dist_slice[idx] {
                         dist_slice[idx] = d;
@@ -112,7 +119,11 @@ pub fn generate_provinces(
                 if cur > 0 {
                     let right_idx = if x + 1 < w { idx + 1 } else { row_offset };
                     let right = dist_slice[right_idx];
-                    let down = if y + 1 < h { dist_slice[down_offset + x] } else { 255 };
+                    let down = if y + 1 < h {
+                        dist_slice[down_offset + x]
+                    } else {
+                        255
+                    };
                     let d = cur.min(right.min(down).saturating_add(1));
                     dist_slice[idx] = d;
                 }
@@ -136,8 +147,7 @@ pub fn generate_provinces(
     let mut hostility_map = Grid::filled_with(w, h, 0u8);
 
     // ── Wasteland tuning (distances are in map pixels) ────────────────────────
-    const COAST_RING: f32 = 20.0;      // guaranteed-populated coastal belt
-    const ICE_LOCK_TEMP: f32 = -14.0;  // frozen coasts may still be wilderness
+    const COAST_RING: f32 = 20.0; // guaranteed-populated coastal belt
     // Discard sub-visible speckle. The tuned threshold is sixty-four pixels on
     // the 16K reference plate; it is an area, so a 2K plate needs one pixel to
     // mean the same patch of ground.
@@ -147,21 +157,28 @@ pub fn generate_provinces(
     let waste_cutoff = config.waste_cutoff;
     let max_waste_share = config.max_waste_share;
 
-    // ── Permanent polar ice ───────────────────────────────────────────────────
-    // The belt is not this generator's own invention: `polar::permanent_polar_ice`
-    // decides where the world's permanent ice lies (the polar belt with its ragged
-    // equatorward edge, plus every landmass cut off from a pole), the temperature
-    // grid is pinned to match, and the finished mask arrives here as
-    // `permanent_ice`. Ice overrides every sanctuary below, so no populated strip
-    // can ring a pole or hug a polar coast — while a pole-connected continent may
-    // still keep a ragged handful of provinces right at the rim of the ice. The
-    // frozen seas beyond it — rendered as "polar land" by the atlas — are part of
-    // the very same wasteland.
+    // ── Permanent polar ice and glacial ice sheets ────────────────────────────
+    // The polar belt is not this generator's own invention:
+    // `polar::permanent_polar_ice` decides where the world's permanent polar ice
+    // lies (the belt with its ragged equatorward edge, plus every landmass cut
+    // off from a pole), the temperature grid is pinned to match, and the
+    // finished mask arrives here as `permanent_ice`. Ice overrides every
+    // sanctuary below, so no populated strip can ring a pole or hug a polar
+    // coast — while a pole-connected continent may still keep a ragged handful
+    // of provinces right at the rim of the ice. The frozen seas beyond it —
+    // rendered as "polar land" by the atlas — are part of the very same
+    // wasteland.
+    //
+    // The second mask is read from the temperature itself: any land the atlas
+    // paints as a **Glacial Ice Sheet** (`polar::GLACIAL_LAND_TEMP`) is
+    // impassable too, at *any* latitude. That boundary is a surface rule, not a
+    // polar one — a tropical massif or the night face of a tidally locked world
+    // can be glaciated — and without it the frozen interior stays claimable but
+    // unseedable, so the nearest province spreads over it in one vast blob.
 
     for y in 0..h {
         let v = y as f32 / (h - 1) as f32;
         let lat = (0.5 - v) * std::f32::consts::PI;
-        let abs_lat = lat.abs();
 
         for x in 0..w {
             let elev = *heightmap.get(x as isize, y as isize);
@@ -176,20 +193,23 @@ pub fn generate_provinces(
             let py = lat.sin() as f64;
             let pz = (lat.cos() * lon.sin()) as f64;
 
-            let temp     = *temp_grid.get(x as isize, y as isize);
-            let precip   = *precip_grid.get(x as isize, y as isize);
-            let flow     = *flow_grid.get(x as isize, y as isize);
+            let temp = *temp_grid.get(x as isize, y as isize);
+            let precip = *precip_grid.get(x as isize, y as isize);
+            let flow = *flow_grid.get(x as isize, y as isize);
             let altitude = elev - sea_level;
             let (gx, gy) = heightmap.gradient(x as f32, y as f32);
-            let slope    = (gx * gx + gy * gy).sqrt();
-            let dist     = *dist_to_water.get(x as isize, y as isize);
+            let slope = (gx * gx + gy * gy).sqrt();
+            let dist = *dist_to_water.get(x as isize, y as isize);
 
             // ── Sanctuaries: coastal belt + river corridors stay populated ────
             // No wilderness is ever allowed within COAST_RING of water, so every
             // landmass keeps an unbroken ring of provinces around its shores.
-            let coastal = (dist as f32) <= COAST_RING && temp > ICE_LOCK_TEMP;
-            let river   = flow >= min_river_flow * 0.10;
-            if coastal || river {
+            // Glacial ground is the exception: a sheet overrides every
+            // sanctuary below, so no populated strip can ring or cross it.
+            let glacial = is_glacial_land(temp);
+            let coastal = (dist as f32) <= COAST_RING;
+            let river = flow >= min_river_flow * 0.10;
+            if (coastal || river) && !glacial {
                 is_sanctuary.set(x as isize, y as isize, true);
             }
 
@@ -203,25 +223,23 @@ pub fn generate_provinces(
             let on_polar_ice = *permanent_ice.get(x as isize, y as isize);
 
             if !coastal && !river {
-                let distf    = dist as f32;
+                let distf = dist as f32;
                 let no_river = 1.0 - ramp(flow, min_river_flow * 0.04, min_river_flow * 0.18);
 
                 // Low-frequency wobble (~250 px) keeps wilderness edges organic,
                 // with a medium-frequency ripple (~105 px) that shreds the fringe
                 // into the small satellite pockets EU4 maps are full of.
                 let macro_n = waste_noise.get([px * 30.0, py * 30.0, pz * 30.0]) as f32;
-                let mid_n   = waste_noise.get([px * 78.0, py * 78.0, pz * 78.0]) as f32;
-                let wobble  = macro_n * 0.12 + mid_n * 0.07;
+                let mid_n = waste_noise.get([px * 78.0, py * 78.0, pz * 78.0]) as f32;
+                let wobble = macro_n * 0.12 + mid_n * 0.07;
 
                 // ── Large wilderness hearts ───────────────────────────────────
                 // Hyper-arid interior — the Sahara / Arabian / Gobi heart.
-                let desert_heart = (1.0 - ramp(precip, 0.055, 0.150))
-                    * ramp(distf, 14.0, 60.0)
-                    * no_river;
+                let desert_heart =
+                    (1.0 - ramp(precip, 0.055, 0.150)) * ramp(distf, 14.0, 60.0) * no_river;
 
                 // High massif / plateau — Tibet, the altiplano, the Rockies.
-                let plateau_heart = ramp(altitude, 0.035, 0.130)
-                    * ramp(distf, 8.0, 45.0);
+                let plateau_heart = ramp(altitude, 0.035, 0.130) * ramp(distf, 8.0, 45.0);
 
                 // Deep rainforest interior — the Amazon / Congo basins.
                 let jungle_heart = ramp(precip, 0.60, 0.85)
@@ -234,7 +252,8 @@ pub fn generate_provinces(
                 // A medium-frequency noise scatters them so mountain chains break
                 // into individual pockets instead of one long ridge.
                 let rugged = (0.55 * ramp(altitude, 0.006, 0.042)
-                    + 0.45 * ramp(slope, 0.0012, 0.0065)).min(1.0);
+                    + 0.45 * ramp(slope, 0.0012, 0.0065))
+                .min(1.0);
                 let pocket = rugged * ramp(mid_n, -0.12, 0.30);
 
                 let hostility = 1.00 * desert_heart
@@ -243,25 +262,29 @@ pub fn generate_provinces(
                     + 0.95 * pocket
                     + wobble;
 
-                // Frozen interiors (polar ice sheets) — always impassable.
-                ice = temp < -8.0 && abs_lat > 1.05 && ramp(distf, 8.0, 40.0) > 0.2;
-
                 // Remember the score (×100, floored at 1 so it never collides
                 // with the sanctuary marker 0) for the budget calibration below.
-                let q = if ice {
-                    255u8
-                } else {
-                    (hostility * 100.0).clamp(1.0, 255.0) as u8
-                };
+                let q = (hostility * 100.0).clamp(1.0, 255.0) as u8;
                 hostility_map.set(x as isize, y as isize, q);
 
-                wasteland = ice || hostility > waste_cutoff;
+                wasteland = hostility > waste_cutoff;
             }
 
             if on_polar_ice {
                 // Permafrost overrides every sanctuary: the coastal and river
                 // belts can never reopen the ice, so no populated strip can ring
                 // a pole or hug a polar coast.
+                wasteland = true;
+                ice = true;
+            }
+
+            if glacial {
+                // The atlas paints this ground as a Glacial Ice Sheet, so it is
+                // geography, not a sanctuary: a frozen coast or a river through
+                // the sheet cannot reopen it. This is the same override the
+                // permanent polar ice gets above, extended to every glaciated
+                // surface — the frozen night face of a tidally locked world
+                // included.
                 wasteland = true;
                 ice = true;
             }
@@ -276,12 +299,19 @@ pub fn generate_provinces(
                 is_wasteland.set(x as isize, y as isize, true);
             }
 
-            let temp_score   = (-((temp - 18.0) / 12.0).powf(2.0)).exp();
-            let precip_score = if precip < 0.08 { 0.18 } else if precip < 0.15 { 0.32 } else { precip.clamp(0.0, 1.0).sqrt() };
-            let flat_score   = (1.0 - slope * 12.0).clamp(0.08, 1.0);
-            let river_bonus  = if flow >= min_river_flow { 1.4 } else { 1.0 };
+            let temp_score = (-((temp - 18.0) / 12.0).powf(2.0)).exp();
+            let precip_score = if precip < 0.08 {
+                0.18
+            } else if precip < 0.15 {
+                0.32
+            } else {
+                precip.clamp(0.0, 1.0).sqrt()
+            };
+            let flat_score = (1.0 - slope * 12.0).clamp(0.08, 1.0);
+            let river_bonus = if flow >= min_river_flow { 1.4 } else { 1.0 };
             hab_grid.set(
-                x as isize, y as isize,
+                x as isize,
+                y as isize,
                 temp_score * precip_score * flat_score * river_bonus,
             );
         }
@@ -297,19 +327,23 @@ pub fn generate_provinces(
         let min_q = (waste_cutoff * 100.0) as usize;
 
         let mut hist = [0u32; 256];
-        let mut total_land_px = 0u64;   // every land pixel, polar ice included
-        let mut budget_land_px = 0u64;  // ice-free land the budget actually governs
+        let mut total_land_px = 0u64; // every land pixel, polar ice included
+        let mut budget_land_px = 0u64; // ice-free land the budget actually governs
         for y in 0..h {
             for x in 0..w {
                 let xi = x as isize;
                 let yi = y as isize;
-                if !is_land(heightmap, is_lake, xi, yi, sea_level) { continue; }
+                if !is_land(heightmap, is_lake, xi, yi, sea_level) {
+                    continue;
+                }
                 total_land_px += 1;
                 // Permanent polar/glacial ice is geography, not noise: it is
                 // mandatory wilderness, so it must never be budgeted away — nor
                 // allowed to inflate the wilderness share until the
                 // climate-driven deserts are squeezed out of existence.
-                if *is_ice_cap.get(xi, yi) { continue; }
+                if *is_ice_cap.get(xi, yi) {
+                    continue;
+                }
                 budget_land_px += 1;
                 hist[*hostility_map.get(xi, yi) as usize] += 1;
             }
@@ -341,7 +375,9 @@ pub fn generate_provinces(
                     let xi = x as isize;
                     let yi = y as isize;
                     // Ice caps stay impassable however the budget moves.
-                    if *is_ice_cap.get(xi, yi) { continue; }
+                    if *is_ice_cap.get(xi, yi) {
+                        continue;
+                    }
                     let v = *hostility_map.get(xi, yi);
                     is_wasteland.set(xi, yi, v > 0 && v >= cut);
                 }
@@ -352,7 +388,15 @@ pub fn generate_provinces(
     // Discard sub-visible speckle so patches read as wilderness, not noise.
     remove_small_wasteland_blobs(&mut is_wasteland, &is_ice_cap, w, h, min_waste_blob);
     // Solidify the surviving cores (still sparing sanctuaries and ice caps).
-    dilate_non_ice_wasteland(&mut is_wasteland, &is_ice_cap, &is_sanctuary, heightmap, is_lake, sea_level, 1);
+    dilate_non_ice_wasteland(
+        &mut is_wasteland,
+        &is_ice_cap,
+        &is_sanctuary,
+        heightmap,
+        is_lake,
+        sea_level,
+        1,
+    );
 
     // Carve populated corridors through remaining barriers (Maghreb ↔ West Africa).
     // The carver measures itself in province widths, so a corridor can never grow
@@ -403,9 +447,8 @@ pub fn generate_provinces(
         }
     }
 
-    let (total_land_px, total_waste_px, waste_blobs, max_non_ice) = wasteland_stats(
-        heightmap, is_lake, &is_wasteland, &is_ice_cap, sea_level,
-    );
+    let (total_land_px, total_waste_px, waste_blobs, max_non_ice) =
+        wasteland_stats(heightmap, is_lake, &is_wasteland, &is_ice_cap, sea_level);
     println!(
         "✓ Physical Land: {} px | Wastelands (incl. polar ice): {} px ({:.1}%)",
         total_land_px,
@@ -456,27 +499,27 @@ pub fn generate_provinces(
     seed_candidates.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
 
     let base_min_dist: f32 = {
-        let land_px = hab_grid
-            .raw_slice()
-            .iter()
-            .filter(|&&v| v > 0.0)
-            .count() as f32;
+        let land_px = hab_grid.raw_slice().iter().filter(|&&v| v > 0.0).count() as f32;
         province_span(land_px, config.num_provinces)
     };
 
     let mut seeds: Vec<(isize, isize)> = Vec::with_capacity(config.num_provinces);
 
     for &(score, cx, cy) in &seed_candidates {
-        if seeds.len() >= config.num_provinces { break; }
+        if seeds.len() >= config.num_provinces {
+            break;
+        }
 
-        let local_hab   = score;
-        let min_dist    = (base_min_dist * (0.6 / (local_hab + 0.05).sqrt())).max(8.0);
+        let local_hab = score;
+        let min_dist = (base_min_dist * (0.6 / (local_hab + 0.05).sqrt())).max(8.0);
         let min_dist_sq = (min_dist * min_dist) as isize;
 
         let mut too_close = false;
         for &(ax, ay) in &seeds {
             let mut dx = (cx - ax).abs();
-            if dx > (w as isize) / 2 { dx = w as isize - dx; }
+            if dx > (w as isize) / 2 {
+                dx = w as isize - dx;
+            }
             let dy = cy - ay;
             if dx * dx + dy * dy < min_dist_sq {
                 too_close = true;
@@ -490,7 +533,10 @@ pub fn generate_provinces(
     }
 
     let num_seeds = seeds.len();
-    println!("✓ Seeded {} province centers (excluding wastelands).", num_seeds);
+    println!(
+        "✓ Seeded {} province centers (excluding wastelands).",
+        num_seeds
+    );
 
     if num_seeds == 0 {
         return ProvinceResult {
@@ -503,8 +549,14 @@ pub fn generate_provinces(
 
     // ─── 3. NEIGHBOUR OFFSETS ────────────────────────────────────────────────
     let neighbors: [(isize, isize, f32); 8] = [
-        (-1,  0, 1.0), ( 1,  0, 1.0), ( 0, -1, 1.0), ( 0,  1, 1.0),
-        (-1, -1, 1.414), ( 1, -1, 1.414), (-1,  1, 1.414), ( 1,  1, 1.414),
+        (-1, 0, 1.0),
+        (1, 0, 1.0),
+        (0, -1, 1.0),
+        (0, 1, 1.0),
+        (-1, -1, 1.414),
+        (1, -1, 1.414),
+        (-1, 1, 1.414),
+        (1, 1, 1.414),
     ];
 
     // ─── 4. TWO-PASS RELAXED FLOOD FILL ──────────────────────────────────────
@@ -512,10 +564,18 @@ pub fn generate_provinces(
     //    provinces themselves, spreading outward from their centres until they
     //    meet. Pass one is relaxed to its centroid and run again, so the reader
     //    sees the map settle rather than merely appear.
+    let mut split_provinces = 0usize;
+    let mut moved_centres = 0usize;
+    let mut area_mean = 0usize;
+    let mut area_ceiling = 0usize;
     for pass in 0..2usize {
         let is_last = pass == 1;
         progress.sub_step(
-            if is_last { "Claiming the land (settled)" } else { "Claiming the land" },
+            if is_last {
+                "Claiming the land (settled)"
+            } else {
+                "Claiming the land"
+            },
             0,
         );
         province_ids = Grid::filled_with(w, h, 0u32);
@@ -524,7 +584,12 @@ pub fn generate_provinces(
         for (idx, &(sx, sy)) in seeds.iter().enumerate() {
             let pid = (idx + 1) as u32;
             province_ids.set(sx, sy, pid);
-            heap.push(ExpandState { cost: 0, x: sx, y: sy, id: pid });
+            heap.push(ExpandState {
+                cost: 0,
+                x: sx,
+                y: sy,
+                id: pid,
+            });
         }
 
         let mut claimed = 0usize;
@@ -537,14 +602,18 @@ pub fn generate_provinces(
                 });
             }
 
-            if *province_ids.get(state.x, state.y) != state.id { continue; }
+            if *province_ids.get(state.x, state.y) != state.id {
+                continue;
+            }
 
             let current_elev = *heightmap.get(state.x, state.y);
 
             for &(dx, dy, dist) in &neighbors {
                 let nx = heightmap.wrap_x(state.x + dx) as isize;
                 let ny = state.y + dy;
-                if ny < 0 || ny >= h as isize { continue; }
+                if ny < 0 || ny >= h as isize {
+                    continue;
+                }
 
                 let target_elev = *heightmap.get(nx, ny);
                 // Borders stop dead at water AND wastelands!
@@ -556,30 +625,39 @@ pub fn generate_provinces(
                     let elev_diff = (target_elev - current_elev).abs();
 
                     let mountain_penalty = (elev_diff * 350.0).min(45.0);
-                    let river_flow       = *flow_grid.get(nx, ny);
-                    let river_penalty    = if river_flow >= min_river_flow { 28.0 } else { 0.0 };
+                    let river_flow = *flow_grid.get(nx, ny);
+                    let river_penalty = if river_flow >= min_river_flow {
+                        28.0
+                    } else {
+                        0.0
+                    };
 
                     let move_cost = dist * 12.0 + mountain_penalty + river_penalty;
-                    let new_cost  = state.cost + move_cost as u32;
+                    let new_cost = state.cost + move_cost as u32;
 
                     province_ids.set(nx, ny, state.id);
-                    heap.push(ExpandState { cost: new_cost, x: nx, y: ny, id: state.id });
+                    heap.push(ExpandState {
+                        cost: new_cost,
+                        x: nx,
+                        y: ny,
+                        id: state.id,
+                    });
                 }
             }
         }
 
         // ── Lloyd centroid relaxation (after first pass) ──────────────────
         if !is_last {
-            let mut sum_x  = vec![0.0f64; num_seeds + 1];
-            let mut sum_y  = vec![0.0f64; num_seeds + 1];
-            let mut counts = vec![0usize;  num_seeds + 1];
+            let mut sum_x = vec![0.0f64; num_seeds + 1];
+            let mut sum_y = vec![0.0f64; num_seeds + 1];
+            let mut counts = vec![0usize; num_seeds + 1];
 
             for y in 0..h {
                 for x in 0..w {
                     let id = *province_ids.get(x as isize, y as isize) as usize;
                     if id > 0 && id <= num_seeds {
-                        sum_x[id]  += x as f64;
-                        sum_y[id]  += y as f64;
+                        sum_x[id] += x as f64;
+                        sum_y[id] += y as f64;
                         counts[id] += 1;
                     }
                 }
@@ -587,28 +665,117 @@ pub fn generate_provinces(
 
             for idx in 0..num_seeds {
                 let id = idx + 1;
-                if counts[id] == 0 { continue; }
+                if counts[id] == 0 {
+                    continue;
+                }
 
                 let raw_cx = (sum_x[id] / counts[id] as f64).round() as isize;
                 let raw_cy = (sum_y[id] / counts[id] as f64).round() as isize;
-                let cx     = heightmap.wrap_x(raw_cx) as isize;
-                let cy     = raw_cy.clamp(0, h as isize - 1);
+                let cx = heightmap.wrap_x(raw_cx) as isize;
+                let cy = raw_cy.clamp(0, h as isize - 1);
 
-                let candidate = find_valid_land(heightmap, is_lake, &is_wasteland, cx, cy, sea_level, h);
+                let candidate =
+                    find_valid_land(heightmap, is_lake, &is_wasteland, cx, cy, sea_level, h);
                 if let Some(pos) = candidate {
                     seeds[idx] = pos;
                 }
+            }
+
+            // ── Area ceiling: spend centres where the land needs them ───────
+            // The fill has no innate size limit: a province with no neighbour
+            // nearby can swallow an empty coast or a whole island. Any province
+            // over `PROVINCE_MAX_AREA_FACTOR` times the mean is split by moving
+            // centres out of the smallest provinces into it. The head count does
+            // not change — a donor's centre is the new seed — and a donor with
+            // no land neighbour (an island, an oasis) is never touched, so no
+            // ground can be left unclaimed.
+            let total_land_px: usize = counts[1..=num_seeds].iter().sum();
+            let mean_px = (total_land_px / num_seeds).max(1);
+            area_mean = mean_px;
+            area_ceiling = (mean_px as f32 * PROVINCE_MAX_AREA_FACTOR).round() as usize;
+
+            let mut oversized: Vec<u32> = (1..=num_seeds as u32)
+                .filter(|&id| counts[id as usize] > area_ceiling)
+                .collect();
+            if !oversized.is_empty() {
+                oversized.sort_by_key(|&id| std::cmp::Reverse(counts[id as usize]));
+
+                // One grid pass collects the pixels the splitter may place a
+                // centre on, and records which provinces have a land neighbour
+                // (the only safe donors). Forward neighbours only: every pair is
+                // seen once and the diagonals match the fill's metric.
+                const FORWARD: [(isize, isize); 4] = [(1, 0), (0, 1), (1, 1), (-1, 1)];
+                let mut members: Vec<Vec<u32>> = vec![Vec::new(); num_seeds + 1];
+                let mut has_land_neighbour = vec![false; num_seeds + 1];
+                let mut wanted = vec![false; num_seeds + 1];
+                for &id in &oversized {
+                    wanted[id as usize] = true;
+                }
+                for y in 0..h {
+                    let row = y * w;
+                    for x in 0..w {
+                        let id = *province_ids.get(x as isize, y as isize);
+                        if id == 0 {
+                            continue;
+                        }
+                        let i = id as usize;
+                        if wanted[i] {
+                            members[i].push((row + x) as u32);
+                        }
+                        for &(dx, dy) in &FORWARD {
+                            let ny = y as isize + dy;
+                            if ny < 0 || ny >= h as isize {
+                                continue;
+                            }
+                            let nx = province_ids.wrap_x(x as isize + dx) as isize;
+                            let other = *province_ids.get(nx, ny);
+                            if other != 0 && other != id {
+                                has_land_neighbour[i] = true;
+                                has_land_neighbour[other as usize] = true;
+                            }
+                        }
+                    }
+                }
+
+                let moves =
+                    plan_centre_moves(&counts, &has_land_neighbour, &members, &seeds, w, mean_px);
+                let mut receivers = vec![false; num_seeds + 1];
+                for mv in moves {
+                    seeds[mv.donor_id as usize - 1] = mv.position;
+                    receivers[mv.recipient_id as usize] = true;
+                    moved_centres += 1;
+                }
+                split_provinces = receivers.iter().filter(|&&moved| moved).count();
             }
         }
     }
 
     let mut seen = vec![false; num_seeds + 1];
+    let mut final_counts = vec![0usize; num_seeds + 1];
     for &v in province_ids.raw_slice() {
-        if v > 0 && (v as usize) <= num_seeds {
-            seen[v as usize] = true;
+        let id = v as usize;
+        if v > 0 && id <= num_seeds {
+            seen[id] = true;
+            final_counts[id] += 1;
         }
     }
     let actual_province_count = seen.iter().filter(|&&s| s).count();
+
+    if split_provinces > 0 {
+        println!(
+            "✓ Area ceiling: moved {} centre(s) to split {} oversized province(s) (mean {} px, ceiling {} px).",
+            moved_centres, split_provinces, area_mean, area_ceiling
+        );
+    }
+    if area_ceiling > 0 {
+        let largest = final_counts.iter().copied().max().unwrap_or(0);
+        if largest > area_ceiling {
+            println!(
+                "⚠ Largest province is {} px, above the {} px ceiling (the undersized donor pool ran out).",
+                largest, area_ceiling
+            );
+        }
+    }
 
     ProvinceResult {
         province_ids,
@@ -620,13 +787,13 @@ pub fn generate_provinces(
 
 /// Searches an expanding spiral for the nearest valid land pixel (not water, not wasteland).
 fn find_valid_land(
-    heightmap:    &Grid<f32>,
-    is_lake:      &Grid<bool>,
+    heightmap: &Grid<f32>,
+    is_lake: &Grid<bool>,
     is_wasteland: &Grid<bool>,
-    cx:           isize,
-    cy:           isize,
-    sea_level:    f32,
-    h:            usize,
+    cx: isize,
+    cy: isize,
+    sea_level: f32,
+    h: usize,
 ) -> Option<(isize, isize)> {
     if cy >= 0 && cy < h as isize {
         let elev = *heightmap.get(cx, cy);
@@ -640,7 +807,9 @@ fn find_valid_land(
             for dy in [-r, r] {
                 let nx = heightmap.wrap_x(cx + dx) as isize;
                 let ny = cy + dy;
-                if ny < 0 || ny >= h as isize { continue; }
+                if ny < 0 || ny >= h as isize {
+                    continue;
+                }
                 let elev = *heightmap.get(nx, ny);
                 if elev > sea_level && !*is_lake.get(nx, ny) && !*is_wasteland.get(nx, ny) {
                     return Some((nx, ny));
@@ -651,7 +820,9 @@ fn find_valid_land(
             for dx in [-r, r] {
                 let nx = heightmap.wrap_x(cx + dx) as isize;
                 let ny = cy + dy;
-                if ny < 0 || ny >= h as isize { continue; }
+                if ny < 0 || ny >= h as isize {
+                    continue;
+                }
                 let elev = *heightmap.get(nx, ny);
                 if elev > sea_level && !*is_lake.get(nx, ny) && !*is_wasteland.get(nx, ny) {
                     return Some((nx, ny));
@@ -662,7 +833,13 @@ fn find_valid_land(
     None
 }
 
-fn is_land(heightmap: &Grid<f32>, is_lake: &Grid<bool>, x: isize, y: isize, sea_level: f32) -> bool {
+fn is_land(
+    heightmap: &Grid<f32>,
+    is_lake: &Grid<bool>,
+    x: isize,
+    y: isize,
+    sea_level: f32,
+) -> bool {
     *heightmap.get(x, y) > sea_level && !*is_lake.get(x, y)
 }
 
@@ -697,13 +874,21 @@ fn dilate_non_ice_wasteland(
             for x in 0..w {
                 let xi = x as isize;
                 let yi = y as isize;
-                if *is_wasteland.get(xi, yi) { continue; }
-                if *is_sanctuary.get(xi, yi) || *is_ice_cap.get(xi, yi) { continue; }
-                if !is_land(heightmap, is_lake, xi, yi, sea_level) { continue; }
+                if *is_wasteland.get(xi, yi) {
+                    continue;
+                }
+                if *is_sanctuary.get(xi, yi) || *is_ice_cap.get(xi, yi) {
+                    continue;
+                }
+                if !is_land(heightmap, is_lake, xi, yi, sea_level) {
+                    continue;
+                }
                 for &(dx, dy) in &dirs {
                     let nx = is_wasteland.wrap_x(xi + dx) as isize;
                     let ny = yi + dy;
-                    if ny < 0 || ny >= h as isize { continue; }
+                    if ny < 0 || ny >= h as isize {
+                        continue;
+                    }
                     if *is_wasteland.get(nx, ny) && !*is_ice_cap.get(nx, ny) {
                         add.push((xi, yi));
                         break;
@@ -729,6 +914,17 @@ fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
 /// is measured against.
 const MIN_PROVINCE_SPAN: f32 = 18.0;
 
+/// Largest a province may be, as a multiple of the mean settled area per
+/// province.
+///
+/// A multiple, not a raw pixel count: the ceiling scales with the canvas and the
+/// province count exactly as the provinces do, so 2K, 8K and 16K worlds are
+/// governed by the same rule. It is deliberately generous — four times the mean
+/// leaves room for islands and mountain fastnesses while forbidding the
+/// continent-swallowing shapes a seedless interior used to grow. This mirrors
+/// the Area tier's drawn-mass ceiling (`geopolitics::clustering`).
+const PROVINCE_MAX_AREA_FACTOR: f32 = 4.0;
+
 /// Longest corridor the carver may cut, in province widths (see
 /// [`province_span`]). A pocket further from its landmass's populated network
 /// than this is left to the wilderness instead of being threaded to it by a
@@ -741,7 +937,159 @@ const MAX_CORRIDOR_SPANS: f32 = 2.5;
 /// scale of the provinces they join.
 fn province_span(land_px: f32, num_provinces: usize) -> f32 {
     let area_per_province = land_px / num_provinces.max(1) as f32;
-    (area_per_province / std::f32::consts::PI).sqrt().max(MIN_PROVINCE_SPAN)
+    (area_per_province / std::f32::consts::PI)
+        .sqrt()
+        .max(MIN_PROVINCE_SPAN)
+}
+
+/// One centre moved out of an undersized province and into an oversized one.
+struct CentreMove {
+    donor_id: u32,
+    recipient_id: u32,
+    position: (isize, isize),
+}
+
+/// Plans the area-budget correction: every province above
+/// [`PROVINCE_MAX_AREA_FACTOR`] times the mean is split by relocating the
+/// centres of the smallest provinces that can safely lose one.
+///
+/// A centre may only move if its province has a **land neighbour**: the donor's
+/// old ground is then absorbed by that neighbour in the next fill, so moving a
+/// centre can never leave an island or an oasis unclaimed. Donors are taken
+/// smallest-first, and each recipient is split into pieces aimed at the mean
+/// (not merely at the ceiling), so a second pass has nothing left to correct.
+///
+/// Pure by design: the policy can be exercised without building a world.
+fn plan_centre_moves(
+    counts: &[usize],
+    has_land_neighbour: &[bool],
+    members: &[Vec<u32>],
+    seeds: &[(isize, isize)],
+    width: usize,
+    mean_px: usize,
+) -> Vec<CentreMove> {
+    let ceiling = (mean_px as f32 * PROVINCE_MAX_AREA_FACTOR).round() as usize;
+    let province_count = counts.len().saturating_sub(1);
+    if province_count == 0 {
+        return Vec::new();
+    }
+
+    let mut oversized: Vec<u32> = (1..=province_count as u32)
+        .filter(|&id| counts[id as usize] > ceiling)
+        .collect();
+    if oversized.is_empty() {
+        return Vec::new();
+    }
+    oversized.sort_by_key(|&id| std::cmp::Reverse(counts[id as usize]));
+
+    let mut donors: Vec<u32> = (1..=province_count as u32)
+        .filter(|&id| {
+            let area = counts[id as usize];
+            area > 0 && area < mean_px && has_land_neighbour[id as usize]
+        })
+        .collect();
+    donors.sort_by_key(|&id| counts[id as usize]);
+    let mut donors = donors.into_iter();
+
+    let mut moves = Vec::new();
+    for id in oversized {
+        let needed = counts[id as usize]
+            .div_ceil(mean_px.max(1))
+            .saturating_sub(1)
+            .min(donors.len());
+        if needed == 0 {
+            continue;
+        }
+        let positions =
+            farthest_split_seeds(&members[id as usize], seeds[id as usize - 1], needed, width);
+        for position in positions {
+            let Some(donor) = donors.next() else {
+                break;
+            };
+            moves.push(CentreMove {
+                donor_id: donor,
+                recipient_id: id,
+                position,
+            });
+        }
+        if donors.len() == 0 {
+            break;
+        }
+    }
+    moves
+}
+
+/// Picks `count` new centres inside one province, each as far as it can be from
+/// the centres already chosen — a Euclidean farthest-point walk with the map's
+/// horizontal wrap.
+///
+/// `members` are the province's pixels as flat `y * width + x` indices; the
+/// province is connected by construction, so every chosen pixel is claimable
+/// land. `first` is the province's existing centre and starts the walk; if the
+/// relaxed centre snapped outside its own province, the walk starts from the
+/// first member instead.
+///
+/// The distance work is bounded: on a pathologically large province the member
+/// list is sampled, so the cost stays linear in the province's area rather than
+/// quadratic in the number of pieces.
+fn farthest_split_seeds(
+    members: &[u32],
+    first: (isize, isize),
+    count: usize,
+    width: usize,
+) -> Vec<(isize, isize)> {
+    const MAX_PAIR_WORK: usize = 4_000_000;
+    if count == 0 || members.is_empty() {
+        return Vec::new();
+    }
+
+    let to_pos = |i: u32| ((i as usize % width) as isize, (i as usize / width) as isize);
+    let first_x = first.0.rem_euclid(width as isize) as usize;
+    let first_y = first.1.max(0) as usize;
+    let first_flat = first_y * width + first_x;
+    let start = if members.iter().any(|&i| i as usize == first_flat) {
+        (first_x as isize, first_y as isize)
+    } else {
+        to_pos(members[0])
+    };
+
+    let stride = (members.len().saturating_mul(count) / MAX_PAIR_WORK).max(1);
+    let sample: Vec<u32> = members.iter().copied().step_by(stride).collect();
+
+    let mut chosen: Vec<(isize, isize)> = Vec::with_capacity(count + 1);
+    chosen.push(start);
+    let mut nearest: Vec<f32> = sample
+        .iter()
+        .map(|&i| {
+            let (x, y) = to_pos(i);
+            wrap_distance_px(x as f32, y as f32, start.0 as f32, start.1 as f32, width)
+        })
+        .collect();
+
+    while chosen.len() <= count {
+        let mut far_i = 0usize;
+        let mut far_d = -1.0f32;
+        for (i, &d) in nearest.iter().enumerate() {
+            if d > far_d {
+                far_d = d;
+                far_i = i;
+            }
+        }
+        if far_d <= 0.0 {
+            break;
+        }
+        let p = to_pos(sample[far_i]);
+        chosen.push(p);
+        for (i, &idx) in sample.iter().enumerate() {
+            let (x, y) = to_pos(idx);
+            let d = wrap_distance_px(x as f32, y as f32, p.0 as f32, p.1 as f32, width);
+            if d < nearest[i] {
+                nearest[i] = d;
+            }
+        }
+    }
+
+    chosen.into_iter().skip(1).collect()
 }
 
 /// Drops wasteland blobs smaller than `min_size` so the map shows real
@@ -763,7 +1111,9 @@ fn remove_small_wasteland_blobs(
         for x0 in 0..w {
             let sx = x0 as isize;
             let sy = y0 as isize;
-            if *seen.get(sx, sy) || !*is_wasteland.get(sx, sy) { continue; }
+            if *seen.get(sx, sy) || !*is_wasteland.get(sx, sy) {
+                continue;
+            }
 
             cells.clear();
             stack.clear();
@@ -773,13 +1123,21 @@ fn remove_small_wasteland_blobs(
 
             while let Some((cx, cy)) = stack.pop() {
                 cells.push((cx, cy));
-                if *is_ice_cap.get(cx, cy) { any_ice = true; }
+                if *is_ice_cap.get(cx, cy) {
+                    any_ice = true;
+                }
                 for &(dx, dy) in &dirs {
                     let nx = is_wasteland.wrap_x(cx + dx) as isize;
                     let ny = cy + dy;
-                    if ny < 0 || ny >= h as isize { continue; }
-                    if *seen.get(nx, ny) { continue; }
-                    if !*is_wasteland.get(nx, ny) { continue; }
+                    if ny < 0 || ny >= h as isize {
+                        continue;
+                    }
+                    if *seen.get(nx, ny) {
+                        continue;
+                    }
+                    if !*is_wasteland.get(nx, ny) {
+                        continue;
+                    }
                     seen.set(nx, ny, true);
                     stack.push((nx, ny));
                 }
@@ -803,7 +1161,9 @@ struct CarveState {
 
 impl Ord for CarveState {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other.cost.cmp(&self.cost)
+        other
+            .cost
+            .cmp(&self.cost)
             .then_with(|| self.x.cmp(&other.x))
             .then_with(|| self.y.cmp(&other.y))
     }
@@ -920,9 +1280,15 @@ fn carve_habitable_corridors(
         for x in 0..w {
             let xi = x as isize;
             let yi = y as isize;
-            if *hab_comp.get(xi, yi) != 0 { continue; }
-            if !is_land(heightmap, is_lake, xi, yi, sea_level) { continue; }
-            if *is_wasteland.get(xi, yi) { continue; }
+            if *hab_comp.get(xi, yi) != 0 {
+                continue;
+            }
+            if !is_land(heightmap, is_lake, xi, yi, sea_level) {
+                continue;
+            }
+            if *is_wasteland.get(xi, yi) {
+                continue;
+            }
 
             hab_comp.set(xi, yi, next_comp);
             q.clear();
@@ -932,11 +1298,15 @@ fn carve_habitable_corridors(
             let mut touches_sanctuary = false;
             while let Some((cx, cy)) = q.pop_front() {
                 size += 1;
-                if *is_sanctuary.get(cx, cy) { touches_sanctuary = true; }
+                if *is_sanctuary.get(cx, cy) {
+                    touches_sanctuary = true;
+                }
                 for &(dx, dy) in &dirs {
                     let nx = heightmap.wrap_x(cx + dx) as isize;
                     let ny = cy + dy;
-                    if ny < 0 || ny >= h as isize { continue; }
+                    if ny < 0 || ny >= h as isize {
+                        continue;
+                    }
                     if is_sea(heightmap, is_lake, nx, ny, sea_level) {
                         touches_sea = true;
                         continue;
@@ -946,8 +1316,12 @@ fn carve_habitable_corridors(
                         // network nothing, so keep flooding past it.
                         continue;
                     }
-                    if *hab_comp.get(nx, ny) != 0 { continue; }
-                    if *is_wasteland.get(nx, ny) { continue; }
+                    if *hab_comp.get(nx, ny) != 0 {
+                        continue;
+                    }
+                    if *is_wasteland.get(nx, ny) {
+                        continue;
+                    }
                     hab_comp.set(nx, ny, next_comp);
                     q.push_back((nx, ny));
                 }
@@ -990,8 +1364,12 @@ fn carve_habitable_corridors(
         for x in 0..w {
             let xi = x as isize;
             let yi = y as isize;
-            if *landmass.get(xi, yi) != 0 { continue; }
-            if !is_land(heightmap, is_lake, xi, yi, sea_level) { continue; }
+            if *landmass.get(xi, yi) != 0 {
+                continue;
+            }
+            if !is_land(heightmap, is_lake, xi, yi, sea_level) {
+                continue;
+            }
             landmass.set(xi, yi, next_mass);
             q.clear();
             q.push_back((xi, yi));
@@ -999,9 +1377,15 @@ fn carve_habitable_corridors(
                 for &(dx, dy) in &dirs {
                     let nx = heightmap.wrap_x(cx + dx) as isize;
                     let ny = cy + dy;
-                    if ny < 0 || ny >= h as isize { continue; }
-                    if *landmass.get(nx, ny) != 0 { continue; }
-                    if !is_land(heightmap, is_lake, nx, ny, sea_level) { continue; }
+                    if ny < 0 || ny >= h as isize {
+                        continue;
+                    }
+                    if *landmass.get(nx, ny) != 0 {
+                        continue;
+                    }
+                    if !is_land(heightmap, is_lake, nx, ny, sea_level) {
+                        continue;
+                    }
                     landmass.set(nx, ny, next_mass);
                     q.push_back((nx, ny));
                 }
@@ -1019,7 +1403,9 @@ fn carve_habitable_corridors(
     for y in 0..h {
         for x in 0..w {
             let cid = *hab_comp.get(x as isize, y as isize);
-            if cid == 0 { continue; }
+            if cid == 0 {
+                continue;
+            }
             let mass = *landmass.get(x as isize, y as isize) as usize;
             if !seen_comp_on_mass[cid as usize] {
                 seen_comp_on_mass[cid as usize] = true;
@@ -1035,14 +1421,22 @@ fn carve_habitable_corridors(
     for y in 0..h {
         for x in 0..w {
             let cid = *hab_comp.get(x as isize, y as isize);
-            if cid == 0 { continue; }
+            if cid == 0 {
+                continue;
+            }
             let mass = *landmass.get(x as isize, y as isize) as usize;
-            if mass_comp_count[mass] <= 1 { continue; }
+            if mass_comp_count[mass] <= 1 {
+                continue;
+            }
             let xi = x as isize;
             let yi = y as isize;
             owner.set(xi, yi, cid);
             parent.set(xi, yi, pack_xy(xi, yi, w));
-            heap.push(CarveState { cost: 0, x: xi, y: yi });
+            heap.push(CarveState {
+                cost: 0,
+                x: xi,
+                y: yi,
+            });
         }
     }
 
@@ -1059,16 +1453,24 @@ fn carve_habitable_corridors(
         }
 
         let cur_owner = *owner.get(state.x, state.y);
-        if cur_owner == 0 { continue; }
+        if cur_owner == 0 {
+            continue;
+        }
 
         for &(dx, dy) in &dirs {
             let nx = heightmap.wrap_x(state.x + dx) as isize;
             let ny = state.y + dy;
-            if ny < 0 || ny >= h as isize { continue; }
-            if !is_land(heightmap, is_lake, nx, ny, sea_level) { continue; }
+            if ny < 0 || ny >= h as isize {
+                continue;
+            }
+            if !is_land(heightmap, is_lake, nx, ny, sea_level) {
+                continue;
+            }
             // Permanent ice is impassable: the polar belt is mandatory
             // wilderness, so no corridor may tunnel through it.
-            if *is_ice_cap.get(nx, ny) { continue; }
+            if *is_ice_cap.get(nx, ny) {
+                continue;
+            }
 
             let step = if *is_wasteland.get(nx, ny) {
                 1 + (*dist_to_water.get(nx, ny) as u32 / 6)
@@ -1081,7 +1483,11 @@ fn carve_habitable_corridors(
             if n_owner == 0 {
                 owner.set(nx, ny, cur_owner);
                 parent.set(nx, ny, pack_xy(state.x, state.y, w));
-                heap.push(CarveState { cost: new_cost, x: nx, y: ny });
+                heap.push(CarveState {
+                    cost: new_cost,
+                    x: nx,
+                    y: ny,
+                });
             } else if dsu.find(n_owner) != dsu.find(cur_owner) {
                 // Wilderness may split a landmass wherever the sea can still
                 // reach both halves; only a network without a coast of its own
@@ -1092,8 +1498,7 @@ fn carve_habitable_corridors(
                 // ... and never a corridor longer than a couple of provinces:
                 // beyond that the pocket stays wilderness instead of becoming a
                 // province-long sliver.
-                if path_len(&parent, state.x, state.y, w, h)
-                    + path_len(&parent, nx, ny, w, h)
+                if path_len(&parent, state.x, state.y, w, h) + path_len(&parent, nx, ny, w, h)
                     > max_corridor
                 {
                     continue;
@@ -1155,9 +1560,15 @@ fn revert_stranded_habitation(
         for x0 in 0..w {
             let sx = x0 as isize;
             let sy = y0 as isize;
-            if *seen.get(sx, sy) { continue; }
-            if !is_land(heightmap, is_lake, sx, sy, sea_level) { continue; }
-            if *is_wasteland.get(sx, sy) { continue; }
+            if *seen.get(sx, sy) {
+                continue;
+            }
+            if !is_land(heightmap, is_lake, sx, sy, sea_level) {
+                continue;
+            }
+            if *is_wasteland.get(sx, sy) {
+                continue;
+            }
 
             // Flood the whole populated network, remembering its pixels and
             // watching for any stretch of open sea along its edge.
@@ -1184,8 +1595,12 @@ fn revert_stranded_habitation(
                         // water puts a province in touch with the world.
                         continue;
                     }
-                    if *is_wasteland.get(nx, ny) { continue; }
-                    if *seen.get(nx, ny) { continue; }
+                    if *is_wasteland.get(nx, ny) {
+                        continue;
+                    }
+                    if *seen.get(nx, ny) {
+                        continue;
+                    }
                     seen.set(nx, ny, true);
                     q.push_back((nx, ny));
                 }
@@ -1250,8 +1665,12 @@ fn carve_path(
         for &(dx, dy) in &dirs {
             let nx = is_wasteland.wrap_x(x + dx) as isize;
             let ny = y + dy;
-            if ny < 0 || ny >= h as isize { continue; }
-            if *is_ice_cap.get(nx, ny) { continue; }
+            if ny < 0 || ny >= h as isize {
+                continue;
+            }
+            if *is_ice_cap.get(nx, ny) {
+                continue;
+            }
             is_wasteland.set(nx, ny, false);
         }
         let packed = *parent.get(x, y);
@@ -1307,8 +1726,12 @@ fn connectivity_stats(
             for x0 in 0..w {
                 let sx = x0 as isize;
                 let sy = y0 as isize;
-                if land_of[sy as usize * w + sx as usize] != u32::MAX { continue; }
-                if !is_land(heightmap, is_lake, sx, sy, sea_level) { continue; }
+                if land_of[sy as usize * w + sx as usize] != u32::MAX {
+                    continue;
+                }
+                if !is_land(heightmap, is_lake, sx, sy, sea_level) {
+                    continue;
+                }
 
                 let mass = mass_count;
                 mass_count += 1;
@@ -1317,14 +1740,22 @@ fn connectivity_stats(
                 q.clear();
                 q.push_back((sx, sy));
                 while let Some((cx, cy)) = q.pop_front() {
-                    if !*is_wasteland.get(cx, cy) { has_populated = true; }
+                    if !*is_wasteland.get(cx, cy) {
+                        has_populated = true;
+                    }
                     for &(dx, dy) in &dirs {
                         let nx = heightmap.wrap_x(cx + dx) as isize;
                         let ny = cy + dy;
-                        if ny < 0 || ny >= h as isize { continue; }
+                        if ny < 0 || ny >= h as isize {
+                            continue;
+                        }
                         let idx = ny as usize * w + nx as usize;
-                        if land_of[idx] != u32::MAX { continue; }
-                        if !is_land(heightmap, is_lake, nx, ny, sea_level) { continue; }
+                        if land_of[idx] != u32::MAX {
+                            continue;
+                        }
+                        if !is_land(heightmap, is_lake, nx, ny, sea_level) {
+                            continue;
+                        }
                         land_of[idx] = mass;
                         q.push_back((nx, ny));
                     }
@@ -1350,9 +1781,15 @@ fn connectivity_stats(
             for x0 in 0..w {
                 let sx = x0 as isize;
                 let sy = y0 as isize;
-                if *seen.get(sx, sy) { continue; }
-                if !is_land(heightmap, is_lake, sx, sy, sea_level) { continue; }
-                if *is_wasteland.get(sx, sy) { continue; }
+                if *seen.get(sx, sy) {
+                    continue;
+                }
+                if !is_land(heightmap, is_lake, sx, sy, sea_level) {
+                    continue;
+                }
+                if *is_wasteland.get(sx, sy) {
+                    continue;
+                }
 
                 network_count += 1;
                 let mut touches_sea = false;
@@ -1375,8 +1812,12 @@ fn connectivity_stats(
                         if !is_land(heightmap, is_lake, nx, ny, sea_level) {
                             continue;
                         }
-                        if *is_wasteland.get(nx, ny) { continue; }
-                        if *seen.get(nx, ny) { continue; }
+                        if *is_wasteland.get(nx, ny) {
+                            continue;
+                        }
+                        if *seen.get(nx, ny) {
+                            continue;
+                        }
                         seen.set(nx, ny, true);
                         q.push_back((nx, ny));
                     }
@@ -1425,7 +1866,9 @@ fn wasteland_stats(
         for x0 in 0..w {
             let sx = x0 as isize;
             let sy = y0 as isize;
-            if *seen.get(sx, sy) || !*is_wasteland.get(sx, sy) { continue; }
+            if *seen.get(sx, sy) || !*is_wasteland.get(sx, sy) {
+                continue;
+            }
             blobs += 1;
             let mut size = 0usize;
             let mut any_ice = false;
@@ -1434,13 +1877,21 @@ fn wasteland_stats(
             q.push_back((sx, sy));
             while let Some((cx, cy)) = q.pop_front() {
                 size += 1;
-                if *is_ice_cap.get(cx, cy) { any_ice = true; }
+                if *is_ice_cap.get(cx, cy) {
+                    any_ice = true;
+                }
                 for &(dx, dy) in &dirs {
                     let nx = is_wasteland.wrap_x(cx + dx) as isize;
                     let ny = cy + dy;
-                    if ny < 0 || ny >= h as isize { continue; }
-                    if *seen.get(nx, ny) { continue; }
-                    if !*is_wasteland.get(nx, ny) { continue; }
+                    if ny < 0 || ny >= h as isize {
+                        continue;
+                    }
+                    if *seen.get(nx, ny) {
+                        continue;
+                    }
+                    if !*is_wasteland.get(nx, ny) {
+                        continue;
+                    }
                     seen.set(nx, ny, true);
                     q.push_back((nx, ny));
                 }
@@ -1577,8 +2028,12 @@ mod tests {
                 for &(dx, dy) in &[(-1, 0), (1, 0), (0, -1), (0, 1)] {
                     let nx = self.is_wasteland.wrap_x(cx + dx) as isize;
                     let ny = cy + dy;
-                    if ny < 0 || ny >= H as isize { continue; }
-                    if *seen.get(nx, ny) || !self.populated(nx, ny) { continue; }
+                    if ny < 0 || ny >= H as isize {
+                        continue;
+                    }
+                    if *seen.get(nx, ny) || !self.populated(nx, ny) {
+                        continue;
+                    }
                     seen.set(nx, ny, true);
                     q.push_back((nx, ny));
                 }
@@ -1606,8 +2061,12 @@ mod tests {
             for &(dx, dy) in &[(-1, 0), (1, 0), (0, -1), (0, 1)] {
                 let nx = dist.wrap_x(cx + dx) as isize;
                 let ny = cy + dy;
-                if ny < 0 || ny >= H as isize { continue; }
-                if *dist.get(nx, ny) != 255 { continue; }
+                if ny < 0 || ny >= H as isize {
+                    continue;
+                }
+                if *dist.get(nx, ny) != 255 {
+                    continue;
+                }
                 dist.set(nx, ny, d.saturating_add(1));
                 q.push_back((nx, ny));
             }
@@ -1663,8 +2122,14 @@ mod tests {
 
         world.carve(8);
 
-        assert!(!world.joined((12, 24), (40, 24)), "no corridor may exceed the budget");
-        assert!(world.is_wasteland.get(40, 24), "an unreachable pocket becomes wilderness");
+        assert!(
+            !world.joined((12, 24), (40, 24)),
+            "no corridor may exceed the budget"
+        );
+        assert!(
+            world.is_wasteland.get(40, 24),
+            "an unreachable pocket becomes wilderness"
+        );
     }
 
     #[test]
@@ -1680,8 +2145,14 @@ mod tests {
 
         world.carve(200); // generous: only the ice itself can stop the corridor
 
-        assert!(!world.joined((12, 24), (44, 24)), "an ice sheet must never be pierced");
-        assert!(world.is_wasteland.get(44, 24), "a pocket buried in ice stays wilderness");
+        assert!(
+            !world.joined((12, 24), (44, 24)),
+            "an ice sheet must never be pierced"
+        );
+        assert!(
+            world.is_wasteland.get(44, 24),
+            "a pocket buried in ice stays wilderness"
+        );
         for y in 0..H as isize {
             for x in 28..32isize {
                 assert!(
@@ -1744,6 +2215,131 @@ mod tests {
         assert!(
             !world.joined((12, 24), (42, 24)),
             "no corridor may exceed the budget"
+        );
+    }
+
+    #[test]
+    fn farthest_split_seeds_spreads_centres_over_the_province() {
+        // A 5x4 province of flat pixel indices.
+        let mut members = Vec::new();
+        for y in 0..4usize {
+            for x in 0..5usize {
+                members.push((y * 5 + x) as u32);
+            }
+        }
+
+        let chosen = farthest_split_seeds(&members, (0, 0), 2, 5);
+        assert_eq!(chosen.len(), 2);
+        assert_ne!(chosen[0], chosen[1], "two centres must not share a pixel");
+        for (x, y) in &chosen {
+            let flat = *y as usize * 5 + *x as usize;
+            assert!(
+                members.contains(&(flat as u32)),
+                "({x}, {y}) is not a member"
+            );
+        }
+
+        assert!(farthest_split_seeds(&members, (0, 0), 0, 5).is_empty());
+        assert!(farthest_split_seeds(&[], (0, 0), 3, 5).is_empty());
+    }
+
+    #[test]
+    fn the_area_budget_moves_centres_from_the_smallest_provinces() {
+        // One 2 000-px giant and nine 100-px provinces: mean 290, ceiling 1 160.
+        let mut counts = vec![0usize, 2_000];
+        counts.extend(std::iter::repeat(100).take(9));
+        let has_neighbour = vec![false; 11]
+            .iter()
+            .enumerate()
+            .map(|(i, _)| i != 0)
+            .collect::<Vec<_>>();
+        let mut members: Vec<Vec<u32>> = vec![Vec::new(); counts.len()];
+        for y in 0..40u32 {
+            for x in 0..50u32 {
+                members[1].push(y * 50 + x);
+            }
+        }
+        let seeds = vec![(25isize, 20isize); counts.len()];
+
+        let moves = plan_centre_moves(&counts, &has_neighbour, &members, &seeds, 50, 290);
+        // ceil(2000 / 290) - 1 = 6 new centres, all in the giant.
+        assert_eq!(moves.len(), 6);
+        assert!(moves.iter().all(|m| m.recipient_id == 1));
+        // Donors are the smallest provinces, id-ascending on a tie.
+        let donors: Vec<u32> = moves.iter().map(|m| m.donor_id).collect();
+        assert_eq!(donors, vec![2, 3, 4, 5, 6, 7]);
+        for mv in &moves {
+            let flat = mv.position.1 as usize * 50 + mv.position.0 as usize;
+            assert!(members[1].contains(&(flat as u32)));
+        }
+
+        // An island has no land neighbour, so its centre is never moved.
+        let mut island = has_neighbour.clone();
+        island[2] = false;
+        let moves = plan_centre_moves(&counts, &island, &members, &seeds, 50, 290);
+        assert_eq!(moves[0].donor_id, 3);
+
+        // No safe donors at all means no split, rather than an orphaned island.
+        let no_neighbours = vec![false; counts.len()];
+        assert!(plan_centre_moves(&counts, &no_neighbours, &members, &seeds, 50, 290).is_empty());
+    }
+
+    #[test]
+    fn a_glacial_ice_sheet_is_never_claimed_by_a_province() {
+        // A rectangular landmass whose eastern half is permanently frozen at
+        // -10 °C: the atlas paints that half "Glacial Ice Sheet", so no province
+        // may grow into it, however close the nearest seed is.
+        let world = TestWorld::new();
+        let mut temp = Grid::filled_with(W, H, 15.0f32);
+        for y in 0..H {
+            for x in 32..W {
+                temp.set(x as isize, y as isize, -10.0);
+            }
+        }
+        let precip = Grid::filled_with(W, H, 0.5f32);
+        let flow = Grid::filled_with(W, H, 0.0f32);
+        let permanent_ice = Grid::filled_with(W, H, false);
+        let config = GeographyConfig {
+            num_provinces: 16,
+            max_waste_share: 0.18,
+            waste_cutoff: 0.68,
+        };
+
+        let result = generate_provinces(
+            &world.heightmap,
+            &temp,
+            &precip,
+            &flow,
+            &world.is_lake,
+            &permanent_ice,
+            SEA_LEVEL,
+            100.0,
+            &config,
+            7,
+            &Progress::silent(),
+        );
+
+        for y in 8..40isize {
+            for x in 32..56isize {
+                assert!(
+                    *result.is_wasteland.get(x, y),
+                    "glacial land ({x}, {y}) must be impassable"
+                );
+                assert_eq!(
+                    *result.province_ids.get(x, y),
+                    0,
+                    "glacial land ({x}, {y}) must carry no province id"
+                );
+            }
+        }
+
+        let warm_claimed = (8..32isize)
+            .flat_map(|x| (8..40isize).map(move |y| (x, y)))
+            .filter(|&(x, y)| *result.province_ids.get(x, y) > 0)
+            .count();
+        assert!(
+            warm_claimed > 0,
+            "the ice-free half must still carry provinces"
         );
     }
 

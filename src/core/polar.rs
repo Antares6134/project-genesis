@@ -14,8 +14,8 @@
 //! Keeping the thresholds in one place guarantees the map painter, the hover
 //! telemetry and the province generator all agree about where "ice" begins.
 
-use crate::core::sphere::row_latitude_rad;
 use crate::core::Grid;
+use crate::core::sphere::row_latitude_rad;
 use noise::{NoiseFn, OpenSimplex};
 
 /// Sea-surface temperature (°C) below which open water becomes a solid glacial ice shelf.
@@ -23,6 +23,25 @@ pub const ICE_SHELF_TEMP: f32 = -8.0;
 
 /// Sea-surface temperature (°C) below which open water freezes into pack ice.
 pub const PACK_ICE_TEMP: f32 = -3.0;
+
+/// Land-surface temperature (°C) below which the atlas paints a
+/// **Glacial Ice Sheet** — the one threshold shared by the biome painter, the
+/// hover telemetry and the province generator.
+///
+/// This is a *surface* rule, not a latitude rule. A high massif can be
+/// glaciated in the tropics, and a tidally locked world carries a permanent ice
+/// sheet across its whole night face; both are painted "Glacial Ice Sheet" and
+/// both must be impassable to the province partition. `-3 °C` is the same
+/// boundary the mean annual temperature uses between tundra and ice, so a
+/// province map can never divide ground the biome map calls a sheet.
+pub const GLACIAL_LAND_TEMP: f32 = -3.0;
+
+/// True when **land** at `temp` is a permanent glacial ice sheet in the atlas's
+/// sense (see [`GLACIAL_LAND_TEMP`]).
+#[inline(always)]
+pub fn is_glacial_land(temp: f32) -> bool {
+    temp < GLACIAL_LAND_TEMP
+}
 
 /// True when a pixel is frozen sea — i.e. "polar land" as far as the atlas is
 /// concerned — and therefore an impassable wasteland rather than open ocean.
@@ -274,8 +293,12 @@ pub fn permanent_polar_ice(
         let mut neighbours = [usize::MAX; 4];
         neighbours[0] = y * w + if x == 0 { w - 1 } else { x - 1 };
         neighbours[1] = y * w + if x + 1 == w { 0 } else { x + 1 };
-        if y > 0 { neighbours[2] = i - w; }
-        if y + 1 < h { neighbours[3] = i + w; }
+        if y > 0 {
+            neighbours[2] = i - w;
+        }
+        if y + 1 < h {
+            neighbours[3] = i + w;
+        }
         for &j in &neighbours {
             if j == usize::MAX || pole_connected[j] {
                 continue;
@@ -335,7 +358,11 @@ pub fn permanent_polar_ice(
 /// decide where ice begins, so once the grid agrees they cannot disagree with
 /// each other.
 pub fn freeze_polar_ice(temp_grid: &mut Grid<f32>, polar_ice: &Grid<bool>) {
-    for (temp, &frozen) in temp_grid.raw_slice_mut().iter_mut().zip(polar_ice.raw_slice()) {
+    for (temp, &frozen) in temp_grid
+        .raw_slice_mut()
+        .iter_mut()
+        .zip(polar_ice.raw_slice())
+    {
         if frozen {
             *temp = temp.min(POLAR_ICE_SURFACE_TEMP);
         }
@@ -371,6 +398,17 @@ mod tests {
     }
 
     #[test]
+    fn glacial_land_begins_at_the_biome_boundary() {
+        // The biome painter draws "Glacial Ice Sheet" for `temp < -3.0`; this
+        // helper is that boundary, so the two can never drift apart.
+        assert!(is_glacial_land(GLACIAL_LAND_TEMP - 0.01));
+        assert!(!is_glacial_land(GLACIAL_LAND_TEMP));
+        assert!(!is_glacial_land(GLACIAL_LAND_TEMP + 0.01));
+        assert!(!is_glacial_land(15.0));
+        assert!(is_glacial_land(-40.0));
+    }
+
+    #[test]
     fn the_belt_freezes_a_pole_connected_continent_up_to_its_equatorward_edge() {
         // A cap chunk in the cap latitudes (rows 0–3) with a coast running
         // equatorward from it down to row 40.
@@ -378,9 +416,18 @@ mod tests {
         let ice = permanent_polar_ice(&heightmap, &is_lake, SEA_LEVEL, 42, &PolarConfig::default());
 
         assert!(is_ice(&ice, 5, 5), "deep polar land must be permanent ice");
-        assert!(is_ice(&ice, 5, 20), "the belt must reach its equatorward edge");
-        assert!(!is_ice(&ice, 5, 30), "land outside the belt must stay habitable");
-        assert!(!is_ice(&ice, 5, 40), "land outside the belt must stay habitable");
+        assert!(
+            is_ice(&ice, 5, 20),
+            "the belt must reach its equatorward edge"
+        );
+        assert!(
+            !is_ice(&ice, 5, 30),
+            "land outside the belt must stay habitable"
+        );
+        assert!(
+            !is_ice(&ice, 5, 40),
+            "land outside the belt must stay habitable"
+        );
         assert!(!is_ice(&ice, 0, 5), "open water never freezes here");
     }
 
@@ -397,10 +444,22 @@ mod tests {
 
         // The straddling island: polar half solid ice, sub-polar half spared —
         // even where a pole-connected continent would sit on the ragged edge.
-        assert!(is_ice(&ice, 12, 22), "an island cut off from the pole freezes whole");
-        assert!(is_ice(&ice, 13, 23), "an island cut off from the pole freezes whole");
-        assert!(!is_ice(&ice, 12, 26), "the island's sub-polar half stays habitable");
-        assert!(!is_ice(&ice, 2, 32), "land equatorward of the belt is unaffected");
+        assert!(
+            is_ice(&ice, 12, 22),
+            "an island cut off from the pole freezes whole"
+        );
+        assert!(
+            is_ice(&ice, 13, 23),
+            "an island cut off from the pole freezes whole"
+        );
+        assert!(
+            !is_ice(&ice, 12, 26),
+            "the island's sub-polar half stays habitable"
+        );
+        assert!(
+            !is_ice(&ice, 2, 32),
+            "land equatorward of the belt is unaffected"
+        );
     }
 
     // ── THE POLAR CONFIG ─────────────────────────────────────────────────────
@@ -445,7 +504,11 @@ mod tests {
 
         let earth = PolarConfig::default();
         assert_eq!(earth.cap_blend(0.0), 0.0);
-        assert_eq!(earth.cap_blend(1.0), 0.0, "70° of latitude is inside the ramp's start");
+        assert_eq!(
+            earth.cap_blend(1.0),
+            0.0,
+            "70° of latitude is inside the ramp's start"
+        );
         assert_eq!(earth.cap_blend(1.5708), 1.0, "the pole is solid sheet");
     }
 
@@ -468,7 +531,11 @@ mod tests {
 
         freeze_polar_ice(&mut temp, &mask);
 
-        assert_eq!(*temp.get(1, 1), -40.0, "already colder ground is left alone");
+        assert_eq!(
+            *temp.get(1, 1),
+            -40.0,
+            "already colder ground is left alone"
+        );
         assert_eq!(*temp.get(2, 2), POLAR_ICE_SURFACE_TEMP);
         assert!(POLAR_ICE_SURFACE_TEMP < ICE_SHELF_TEMP);
         assert_eq!(*temp.get(3, 3), 6.0, "unmarked ground is untouched");

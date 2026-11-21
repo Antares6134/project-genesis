@@ -7,7 +7,9 @@ pub use i18n::Language;
 use crate::civilization::SocietyTier;
 use crate::civilization::{Civilization, CivilizationWorld};
 use crate::core::fmt::{thousands, thousands_u64};
-use crate::core::polar::{ICE_SHELF_TEMP, PACK_ICE_TEMP, frozen_sea_name, is_frozen_sea};
+use crate::core::polar::{
+    GLACIAL_LAND_TEMP, ICE_SHELF_TEMP, PACK_ICE_TEMP, frozen_sea_name, is_frozen_sea,
+};
 use crate::core::progress::{ProgressEvent, Sink};
 use crate::core::{Grid, relief};
 use crate::export::image::{
@@ -68,6 +70,9 @@ const TEXT_HEADING: f32 = 20.0;
 /// The width a hover card may claim: wide enough for a full sentence at
 /// [`TEXT_BODY`], narrow enough to keep the map underneath in view.
 const CARD_WIDTH: f32 = 430.0;
+
+/// Width of the label column in a civilization dossier, so values line up.
+const DOSSIER_LABEL_WIDTH: f32 = 92.0;
 
 /// The width of a legend panel. The five thematic legends are all keys, so they
 /// share one width; the dawn of history is the only one that lists societies by
@@ -288,6 +293,24 @@ impl MapScope {
     fn available(self, world: Stage) -> bool {
         world.index() >= self.min_stage().index()
     }
+
+    /// The scope's name as a file name: the same words the headless plates use
+    /// (`atlas_land_provinces.png`), so an export and a printed plate of the
+    /// same map mode are named alike.
+    fn slug(self) -> &'static str {
+        match self {
+            MapScope::Physical => "physical",
+            MapScope::Topographic => "topographic",
+            MapScope::Climate => "climate",
+            MapScope::Temperature => "temperature",
+            MapScope::Terrain => "terrain",
+            MapScope::Civilizations => "civilizations",
+            MapScope::Languages => "languages",
+            MapScope::Land => "land",
+            MapScope::Water => "water",
+            MapScope::Everywhere => "everywhere",
+        }
+    }
 }
 
 /// Which tier of the (land or ocean) hierarchy is being shaded.
@@ -298,6 +321,20 @@ pub enum MapTier {
     Regions,
     Superregions,
     Continents,
+}
+
+impl MapTier {
+    /// The tier's name as a file name. The ocean hierarchy's top tier is its
+    /// *basins*, which is what the headless water plate calls it.
+    fn slug(self) -> &'static str {
+        match self {
+            MapTier::Provinces => "provinces",
+            MapTier::Areas => "areas",
+            MapTier::Regions => "regions",
+            MapTier::Superregions => "superregions",
+            MapTier::Continents => "continents",
+        }
+    }
 }
 
 /// The map resolutions the atlas offers, from the smallest plate to the tuned
@@ -366,6 +403,175 @@ impl MapResolution {
     }
 }
 
+/// Where an export is written: the project's existing gallery directory, beside
+/// the headless `atlas_*.png` plates.
+const EXPORTS_DIR: &str = "./exports";
+
+/// The sizes the export menu offers: the two plate sizes the atlas has always
+/// printed, plus the world's own size when it is neither of them.
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+enum ExportChoice {
+    K2,
+    K8,
+    Native,
+}
+
+impl ExportChoice {
+    /// Every choice, in the order the menu offers them.
+    const ALL: [ExportChoice; 3] = [ExportChoice::K2, ExportChoice::K8, ExportChoice::Native];
+
+    /// The size this choice means for a world of `native` pixels.
+    fn size(self, native: (usize, usize)) -> (usize, usize) {
+        match self {
+            ExportChoice::K2 => MapResolution::K2.size(),
+            ExportChoice::K8 => MapResolution::K8.size(),
+            ExportChoice::Native => native,
+        }
+    }
+
+    /// True when this export neither enlarges the world nor stretches it.
+    ///
+    /// A 16K world may be downsampled to 8K or 2K; a 2K world may not be
+    /// enlarged to 8K. A canvas whose aspect ratio is not the plate's own is
+    /// only ever exportable at its native size, because the preset sizes would
+    /// have to stretch it.
+    fn allowed(self, native: (usize, usize)) -> bool {
+        let (width, height) = self.size(native);
+        width <= native.0 && height <= native.1 && width * native.1 == height * native.0
+    }
+
+    /// True when the menu should list this choice at all. *Native* earns a row
+    /// only when it is not one of the two plate sizes above — an 8K world does
+    /// not need two identical 8K entries.
+    fn offered(self, native: (usize, usize)) -> bool {
+        match self {
+            ExportChoice::Native => {
+                native != MapResolution::K2.size() && native != MapResolution::K8.size()
+            }
+            _ => true,
+        }
+    }
+
+    /// The label the menu shows, in the reader's language.
+    fn label(self, native: (usize, usize), language: Language) -> String {
+        match self {
+            ExportChoice::K2 => MapResolution::K2.label(),
+            ExportChoice::K8 => MapResolution::K8.label(),
+            ExportChoice::Native => language.fill("Native · {} × {}", &[&native.0, &native.1]),
+        }
+    }
+}
+
+/// Everything about *how* a plate is painted, copied out of the window so an
+/// export can paint the very same plate on its own thread.
+#[derive(Clone, Copy)]
+struct PlateView {
+    scope: MapScope,
+    tier: MapTier,
+    show_borders: bool,
+    show_civilizations: bool,
+    min_river_flow: f32,
+    major_river_flow: f32,
+}
+
+/// One export's file name: the seed, the map mode on screen (the scope, and the
+/// tier only where the tier is part of the map mode), the civilizations overlay
+/// when it is tinting a scope that is not about them, and the plate's size.
+fn export_file_name(
+    seed: u64,
+    scope: MapScope,
+    tier: MapTier,
+    civilizations_overlay: bool,
+    size: (usize, usize),
+) -> String {
+    let mut name = format!("world_{seed}_{}", scope.slug());
+    if scope.is_political() || scope.is_civilizations() {
+        let tier = if scope == MapScope::Water && tier == MapTier::Continents {
+            "basins"
+        } else {
+            tier.slug()
+        };
+        name.push('_');
+        name.push_str(tier);
+    }
+    if civilizations_overlay && !scope.is_civilizations() {
+        name.push_str("_civs");
+    }
+    format!("{name}_{}x{}.png", size.0, size.1)
+}
+
+/// The path an export should be written to, never overwriting an earlier one: a
+/// second export of the same map mode and size is `…-2.png`, then `…-3.png`.
+fn free_export_path(name: &str) -> std::path::PathBuf {
+    free_export_path_in(std::path::Path::new(EXPORTS_DIR), name)
+}
+
+/// [`free_export_path`], against a directory a test can choose.
+fn free_export_path_in(directory: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let stem = name.strip_suffix(".png").unwrap_or(name);
+    let mut path = directory.join(name);
+    let mut copy = 2;
+    while path.exists() {
+        path = directory.join(format!("{stem}-{copy}.png"));
+        copy += 1;
+    }
+    path
+}
+
+/// A finished export, handed back from its worker.
+struct ExportOutcome {
+    path: std::path::PathBuf,
+    size: (usize, usize),
+    outcome: Result<(), String>,
+}
+
+/// Paint, resize and encode one export.
+///
+/// Runs on a worker thread: a 16K plate is several seconds of painting and a
+/// good many more of PNG compression, neither of which the window can afford to
+/// wait for. The plate is painted at the world's own size — the atlas's one
+/// painter — and only then downsampled, with the same Lanczos3 filter the
+/// headless plates use, so an export and a printed plate resampled to the same
+/// size agree.
+fn write_export(
+    world: &AtlasWorld,
+    view: PlateView,
+    target: (usize, usize),
+    path: &std::path::Path,
+) -> Result<(), String> {
+    let plate = MapViewer::generate_texture(world, view);
+    let full = rgba_plate(&plate);
+    let plate = if (full.width() as usize, full.height() as usize) == target {
+        full
+    } else {
+        image::imageops::resize(
+            &full,
+            target.0 as u32,
+            target.1 as u32,
+            image::imageops::FilterType::Lanczos3,
+        )
+    };
+    if let Some(directory) = path.parent() {
+        std::fs::create_dir_all(directory).map_err(|why| why.to_string())?;
+    }
+    plate
+        .save_with_format(path, image::ImageFormat::Png)
+        .map_err(|why| why.to_string())
+}
+
+/// The plate as four-byte RGBA, which is what a PNG wants. `ColorImage` holds
+/// `Color32`s; this is the one conversion, shared by the headless plates and the
+/// interactive export.
+fn rgba_plate(image: &ColorImage) -> image::RgbaImage {
+    let (width, height) = (image.size[0] as u32, image.size[1] as u32);
+    let mut buffer = Vec::with_capacity((width * height * 4) as usize);
+    for pixel in &image.pixels {
+        buffer.extend_from_slice(&pixel.to_array());
+    }
+    image::RgbaImage::from_raw(width, height, buffer)
+        .expect("RGBA buffer sized to the atlas texture")
+}
+
 /// Edge of the largest texture the atlas must be able to upload: a finished 16K
 /// plate is one `WORLD_WIDTH × WORLD_HEIGHT` RGBA texture (16384 × 8192).
 ///
@@ -387,8 +593,7 @@ fn atlas_device_limits(
     mut limits: eframe::wgpu::Limits,
     adapter: &eframe::wgpu::Limits,
 ) -> eframe::wgpu::Limits {
-    limits.max_texture_dimension_2d =
-        ATLAS_TEXTURE_DIMENSION.min(adapter.max_texture_dimension_2d);
+    limits.max_texture_dimension_2d = ATLAS_TEXTURE_DIMENSION.min(adapter.max_texture_dimension_2d);
     limits.max_buffer_size = ATLAS_BUFFER_BYTES.min(adapter.max_buffer_size);
     limits
 }
@@ -425,6 +630,15 @@ pub struct MapViewer {
     job: Option<StageJob>,
     /// The save running on its own thread, if one is.
     save_job: Option<SaveJob>,
+    /// The PNG export painting and encoding on its own thread, if one is.
+    export_job: Option<Receiver<ExportOutcome>>,
+    /// What the last export said: what it is doing, where it went, or why it
+    /// could not be written.
+    export_notice: Option<String>,
+    /// Set when the plate on screen went out of date while an export was
+    /// painting. The repaint waits until the export finishes, so two full
+    /// plates — a 16K one is half a gigabyte — are never painted at once.
+    plate_stale: bool,
     /// The seed as the reader typed it, which is not always a valid world.
     seed_text: String,
     /// The canvas chosen for the next world. It is applied at once before act
@@ -895,7 +1109,11 @@ fn rgb_to_hsv(rgb: [f32; 3]) -> (f32, f32, f32) {
     } else {
         (((r - g) / delta) + 4.0) / 6.0
     };
-    let saturation = if max <= f32::EPSILON { 0.0 } else { delta / max };
+    let saturation = if max <= f32::EPSILON {
+        0.0
+    } else {
+        delta / max
+    };
     (hue, saturation, max)
 }
 
@@ -947,9 +1165,7 @@ fn territory_palette(hierarchy: &GeopoliticalHierarchy, tier: MapTier) -> Vec<[f
         .unwrap_or(0)
         .max(declared_total(hierarchy, tier));
 
-    let mut colors: Vec<[f32; 3]> = (0..=max_id)
-        .map(|id| id_to_territory_color(id))
-        .collect();
+    let mut colors: Vec<[f32; 3]> = (0..=max_id).map(|id| id_to_territory_color(id)).collect();
     if colors.is_empty() {
         return colors;
     }
@@ -1152,10 +1368,14 @@ fn ocean_border_shade(
     let Some(ocean_province_ids) = ocean_province_ids else {
         return color;
     };
-    let right_id =
-        *ocean_province_ids.get(ocean_province_ids.wrap_x(x as isize + 1) as isize, y as isize);
-    let left_id =
-        *ocean_province_ids.get(ocean_province_ids.wrap_x(x as isize - 1) as isize, y as isize);
+    let right_id = *ocean_province_ids.get(
+        ocean_province_ids.wrap_x(x as isize + 1) as isize,
+        y as isize,
+    );
+    let left_id = *ocean_province_ids.get(
+        ocean_province_ids.wrap_x(x as isize - 1) as isize,
+        y as isize,
+    );
     let down_id = if y + 1 < h {
         *ocean_province_ids.get(x as isize, y as isize + 1)
     } else {
@@ -1347,16 +1567,13 @@ fn language_border_shade(
 const LISTED_PER_TIER: usize = 24;
 
 /// A short dossier for one civilization, as the Civilizations map mode shows it
-/// on hover: where it rose and why, how it lives, what it believes, and how many
-/// people it holds. Deliberately a card, not a monograph — the full measurements
-/// stay in the console report (`--civs`), where they belong.
+/// on hover: a compact record of what it is, where it lives and how many people
+/// it holds. Deliberately a card, not a monograph.
 fn civilization_dossier(
     ui: &mut egui::Ui,
     civ_id: u32,
     civ: &Civilization,
-    world: &CivilizationWorld,
     languages: &LanguagesWorld,
-    lang: Language,
 ) {
     // A hover card has to stay a card: at 430 px it never swallows the map.
     ui.set_max_width(CARD_WIDTH);
@@ -1367,89 +1584,86 @@ fn civilization_dossier(
     });
     caption(
         ui,
-        format!(
-            "{} · {} — {}",
-            civ.tier.label(),
-            civ.rise.kind.label(),
-            civ.culture.government.label()
-        ),
+        format!("{} · {}", civ.culture.outlook.label(), civ.tier.mobility()),
     );
-    caption(ui, civ.origin_label());
-    if civ.founding_year.is_some() {
-        caption(ui, civ.year_label());
-    }
 
     ui.separator();
-    caption(ui, civ.cradle_kind.describe());
-    for highlight in civ.rise.highlights.iter().take(3) {
-        ui.label(format!("• {highlight}"));
-    }
-
-    ui.separator();
-    ui.label(
-        egui::RichText::new(format!(
-            "{} · {}",
-            civ.culture.subsistence.label(),
-            civ.culture.outlook.label()
-        ))
-        .strong(),
-    );
-    caption(
+    dossier_row(ui, "Society:", civ.tier.form());
+    dossier_row(
         ui,
-        if civ.culture.government.is_state() {
-            lang.text("A state")
+        if civ.tier.is_state() {
+            "Cradle:"
         } else {
-            lang.text("A pre-state society")
+            "Terrain:"
+        },
+        if civ.tier.is_state() {
+            civ.cradle_kind.label()
+        } else {
+            civ.environment.label()
         },
     );
+    dossier_row(ui, "Economy:", civ.culture.subsistence.label());
+    dossier_row(ui, "Faith:", civ.faith.kind.label());
+    dossier_row(ui, "Polity:", civ.culture.government.label());
+    dossier_row(ui, "Hierarchy:", "Later");
 
-    ui.add_space(4.0);
-    ui.label(egui::RichText::new(civ.faith.kind.label()).strong());
-    caption(ui, civ.faith.kind.creed());
+    ui.separator();
+    dossier_row(
+        ui,
+        if civ.tier.is_state() {
+            "Capital:"
+        } else {
+            "Heartland:"
+        },
+        &format!("Province #{}", civ.seat_province),
+    );
+    dossier_row(ui, "Area:", &format!("{} km²", thousands(civ.area_km2)));
+    dossier_row(
+        ui,
+        "Population:",
+        &format!(
+            "{} ({:.1}/km²)",
+            thousands_u64(civ.population),
+            civ.density_per_km2
+        ),
+    );
 
-    if let (Some(language), Some(family)) = (
-        languages.language_of_civ(civ_id),
-        languages.family_of_civ(civ_id),
-    ) {
-        ui.separator();
-        ui.horizontal(|ui| {
-            themes::swatch(ui, family.color);
-            ui.label(
-                egui::RichText::new(format!(
-                    "{} · {}",
-                    family.name,
-                    family.urheimat.archetype.label()
-                ))
-                .strong(),
-            );
-        });
-        ui.label(lang.fill("Language: {}", &[&language.name]));
-        ui.label(lang.fill("Autonym: {}", &[&language.autonym]));
-        caption(
-            ui,
-            lang.fill("Urheimat: {}", &[&languages.urheimat_label(family.id)]),
-        );
+    ui.separator();
+    dossier_row(ui, "Culture:", "Later");
+    if let Some(language) = languages.language_of_civ(civ_id) {
+        dossier_row(ui, "Language:", &language.name);
+        dossier_row(ui, "Autonym:", &language.autonym);
     }
 
     ui.separator();
-    ui.label(lang.fill(
-        "{} people · {} provinces · {} km²",
-        &[
-            &thousands_u64(civ.population),
-            &civ.provinces.len(),
-            &thousands(civ.area_km2),
-        ],
-    ));
-    if civ.contacts.is_empty() {
-        caption(ui, lang.text("No neighbour within reach."));
+    dossier_row(ui, "Founded:", &civ.origin_label());
+    lineage_row(ui, "Predecessor:", "Predecessors:", &[]);
+    lineage_row(ui, "Successor:", "Successors:", &[]);
+}
+
+/// One aligned row of a civilization dossier: a fixed-width label and a value.
+fn dossier_row(ui: &mut egui::Ui, label: &str, value: &str) {
+    ui.horizontal(|ui| {
+        let height = ui.spacing().interact_size.y;
+        ui.add_sized(
+            [DOSSIER_LABEL_WIDTH, height],
+            egui::Label::new(egui::RichText::new(label)),
+        );
+        ui.label(value);
+    });
+}
+
+/// A lineage row. The label switches to its plural as soon as a realm has more
+/// than one predecessor or successor; until lineage data exists the value is
+/// `None`.
+fn lineage_row(ui: &mut egui::Ui, singular: &str, plural: &str, names: &[&str]) {
+    let label = if names.len() >= 2 { plural } else { singular };
+    let value = if names.is_empty() {
+        "None".to_string()
     } else {
-        let neighbours: Vec<&str> = civ
-            .contacts
-            .iter()
-            .map(|contact| world.name_of(contact.other))
-            .collect();
-        caption(ui, lang.fill("Neighbours: {}", &[&neighbours.join(", ")]));
-    }
+        names.join(", ")
+    };
+    dossier_row(ui, label, &value);
 }
 
 /// One row of the five-way key: a tier's colour, its name, and how much of the
@@ -1477,19 +1691,13 @@ fn society_key_row(
             egui::Label::new(
                 egui::RichText::new(language.fill(
                     "{} — {} societies · {}% of the land",
-                    &[
-                        &language.text(tier.label()),
-                        &count,
-                        &format!("{share:.1}"),
-                    ],
+                    &[&language.text(tier.label()), &count, &format!("{share:.1}")],
                 ))
                 .small(),
             )
             .wrap(),
         );
-    })
-    .response
-    .on_hover_text(language.text(tier.describe()));
+    });
 }
 
 /// One society's entry in the dawn legend: its colour and its name, as a button
@@ -1577,6 +1785,9 @@ impl MapViewer {
             world,
             job: None,
             save_job: None,
+            export_job: None,
+            export_notice: None,
+            plate_stale: false,
             seed_text,
             resolution,
             cache_notice: None,
@@ -1683,6 +1894,7 @@ impl MapViewer {
     /// adopt it the moment it is finished.
     fn poll_worker(&mut self, ctx: &egui::Context) {
         self.poll_save();
+        self.poll_export();
         let Some(mut job) = self.job.take() else {
             return;
         };
@@ -1708,10 +1920,7 @@ impl MapViewer {
                     // texture upload — not one per pixel of a 16K world.
                     let image = ColorImage::from_rgba_unmultiplied([width, height], &rgba);
                     let texture = ctx.load_texture("live_preview", image, TextureOptions::NEAREST);
-                    self.live = Some(LivePlate {
-                        label,
-                        texture,
-                    });
+                    self.live = Some(LivePlate { label, texture });
                 }
                 Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
             }
@@ -1744,7 +1953,7 @@ impl MapViewer {
                 self.genesis = job.fallback;
                 self.world = self.genesis.atlas();
                 self.live = None;
-                self.texture = None;
+                self.invalidate_plate();
                 self.notice = Some(self.tf(
                     "⚠ {}. {} did not finish — the world is as it was before it started",
                     &[&stage.index(), &self.t(stage.title())],
@@ -1765,7 +1974,7 @@ impl MapViewer {
             .world
             .as_ref()
             .map(|world| measure_relief(&world.heightmap));
-        self.texture = None;
+        self.invalidate_plate();
         self.live = None;
         self.selected_civ = None;
         self.selected_family = None;
@@ -1944,11 +2153,94 @@ impl MapViewer {
                 self.cached_dirty = true;
             }
             Err(why) => {
-                self.cache_notice = Some(self.tf(
-                    "The world could not be saved ({}).",
-                    &[&format!("{why:?}")],
-                ));
+                self.cache_notice =
+                    Some(self.tf("The world could not be saved ({}).", &[&format!("{why:?}")]));
             }
+        }
+    }
+
+    /// Export the map mode on screen as a PNG, without freezing the atlas.
+    ///
+    /// The world moves to the worker as a clone — every grid is behind an `Arc`,
+    /// so that copies pointers, not a planet — together with the handful of
+    /// settings that decide how a plate is painted. The worker paints at the
+    /// world's own size, downsamples it to the chosen plate and writes it, then
+    /// wakes the window so [`MapViewer::poll_export`] can say where it went.
+    fn start_export(&mut self, ctx: &egui::Context, choice: ExportChoice) {
+        if self.export_job.is_some() {
+            return;
+        }
+        let Some(world) = self.world.as_ref() else {
+            return;
+        };
+        let native = (world.width, world.height);
+        if !choice.allowed(native) {
+            return;
+        }
+        let target = choice.size(native);
+        let overlay = self.show_civilizations && !self.scope.is_civilizations();
+        let name = export_file_name(self.genesis.seed(), self.scope, self.tier, overlay, target);
+        let path = free_export_path(&name);
+        let world = world.clone();
+        let view = self.plate_view();
+        let (tx, rx) = mpsc::channel();
+        let worker_ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let outcome = write_export(&world, view, target, &path);
+            let _ = tx.send(ExportOutcome {
+                path,
+                size: target,
+                outcome,
+            });
+            worker_ctx.request_repaint();
+        });
+        self.export_job = Some(rx);
+        self.export_notice = Some(self.tf("⏳ Exporting {} × {}…", &[&target.0, &target.1]));
+    }
+
+    /// Adopt a finished export: the file it wrote, or why it could not.
+    fn poll_export(&mut self) {
+        let Some(rx) = self.export_job.as_ref() else {
+            return;
+        };
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => {
+                self.export_job = None;
+                self.export_notice = Some(self.t("Export failed — the worker stopped").to_string());
+                return;
+            }
+        };
+        self.export_job = None;
+        self.export_notice = Some(match result.outcome {
+            Ok(()) => self.tf(
+                "✔ Exported {} × {} PNG to '{}'",
+                &[
+                    &result.size.0,
+                    &result.size.1,
+                    &result.path.display().to_string(),
+                ],
+            ),
+            Err(why) => self.tf("Export failed — {}", &[&why]),
+        });
+        // A plate invalidated while the export was painting was held back so
+        // that two full plates were never painted at once. Now it can be.
+        if std::mem::take(&mut self.plate_stale) {
+            self.texture = None;
+        }
+    }
+
+    /// Mark the plate on screen out of date.
+    ///
+    /// While an export is painting the same world on its worker, the repaint
+    /// waits: the old plate stays on screen, and the moment the export finishes
+    /// the canvas is refreshed from the current map mode.
+    fn invalidate_plate(&mut self) {
+        if self.export_job.is_some() {
+            self.plate_stale = true;
+        } else {
+            self.texture = None;
         }
     }
 
@@ -2000,7 +2292,12 @@ impl MapViewer {
         self.cache_notice = None;
         self.notice = Some(self.tf(
             "↺ Seed {} cleared on a {} × {} canvas — press “{}” to grow it again.",
-            &[&seed, &width, &height, &act_label(self.language, Stage::Geology)],
+            &[
+                &seed,
+                &width,
+                &height,
+                &act_label(self.language, Stage::Geology),
+            ],
         ));
     }
 
@@ -2030,7 +2327,7 @@ impl MapViewer {
 
     /// Forget everything that belonged to the world just replaced.
     fn forget_world_view(&mut self) {
-        self.texture = None;
+        self.invalidate_plate();
         self.live = None;
         self.selected_civ = None;
         self.selected_family = None;
@@ -2119,10 +2416,7 @@ impl MapViewer {
         // reader can want from an empty world. It is offered on the plate
         // itself, so the first act is never hunted for in the panel.
         if self.job.is_none() {
-            let label = self.tf(
-                "▶ Begin — {}",
-                &[&act_label(self.language, Stage::Geology)],
-            );
+            let label = self.tf("▶ Begin — {}", &[&act_label(self.language, Stage::Geology)]);
             let button_rect = egui::Rect::from_center_size(
                 rect.center() + egui::vec2(0.0, 40.0),
                 egui::vec2(360.0, 40.0),
@@ -2311,7 +2605,10 @@ impl MapViewer {
         } else {
             caption(
                 ui,
-                self.tf("Canvas {} × {} · resolution is fixed once act 1 runs.", &[&width, &height]),
+                self.tf(
+                    "Canvas {} × {} · resolution is fixed once act 1 runs.",
+                    &[&width, &height],
+                ),
             );
         }
         caption(
@@ -2332,7 +2629,7 @@ impl MapViewer {
         if !self.genesis.set_canvas(width, height) {
             return false;
         }
-        self.texture = None;
+        self.invalidate_plate();
         self.pending_fit = true;
         self.notice = Some(self.tf(
             "🌱 Canvas {} × {} — press “{}” to grow it.",
@@ -2448,13 +2745,7 @@ impl MapViewer {
                     ],
                 ),
             ),
-            (None, Some(seed)) => caption(
-                ui,
-                self.tf(
-                    "No saved world for seed {}.",
-                    &[&seed],
-                ),
-            ),
+            (None, Some(seed)) => caption(ui, self.tf("No saved world for seed {}.", &[&seed])),
             (None, None) => caption(ui, self.t("A seed is a whole number — Load needs one.")),
         }
 
@@ -2631,9 +2922,7 @@ impl MapViewer {
                                 "Redo from act {} — un-do it and everything after it",
                                 &[&stage.index()],
                             ))
-                            .on_disabled_hover_text(
-                                self.t("Wait for the act in flight to finish"),
-                            )
+                            .on_disabled_hover_text(self.t("Wait for the act in flight to finish"))
                             .clicked()
                         {
                             rewind = Some(stage);
@@ -2813,10 +3102,10 @@ impl MapViewer {
 
     /// Latitude and longitude, in degrees, of a map pixel.
     fn pixel_lat_lon(&self, x: f32, y: f32) -> (f32, f32) {
-        let (width, height) = self
-            .world
-            .as_ref()
-            .map_or_else(|| self.genesis.canvas(), |world| (world.width, world.height));
+        let (width, height) = self.world.as_ref().map_or_else(
+            || self.genesis.canvas(),
+            |world| (world.width, world.height),
+        );
         let v = (y / (height.saturating_sub(1)).max(1) as f32).clamp(0.0, 1.0);
         let u = (x / width.max(1) as f32).clamp(0.0, 1.0);
         ((0.5 - v) * 180.0, (u - 0.5) * 360.0)
@@ -2843,30 +3132,43 @@ impl MapViewer {
             .world
             .as_ref()
             .expect("a headless plate needs a world to paint");
-        let img = self.generate_texture(world);
-        let (w, h) = (img.size[0] as u32, img.size[1] as u32);
-        let mut buf = Vec::with_capacity((w * h * 4) as usize);
-        for px in &img.pixels {
-            buf.extend_from_slice(&px.to_array());
-        }
-        let full =
-            image::RgbaImage::from_raw(w, h, buf).expect("RGBA buffer sized to the atlas texture");
+        let img = Self::generate_texture(world, self.plate_view());
+        let full = rgba_plate(&img);
         let plate = if (scale - 1.0).abs() < f32::EPSILON {
             full
         } else {
-            let out_w = ((w as f32 * scale).round() as u32).max(1);
-            let out_h = ((h as f32 * scale).round() as u32).max(1);
+            let out_w = ((full.width() as f32 * scale).round() as u32).max(1);
+            let out_h = ((full.height() as f32 * scale).round() as u32).max(1);
             image::imageops::resize(&full, out_w, out_h, image::imageops::FilterType::Lanczos3)
         };
         plate.save(path)
     }
 
-    fn generate_texture(&self, world: &AtlasWorld) -> ColorImage {
+    /// The painter's settings, copied out of the window so an export can paint
+    /// the same plate without borrowing the atlas.
+    fn plate_view(&self) -> PlateView {
+        let hydro = self.genesis.hydro_config();
+        PlateView {
+            scope: self.scope,
+            tier: self.tier,
+            show_borders: self.show_borders,
+            show_civilizations: self.show_civilizations,
+            min_river_flow: hydro.min_river_flow,
+            major_river_flow: hydro.major_river_flow,
+        }
+    }
+
+    /// Paint a plate of `world` as `view` describes it.
+    ///
+    /// This is the atlas's one painter: the interactive canvas, the headless
+    /// plates and the PNG export all call it, so none of them can disagree about
+    /// what a map mode looks like.
+    fn generate_texture(world: &AtlasWorld, view: PlateView) -> ColorImage {
         let w = world.width;
         let h = world.height;
-        let scope = self.scope;
-        let tier = self.tier;
-        let show_borders = self.show_borders;
+        let scope = view.scope;
+        let tier = view.tier;
+        let show_borders = view.show_borders;
         let hierarchy = &world.hierarchy;
         let ocean_hierarchy = &world.ocean_hierarchy;
         let province_ids = world.provinces.as_ref().map(|p| &p.province_ids);
@@ -2879,7 +3181,7 @@ impl MapViewer {
         let language_scope = scope.is_languages();
         // The civilizations' own scope always shows them; every other scope shows
         // them only when the reader asks for the overlay.
-        let show_civs = (self.show_civilizations && !language_scope) || civ_scope;
+        let show_civs = (view.show_civilizations && !language_scope) || civ_scope;
         let civilizations = &world.civilizations;
         let languages = &world.languages;
 
@@ -2897,9 +3199,10 @@ impl MapViewer {
         let sea_level = relief::SEA_LEVEL;
         // The river thresholds are the pipeline's own, not a private copy: the
         // live plate and the printed plates must agree on what counts as a river.
-        let hydro = self.genesis.hydro_config();
-        let min_river_flow = hydro.min_river_flow;
-        let major_river_flow = hydro.major_river_flow;
+        // They travel in `PlateView`, so an export paints rivers exactly as the
+        // canvas does.
+        let min_river_flow = view.min_river_flow;
+        let major_river_flow = view.major_river_flow;
         let lx = -0.7071f32;
         let ly = -0.7071f32;
         let render_noise = OpenSimplex::new(777);
@@ -2960,9 +3263,9 @@ impl MapViewer {
                     if lake_here {
                         [42.0, 125.0, 185.0]
                     } else if elev <= sea_level {
-                        if display_temp < -8.0 {
+                        if display_temp < ICE_SHELF_TEMP {
                             [245.0, 248.0, 255.0] // Glacial ice shelf
-                        } else if display_temp < -3.0 {
+                        } else if display_temp < PACK_ICE_TEMP {
                             [165.0, 205.0, 235.0] // Polar sea ice
                         } else {
                             let depth = (elev / sea_level).clamp(0.0, 1.0);
@@ -3032,7 +3335,7 @@ impl MapViewer {
                         color = [color[0] * shade, color[1] * shade, color[2] * shade];
                         // Ice-capped land keeps its relief readable under a
                         // translucent veneer instead of blanking the survey out.
-                        if display_temp < -3.0 {
+                        if display_temp < GLACIAL_LAND_TEMP {
                             color = blend_rgb(color, [238.0, 244.0, 252.0], 0.75);
                         }
                         let flow = flow_grid.map_or(0.0, |grid| *grid.get(x as isize, y as isize));
@@ -3570,6 +3873,12 @@ impl MapViewer {
             .as_ref()
             .map_or(0, |world| world.civilizations.civilizations.len());
         let seed = self.genesis.seed();
+        let native = self.world.as_ref().map(|world| (world.width, world.height));
+        // A click in the Export menu is resolved after the bar has been laid out,
+        // so the menu's own borrow of the atlas has ended by the time the worker
+        // is handed the world.
+        let mut export_choice = None;
+        let ctx = ui.ctx().clone();
 
         egui::Panel::top("top_bar")
             .frame(frame.clone())
@@ -3629,7 +3938,7 @@ impl MapViewer {
                             // and pan: a map mode is a change of what is shown,
                             // not of where the reader is looking. **Fit** is there
                             // when the whole world is wanted again.
-                            self.texture = None;
+                            self.invalidate_plate();
                         }
                     }
 
@@ -3652,6 +3961,53 @@ impl MapViewer {
                         self.language = chosen;
                         chosen.save_preference(std::path::Path::new(crate::pipeline::CACHE_DIR));
                     }
+
+                    // ── The export ────────────────────────────────────────────
+                    // The map mode on screen, printed as a PNG next to the
+                    // language: a 2K or 8K plate, or the world's own size when it
+                    // is neither. Nothing is ever enlarged — an export only ever
+                    // downsamples — so a size the world is too small for stays
+                    // listed but disabled, with the reason on hover.
+                    ui.separator();
+                    let export_menu = ui
+                        .add_enabled_ui(has_world && self.export_job.is_none(), |ui| {
+                            ui.menu_button(self.t("💾 Export"), |ui| {
+                                let Some(native) = native else {
+                                    return;
+                                };
+                                for choice in ExportChoice::ALL
+                                    .into_iter()
+                                    .filter(|choice| choice.offered(native))
+                                {
+                                    let response = ui
+                                        .add_enabled(
+                                            choice.allowed(native),
+                                            egui::Button::new(choice.label(native, self.language)),
+                                        )
+                                        .on_disabled_hover_text(self.tf(
+                                            "This world is {} × {} — choose a size no larger than that",
+                                            &[&native.0, &native.1],
+                                        ));
+                                    if response.clicked() {
+                                        ui.close();
+                                        export_choice = Some(choice);
+                                    }
+                                }
+                            })
+                        })
+                        .inner
+                        .response;
+                    let _ = if !has_world {
+                        export_menu.on_disabled_hover_text(self.t("Grow a world first"))
+                    } else if self.export_job.is_some() {
+                        export_menu
+                            .on_disabled_hover_text(self.t("An export is already running"))
+                    } else {
+                        export_menu.on_hover_text(self.t("Export the current map as a PNG"))
+                    };
+                    if let Some(notice) = self.export_notice.as_deref() {
+                        caption(ui, notice);
+                    }
                 });
 
                 ui.horizontal_wrapped(|ui| {
@@ -3672,7 +4028,7 @@ impl MapViewer {
                         ] {
                             let label = self.t(label);
                             if ui.selectable_value(&mut self.tier, tier, label).clicked() {
-                                self.texture = None;
+                                self.invalidate_plate();
                             }
                         }
                     });
@@ -3690,7 +4046,7 @@ impl MapViewer {
                         .inner
                         .changed()
                     {
-                        self.texture = None;
+                        self.invalidate_plate();
                     }
                     ui.separator();
 
@@ -3715,7 +4071,7 @@ impl MapViewer {
                             response.on_disabled_hover_text(self.t("Not shown in this scope"));
                     }
                     if response.changed() {
-                        self.texture = None;
+                        self.invalidate_plate();
                     }
                     ui.separator();
 
@@ -3744,6 +4100,10 @@ impl MapViewer {
                     });
                 });
             });
+
+        if let Some(choice) = export_choice {
+            self.start_export(&ctx, choice);
+        }
     }
 
     /// The world's census, in the three lines it has always been: the land
@@ -3869,10 +4229,7 @@ impl MapViewer {
                     );
                     if ui
                         .add(egui::Button::new(peak_label).frame(false))
-                        .on_hover_text(self.tf(
-                            "{}\nClick to fly to the summit",
-                            &[&peak_where],
-                        ))
+                        .on_hover_text(self.tf("{}\nClick to fly to the summit", &[&peak_where]))
                         .clicked()
                     {
                         // Never zoom *out* to fly somewhere: a reader who is already
@@ -3888,10 +4245,9 @@ impl MapViewer {
                     );
                     if ui
                         .add(egui::Button::new(trench_label).frame(false))
-                        .on_hover_text(self.tf(
-                            "{}\nClick to fly to the deepest point",
-                            &[&trench_where],
-                        ))
+                        .on_hover_text(
+                            self.tf("{}\nClick to fly to the deepest point", &[&trench_where]),
+                        )
                         .clicked()
                     {
                         let zoom = RELIEF_FOCUS_ZOOM.max(self.zoom);
@@ -4033,9 +4389,7 @@ impl MapViewer {
                     ));
                     if ui
                         .button(self.t("🏛 Fly to the Common Era site"))
-                        .on_hover_text(self.t(
-                            "The province the world's calendar is reckoned from",
-                        ))
+                        .on_hover_text(self.t("The province the world's calendar is reckoned from"))
                         .clicked()
                     {
                         focus_request = Some((
@@ -4096,10 +4450,9 @@ impl MapViewer {
                             }
                             ui.add_space(4.0);
                             ui.label(
-                                egui::RichText::new(self.tf(
-                                    "{} ({})",
-                                    &[&self.t(tier.label()), &shown],
-                                ))
+                                egui::RichText::new(
+                                    self.tf("{} ({})", &[&self.t(tier.label()), &shown]),
+                                )
                                 .strong(),
                             );
                             let mut listed = 0usize;
@@ -4131,20 +4484,14 @@ impl MapViewer {
                                     ui,
                                     self.tf(
                                         "{} provinces · {} people",
-                                        &[
-                                            &civ.provinces.len(),
-                                            &thousands_u64(civ.population),
-                                        ],
+                                        &[&civ.provinces.len(), &thousands_u64(civ.population)],
                                     ),
                                 );
                             }
                             if shown > listed {
                                 caption(
                                     ui,
-                                    self.tf(
-                                        "… and {} more, all on the map.",
-                                        &[&(shown - listed)],
-                                    ),
+                                    self.tf("… and {} more, all on the map.", &[&(shown - listed)]),
                                 );
                             }
                         }
@@ -4205,16 +4552,15 @@ impl MapViewer {
                                         &[&world.languages.urheimat_label(family.id)],
                                     ),
                                 );
-                                for language in world.languages.languages_of(family.id).iter().take(6) {
+                                for language in
+                                    world.languages.languages_of(family.id).iter().take(6)
+                                {
                                     ui.horizontal(|ui| {
                                         themes::swatch(ui, language.color);
                                         ui.label(egui::RichText::new(&language.name).small());
                                         caption(
                                             ui,
-                                            self.tf(
-                                                "{} provinces",
-                                                &[&language.province_count],
-                                            ),
+                                            self.tf("{} provinces", &[&language.province_count]),
                                         );
                                     });
                                 }
@@ -4245,9 +4591,12 @@ impl MapViewer {
 
         // The 16K plate is only regenerated when the world or the scope has
         // changed — never per frame — and never while an act is running, because
-        // while an act is running the *live* plate is what the canvas shows.
-        if self.job.is_none() && self.texture.is_none() {
-            let img = self.generate_texture(world);
+        // while an act is running the *live* plate is what the canvas shows. Nor
+        // while an export is painting the same world on its worker: the old
+        // plate stays on screen, and the invalidation is honoured the moment the
+        // export finishes (see `invalidate_plate`).
+        if self.job.is_none() && self.export_job.is_none() && self.texture.is_none() {
+            let img = Self::generate_texture(world, self.plate_view());
             self.texture = Some(
                 ui.ctx()
                     .load_texture("map_texture", img, TextureOptions::NEAREST),
@@ -4455,9 +4804,7 @@ impl MapViewer {
                                 ui,
                                 owner,
                                 civ,
-                                &world.civilizations,
                                 &world.languages,
-                                self.language,
                             );
                         } else if lake {
                             card_title(ui, self.t("💧 Inland Freshwater Lake"));
@@ -4574,7 +4921,7 @@ impl MapViewer {
                             if frozen_sea { frozen_sea_name(display_temp) } else { "Open Ocean" }
                         } else if world.is_lake.as_ref().is_some_and(|lake| *lake.get(map_x, map_y)) {
                             "Inland Freshwater Lake"
-                        } else if display_temp < -3.0 {
+                        } else if display_temp < GLACIAL_LAND_TEMP {
                             "Ice-capped Land"
                         } else {
                             get_biome_name(display_temp, precip, altitude)
@@ -4643,7 +4990,7 @@ impl MapViewer {
                             }
                         } else if lake {
                             self.t("Lake surface")
-                        } else if display_temp < -3.0 {
+                        } else if display_temp < GLACIAL_LAND_TEMP {
                             self.t("Ice-capped land")
                         } else {
                             self.t("Land surface")
@@ -5001,7 +5348,9 @@ mod tests {
         // Nothing has been made, so nothing claims to have been: the panel is a
         // list of acts, not a log of them.
         assert!(
-            !text.iter().any(|drawn| drawn.contains("What has been made")),
+            !text
+                .iter()
+                .any(|drawn| drawn.contains("What has been made")),
             "the panel no longer keeps a notebook of the acts it has run"
         );
     }
@@ -5057,6 +5406,9 @@ mod tests {
         says("🌍 Atlas Viewer");
         says("No world yet");
         says("Tier:");
+        // The export is in the bar before a world exists — disabled, but never
+        // hidden, so the control does not appear out of nowhere once it works.
+        says("💾 Export");
         says("▶ Begin — 1. Geology & Erosion");
     }
 
@@ -5287,10 +5639,12 @@ mod tests {
         viewer.genesis.set_autosave(false);
         // The world's own constants are the reader's too, and outlive a reset the
         // same way: a new world on the same seed grows under the settings chosen.
-        viewer.genesis.set_settings(crate::pipeline::WorldGenSettings {
-            sea_threshold: 0.05,
-            ..Default::default()
-        });
+        viewer
+            .genesis
+            .set_settings(crate::pipeline::WorldGenSettings {
+                sea_threshold: 0.05,
+                ..Default::default()
+            });
         // ... and a world begun again keeps both choices.
         viewer.reset_world();
         assert!(
@@ -5319,14 +5673,242 @@ mod tests {
             ]
         );
         assert_eq!(MapResolution::DEFAULT.size(), (8_192, 4_096));
-        assert_eq!(
-            MapResolution::from_canvas(8_192, 4_096),
-            MapResolution::K8
-        );
+        assert_eq!(MapResolution::from_canvas(8_192, 4_096), MapResolution::K8);
         assert_eq!(
             MapResolution::from_canvas(3_000, 1_500),
             MapResolution::Custom(3_000, 1_500)
         );
+    }
+
+    // ─── THE PNG EXPORT ──────────────────────────────────────────────────────
+
+    /// An export may shrink a world, never enlarge it: the 2K plate is available
+    /// wherever the world is at least 2K, the 8K plate only from 8K up, and the
+    /// world's own size whenever it is neither of them.
+    #[test]
+    fn an_export_never_upscales_the_world() {
+        let available = |native: (usize, usize)| {
+            ExportChoice::ALL
+                .into_iter()
+                .filter(|choice| choice.offered(native) && choice.allowed(native))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(available((2_048, 1_024)), [ExportChoice::K2]);
+        assert_eq!(
+            available((4_096, 2_048)),
+            [ExportChoice::K2, ExportChoice::Native]
+        );
+        assert_eq!(
+            available((8_192, 4_096)),
+            [ExportChoice::K2, ExportChoice::K8]
+        );
+        assert_eq!(
+            available((16_384, 8_192)),
+            [ExportChoice::K2, ExportChoice::K8, ExportChoice::Native]
+        );
+
+        // A size the world is too small for stays listed — the menu never
+        // changes shape — but it cannot be chosen.
+        assert!(!ExportChoice::K8.allowed((2_048, 1_024)));
+        // An 8K world does not need two identical 8K entries.
+        assert!(!ExportChoice::Native.offered((8_192, 4_096)));
+
+        // A canvas that is not the plate's own aspect ratio is only ever
+        // exported at its native size: a preset would have to stretch it.
+        assert!(!ExportChoice::K2.allowed((3_000, 2_000)));
+        assert!(ExportChoice::Native.allowed((3_000, 2_000)));
+        assert!(ExportChoice::K2.allowed((3_000, 1_500)));
+    }
+
+    /// An export is named for the world it came from and the map mode on screen.
+    #[test]
+    fn an_export_is_named_for_its_seed_map_mode_and_size() {
+        assert_eq!(
+            export_file_name(
+                42,
+                MapScope::Physical,
+                MapTier::Regions,
+                false,
+                (8_192, 4_096)
+            ),
+            "world_42_physical_8192x4096.png"
+        );
+        assert_eq!(
+            export_file_name(
+                42,
+                MapScope::Land,
+                MapTier::Superregions,
+                false,
+                (2_048, 1_024)
+            ),
+            "world_42_land_superregions_2048x1024.png"
+        );
+        // The ocean's top tier is its basins, as the printed plate says.
+        assert_eq!(
+            export_file_name(
+                7,
+                MapScope::Water,
+                MapTier::Continents,
+                false,
+                (16_384, 8_192)
+            ),
+            "world_7_water_basins_16384x8192.png"
+        );
+        // The civilizations overlay is part of the picture, so it is part of
+        // the name — but only on a scope that is not already about them.
+        assert_eq!(
+            export_file_name(
+                7,
+                MapScope::Topographic,
+                MapTier::Regions,
+                true,
+                (2_048, 1_024)
+            ),
+            "world_7_topographic_civs_2048x1024.png"
+        );
+        assert_eq!(
+            export_file_name(
+                7,
+                MapScope::Civilizations,
+                MapTier::Regions,
+                true,
+                (2_048, 1_024)
+            ),
+            "world_7_civilizations_regions_2048x1024.png"
+        );
+        // The Languages map has no tier, so it never gains a tier segment.
+        assert_eq!(
+            export_file_name(
+                9,
+                MapScope::Languages,
+                MapTier::Regions,
+                false,
+                (8_192, 4_096)
+            ),
+            "world_9_languages_8192x4096.png"
+        );
+    }
+
+    /// An export never quietly overwrites the one before it.
+    #[test]
+    fn an_export_never_overwrites_an_earlier_one() {
+        let directory = std::env::temp_dir().join(format!(
+            "genesis_export_name_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |t| t.subsec_nanos())
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+
+        let name = "world_1_physical_2048x1024.png";
+        assert_eq!(free_export_path_in(&directory, name), directory.join(name));
+
+        std::fs::write(directory.join(name), b"first").unwrap();
+        assert_eq!(
+            free_export_path_in(&directory, name),
+            directory.join("world_1_physical_2048x1024-2.png")
+        );
+
+        std::fs::write(
+            directory.join("world_1_physical_2048x1024-2.png"),
+            b"second",
+        )
+        .unwrap();
+        assert_eq!(
+            free_export_path_in(&directory, name),
+            directory.join("world_1_physical_2048x1024-3.png")
+        );
+
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// The export is the atlas's own painter, written at the size the reader
+    /// chose: the world's own size unchanged, and a clean downsample when the
+    /// plate is smaller than the world.
+    #[test]
+    fn an_export_writes_a_png_of_the_requested_size() {
+        let viewer = MapViewer::new(Genesis::for_test(42, Stage::Geology));
+        let world = viewer.world.as_ref().expect("a test world");
+        let view = viewer.plate_view();
+        let directory = std::env::temp_dir().join(format!(
+            "genesis_export_png_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |t| t.subsec_nanos())
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+
+        let native = directory.join("native.png");
+        write_export(world, view, (world.width, world.height), &native).unwrap();
+        let image = image::open(&native).unwrap();
+        assert_eq!((image.width(), image.height()), (4, 2));
+
+        let small = directory.join("small.png");
+        write_export(world, view, (2, 1), &small).unwrap();
+        let image = image::open(&small).unwrap();
+        assert_eq!((image.width(), image.height()), (2, 1));
+
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// The interactive export hands the plate to a worker, then says where it
+    /// went. The worker is joined the way the window joins it: by polling.
+    #[test]
+    fn an_export_runs_on_its_worker_and_says_where_it_went() {
+        let ctx = egui::Context::default();
+        let mut viewer = MapViewer::new(Genesis::for_test(1_980, Stage::Geology));
+
+        // Only the files this test adds are removed afterwards.
+        let exports = std::path::Path::new(EXPORTS_DIR);
+        let matching = || {
+            std::fs::read_dir(exports)
+                .map(|entries| {
+                    entries
+                        .filter_map(|entry| entry.ok())
+                        .map(|entry| entry.path())
+                        .filter(|path| {
+                            path.file_name()
+                                .and_then(|name| name.to_str())
+                                .is_some_and(|name| name.starts_with("world_1980_topographic_4x2"))
+                        })
+                        .collect::<std::collections::BTreeSet<_>>()
+                })
+                .unwrap_or_default()
+        };
+        let before = matching();
+
+        viewer.start_export(&ctx, ExportChoice::Native);
+        assert!(viewer.export_job.is_some(), "the export did not start");
+
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while viewer.export_job.is_some() && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            viewer.poll_export();
+        }
+        assert!(viewer.export_job.is_none(), "the export did not finish");
+
+        let notice = viewer
+            .export_notice
+            .as_deref()
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            notice.contains("Exported"),
+            "the atlas did not say what it wrote: {notice:?}"
+        );
+
+        let written = matching().difference(&before).cloned().collect::<Vec<_>>();
+        assert_eq!(
+            written.len(),
+            1,
+            "expected one new export, found {written:?}"
+        );
+        let image = image::open(&written[0]).unwrap();
+        assert_eq!((image.width(), image.height()), (4, 2));
+        let _ = std::fs::remove_file(&written[0]);
     }
 
     /// Before act one the selector's choice becomes the pipeline's canvas at once.
@@ -5402,15 +5984,24 @@ mod tests {
     #[test]
     fn a_cache_is_described_in_units_a_reader_thinks_in() {
         assert_eq!(cache_size(570_425_480, Language::English), "544 MB");
-        assert_eq!(cache_size(2 * 1024 * 1024 * 1024, Language::English), "2.0 GB");
+        assert_eq!(
+            cache_size(2 * 1024 * 1024 * 1024, Language::English),
+            "2.0 GB"
+        );
 
         let now = SystemTime::now();
         assert_eq!(
-            cache_age(Some(now - std::time::Duration::from_secs(90)), Language::English),
+            cache_age(
+                Some(now - std::time::Duration::from_secs(90)),
+                Language::English
+            ),
             "1 min ago"
         );
         assert_eq!(
-            cache_age(Some(now - std::time::Duration::from_secs(3 * 86_400)), Language::English),
+            cache_age(
+                Some(now - std::time::Duration::from_secs(3 * 86_400)),
+                Language::English
+            ),
             "3 d ago"
         );
         assert_eq!(cache_age(None, Language::English), "at an unknown time");
@@ -5542,7 +6133,13 @@ mod tests {
                         ui.separator();
                         caption(ui, "How the world is organised");
                         for (index, tier) in SocietyTier::LADDER.iter().enumerate() {
-                            society_key_row(ui, *tier, 9_999 + index, 100.0 / 5.0, Language::English);
+                            society_key_row(
+                                ui,
+                                *tier,
+                                9_999 + index,
+                                100.0 / 5.0,
+                                Language::English,
+                            );
                         }
                         ui.separator();
                         // A society's name comes from the world, not from this
@@ -5861,7 +6458,8 @@ mod tests {
         // and its Civilizations legend on screen.
         let genesis = Genesis::for_test(42, Stage::Civilization);
         let world = genesis.atlas().expect("a world of seven acts");
-        let mut viewer = MapViewer::with_world(genesis, Some(world)).with_language(Language::German);
+        let mut viewer =
+            MapViewer::with_world(genesis, Some(world)).with_language(Language::German);
         let painted = draw_frames(&ctx, &mut viewer);
         let text: Vec<&str> = painted.iter().map(|(drawn, _)| drawn.as_str()).collect();
         let says = |needle: &str| {
@@ -5956,12 +6554,6 @@ mod tests {
                     language.text(tier.label()),
                     tier.label(),
                     "{language:?} left the society tier {:?} in English",
-                    tier.label()
-                );
-                assert_ne!(
-                    language.text(tier.describe()),
-                    tier.describe(),
-                    "{language:?} left the description of {:?} in English",
                     tier.label()
                 );
             }
@@ -6155,8 +6747,12 @@ mod tests {
         }];
         for id in 1..=6u32 {
             let mut neighbors = Vec::new();
-            if id > 1 { neighbors.push((id - 1, 1)); }
-            if id < 6 { neighbors.push((id + 1, 1)); }
+            if id > 1 {
+                neighbors.push((id - 1, 1));
+            }
+            if id < 6 {
+                neighbors.push((id + 1, 1));
+            }
             provinces.push(ProvinceNode {
                 id,
                 center_x: id as f32,
@@ -6214,7 +6810,11 @@ mod tests {
     #[test]
     fn the_upper_tiers_keep_the_golden_ratio_palette() {
         let hierarchy = tiered_hierarchy();
-        for tier in [MapTier::Provinces, MapTier::Superregions, MapTier::Continents] {
+        for tier in [
+            MapTier::Provinces,
+            MapTier::Superregions,
+            MapTier::Continents,
+        ] {
             let palette = territory_palette(&hierarchy, tier);
             for id in 1..palette.len() as u32 {
                 assert_eq!(

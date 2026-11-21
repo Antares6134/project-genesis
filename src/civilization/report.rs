@@ -3,13 +3,13 @@
 //! This is the human-readable form of everything the Civilization map mode shows
 //! on hover, in one place, so a run can be read — and diffed against the same seed
 //! run again — without opening a window. It reports the world's calendar first,
-//! then one block per realm in founding order: why it rose where it rose, what it
-//! became, who it knows and what it inherited.
+//! then one block per realm in founding order: what it is, where it lives and how
+//! many people it holds.
 
 use crate::civilization::{Civilization, CivilizationWorld, SocietyTier};
 use crate::core::fmt::{thousands, thousands_u64};
-use crate::language::naming::sample_roots;
 use crate::language::LanguagesWorld;
+use crate::language::naming::sample_roots;
 
 /// Print the dawn of history: the calendar, the five-way scheme, then a full
 /// dossier for every state and one line for every people.
@@ -20,13 +20,16 @@ pub fn report_civilizations(world: &CivilizationWorld) {
 /// Print the dawn of history with a full dossier for **every** society.
 ///
 /// A partitioned world carries hundreds of societies, so this is opt-in
-/// (`--civs-all`): four hundred full dossiers is a wall of text, not a report.
+/// (`--civs-all`): hundreds of dossiers is a wall of text, not a report.
 pub fn report_civilizations_all(world: &CivilizationWorld) {
     report(world, true);
 }
 
 fn report(world: &CivilizationWorld, all: bool) {
-    println!("── Dawn of civilization (seed {}) ─────────────────────", world.seed);
+    println!(
+        "── Dawn of civilization (seed {}) ─────────────────────",
+        world.seed
+    );
 
     if world.is_empty() {
         println!("   No civilization ever rose on this world.");
@@ -82,7 +85,7 @@ fn report(world: &CivilizationWorld, all: bool) {
 
     for civ in &world.civilizations {
         if all || civ.tier.is_state() {
-            report_one(world, civ);
+            report_one(civ);
         } else {
             report_line(civ);
         }
@@ -95,7 +98,7 @@ fn report_line(civ: &Civilization) {
     println!(
         "   · {:<32} {:<44} {:>4} provinces · {:>9} km² · {:>10} people ({:.2}/km²)",
         civ.name,
-        format!("{} ({})", civ.tier.label(), civ.environment.label()),
+        format!("{} ({})", civ.tier.form(), civ.environment.label()),
         civ.provinces.len(),
         thousands(civ.area_km2),
         thousands_u64(civ.population),
@@ -104,123 +107,75 @@ fn report_line(civ: &Civilization) {
 }
 
 /// Print one realm's dossier.
-fn report_one(world: &CivilizationWorld, civ: &Civilization) {
+fn report_one(civ: &Civilization) {
+    println!("   🏺 {}", civ.name);
     println!(
-        "   🏺 {} — {} · {} · {}",
-        civ.name,
-        civ.tier.label(),
-        civ.cradle_kind.label(),
-        civ.culture.government.label()
-    );
-    println!("      {}", civ.origin_label());
-    if civ.founding_year.is_some() {
-        println!("      {}", civ.year_label());
-    }
-    println!(
-        "      {}: province #{} · {:.1}° {} {:.1}° {} | {} provinces · {} km² · {} people ({:.1}/km²)",
-        if civ.tier.is_state() { "Seat" } else { "Heartland" },
-        civ.seat_province,
-        civ.seat_latitude_deg.abs(),
-        if civ.seat_latitude_deg >= 0.0 { "N" } else { "S" },
-        civ.seat_longitude_deg.abs(),
-        if civ.seat_longitude_deg >= 0.0 { "E" } else { "W" },
-        civ.provinces.len(),
-        thousands(civ.area_km2),
-        thousands_u64(civ.population),
-        civ.density_per_km2,
-    );
-    println!("      Rise: {}", civ.rise.headline);
-    println!("      Told short: {}", civ.rise.highlights.join(" · "));
-    for reason in &civ.rise.reasons {
-        println!("        • {reason}");
-    }
-    println!("      {}", civ.rise.seat);
-    println!(
-        "      Economy: {} · public temper: {}",
-        civ.culture.subsistence.label(),
+        "      {} · {}",
         civ.culture.outlook.label(),
+        civ.tier.mobility()
     );
+    println!("      {:<13}{}", "Society:", civ.tier.form());
     println!(
-        "      Hallmark: {} · Arts: {}",
-        civ.culture.architecture,
-        civ.culture.arts.join(", ")
-    );
-    println!("      {}", civ.culture.note);
-    println!(
-        "      Faith: {} · kept by {}",
-        civ.faith.kind.label(),
-        civ.faith.clergy
-    );
-    println!("      {}", civ.faith.note);
-    println!(
-        "      Observances: {}",
-        civ.faith.practices.join(" · ")
-    );
-    println!(
-        "      Polity: {} — {}",
-        if civ.culture.government.is_state() {
-            "a state"
+        "      {:<13}{}",
+        if civ.tier.is_state() {
+            "Cradle:"
         } else {
-            "a pre-state society"
+            "Terrain:"
         },
-        civ.culture.government.describe()
+        if civ.tier.is_state() {
+            civ.cradle_kind.label()
+        } else {
+            civ.environment.label()
+        }
     );
-
-    if civ.kin.is_empty() {
-        println!("      Ancestry: none shared with another realm — a wholly separate stock.");
-    } else {
-        println!(
-            "      Ancestry: {} family, together with {}",
-            civ.language_family,
-            name_list(&civ.kin)
-        );
-    }
-
-    if civ.contacts.is_empty() {
-        println!("      Contact: none. It rose with the world to itself.");
-    } else {
-        println!("      Contact:");
-        for contact in &civ.contacts {
-            println!(
-                "        • {} ({}, ≈{} km) — {}",
-                world.name_of(contact.other),
-                contact.kind.label(),
-                thousands(contact.distance_km),
-                contact.relation,
-            );
-            println!("          {}", contact.note);
-        }
-    }
-
-    if !civ.influences.is_empty() {
-        println!("      Before it existed:");
-        for influence in &civ.influences {
-            println!(
-                "        • took up {} from {}",
-                influence.borrowed.join(", "),
-                world.name_of(influence.other),
-            );
-            println!("          {}", influence.note);
-        }
-    }
+    println!(
+        "      {:<13}{}",
+        "Economy:",
+        civ.culture.subsistence.label()
+    );
+    println!("      {:<13}{}", "Faith:", civ.faith.kind.label());
+    println!("      {:<13}{}", "Polity:", civ.culture.government.label());
+    println!("      {:<13}{}", "Hierarchy:", "Later");
+    println!(
+        "      {:<13}{}",
+        if civ.tier.is_state() {
+            "Capital:"
+        } else {
+            "Heartland:"
+        },
+        &format!("Province #{}", civ.seat_province)
+    );
+    println!(
+        "      {:<13}{}",
+        "Area:",
+        &format!("{} km²", thousands(civ.area_km2))
+    );
+    println!(
+        "      {:<13}{}",
+        "Population:",
+        &format!(
+            "{} ({:.1}/km²)",
+            thousands_u64(civ.population),
+            civ.density_per_km2
+        )
+    );
+    println!("      {:<13}{}", "Culture:", "Later");
+    println!("      {:<13}{}", "Founded:", civ.origin_label());
+    lineage_line("Predecessor:", "Predecessors:", &[]);
+    lineage_line("Successor:", "Successors:", &[]);
     println!();
 }
 
-/// `Civilization #1`, `Civilization #2 and #3` — ids rendered as names.
-fn name_list(ids: &[u32]) -> String {
-    let names: Vec<String> = ids
-        .iter()
-        .map(|&id| format!("Civilization #{id}"))
-        .collect();
-    match names.len() {
-        0 => String::new(),
-        1 => names[0].clone(),
-        _ => format!(
-            "{} and {}",
-            names[..names.len() - 1].join(", "),
-            names[names.len() - 1]
-        ),
-    }
+/// A lineage line. The label pluralizes as soon as a realm has more than one
+/// predecessor or successor; until lineage data exists the value is `None`.
+fn lineage_line(singular: &str, plural: &str, names: &[&str]) {
+    let label = if names.len() >= 2 { plural } else { singular };
+    let value = if names.is_empty() {
+        "None".to_string()
+    } else {
+        names.join(", ")
+    };
+    println!("      {:<13}{}", label, value);
 }
 
 /// Print the world's languages: every family, its phonology, its homeland, its
@@ -281,4 +236,3 @@ pub fn report_languages(world: &LanguagesWorld) {
         println!("      {:<34} {:<28} {language}", name, family);
     }
 }
-

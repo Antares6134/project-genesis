@@ -77,8 +77,6 @@ pub struct LanguageConfig {
     /// Hard ceiling on every language in the world.
     pub max_languages: usize,
 
-    /// How many languages a society's dossier may name as neighbours.
-    pub contact_limit: usize,
     /// How many roots a language may borrow from a neighbour.
     pub max_borrowings: usize,
 }
@@ -123,7 +121,6 @@ impl Default for LanguageConfig {
             dense_family_urban_provinces: 6,
             max_languages: 240,
 
-            contact_limit: 6,
             max_borrowings: 3,
         }
     }
