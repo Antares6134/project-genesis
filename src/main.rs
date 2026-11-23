@@ -178,47 +178,37 @@ fn main() {
         canvas_height
     );
 
-    let want_civilizations = run_civilizations || run_plates || run_languages;
-    let want_languages = run_languages || run_civilizations || run_plates;
+    // History is one act: societies, faiths, languages and the names they give
+    // one another. `--civs` and `--langs` select which report to print; both run
+    // the same stage, and `--plates` runs it silently for the maps.
+    let run_history = run_civilizations || run_languages || run_plates;
     genesis.run_through(Stage::HydroPolitics, None);
 
-    // --- STAGE 7: THE DAWN OF HISTORY (CIVILIZATIONS) ---
-    // Where people stop being a landscape and start being a story. The stage is
-    // only run when it is wanted (`--civs` or `--plates`), because a world
-    // without a history is still a finished world.
-    if want_civilizations {
-        genesis.run_stage(Stage::Civilization, None);
-        if run_civilizations {
-            println!();
-            let world = genesis
-                .atlas()
-                .expect("act seven just finished")
-                .civilizations;
-            if report_all_societies {
-                report_civilizations_all(&world);
-            } else {
-                report_civilizations(&world);
-            }
-        }
+    if run_history {
+        genesis.run_stage(Stage::History, None);
     } else {
-        println!("· [7/8] Dawn of Civilization skipped (pass --civs to wake the world up).");
+        println!(
+            "· [7/7] History & Languages skipped (pass --civs or --langs to wake the world up)."
+        );
     }
 
-    // --- STAGE 8: LANGUAGES & PHONETICS ---
-    // Names are the point: the realms Stage 7 generated are republished with
-    // their own autonyms, and every province receives a language and family.
-    if want_languages && want_civilizations {
-        // Languages are cheap — a fraction of a second — so there is no companion
-        // cache to adopt: the stage simply runs, and a loaded world grows its
-        // tongues afresh rather than reading them back.
-        genesis.run_stage(Stage::Languages, None);
-        if run_languages {
-            println!();
-            let world = genesis.atlas().expect("act eight just finished").languages;
-            report_languages(&world);
+    if run_civilizations {
+        println!();
+        let world = genesis
+            .atlas()
+            .expect("history just finished")
+            .civilizations;
+        if report_all_societies {
+            report_civilizations_all(&world);
+        } else {
+            report_civilizations(&world);
         }
-    } else {
-        println!("· [8/8] Languages & Phonetics skipped (pass --langs to give the world a voice).");
+    }
+
+    if run_languages {
+        println!();
+        let atlas = genesis.atlas().expect("history just finished");
+        report_languages(&atlas.languages, Some(&atlas.civilizations));
     }
 
     println!("-------------------------------------------------------");
@@ -297,7 +287,7 @@ fn main() {
     // --- STAGE 9: CIVILIZATIONS MAP (optional) ---
     // The very same painter the viewer's Civilizations scope uses, exported at
     // full 16K so it sits alongside the other `world_*.png` plates.
-    if want_civilizations && !world.civilizations.is_empty() {
+    if run_history && !world.civilizations.is_empty() {
         let civ_start = Instant::now();
         let mut civ_viewer = viewer::MapViewer::from_world(world.clone());
         civ_viewer.set_view(
@@ -316,7 +306,7 @@ fn main() {
 
     // --- STAGE 9b: LANGUAGES MAP (optional) ---
     // The tongue each province speaks, in the same painter the atlas uses.
-    if want_languages && !world.languages.is_empty() {
+    if run_history && !world.languages.is_empty() {
         let tongue_start = Instant::now();
         let mut language_viewer = viewer::MapViewer::from_world(world.clone());
         language_viewer.set_view(
@@ -333,13 +323,32 @@ fn main() {
         );
     }
 
+    // --- STAGE 9c: RELIGIONS MAP (optional) ---
+    // The faith each province keeps, in the root-family palette of the atlas.
+    if run_history && !world.civilizations.is_empty() {
+        let faith_start = Instant::now();
+        let mut religion_viewer = viewer::MapViewer::from_world(world.clone());
+        religion_viewer.set_view(
+            viewer::MapScope::Religions,
+            viewer::MapTier::Provinces,
+            true,
+        );
+        religion_viewer
+            .save_png("world_religions_map.png", 1.0)
+            .unwrap_or_else(|e| panic!("Failed to render religions map: {e}"));
+        println!(
+            "✓ Rendered Religions Map in:               {:.2?}",
+            faith_start.elapsed()
+        );
+    }
+
     // --- STAGE 10: HEADLESS ATLAS PLATES (optional) ---
     // The very same painter the interactive window uses, exported straight to
     // 2K PNGs. Handy for regenerating the README's scope and tier tables in one
     // shot: `cargo run --release -- <seed> --load --plates`.
     if run_plates {
         let plate_start = Instant::now();
-        let plates: [(&str, viewer::MapScope, viewer::MapTier); 18] = [
+        let plates: [(&str, viewer::MapScope, viewer::MapTier); 19] = [
             (
                 "./exports/atlas_physical.png",
                 viewer::MapScope::Physical,
@@ -373,6 +382,11 @@ fn main() {
             (
                 "./exports/atlas_languages.png",
                 viewer::MapScope::Languages,
+                viewer::MapTier::Provinces,
+            ),
+            (
+                "./exports/atlas_religions.png",
+                viewer::MapScope::Religions,
                 viewer::MapTier::Provinces,
             ),
             (

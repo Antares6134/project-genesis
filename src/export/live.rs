@@ -17,7 +17,7 @@
 //! The two ramps with no printed equivalent — temperature and rainfall — are
 //! defined here, and only ever tint a preview.
 
-use crate::core::{relief, Grid};
+use crate::core::{Grid, relief};
 use crate::export::image::{hypsometric_color, id_to_territory_color};
 use rayon::prelude::*;
 
@@ -45,12 +45,14 @@ pub fn paint(
     let height = ((source_h * width) / source_w).max(1);
 
     let mut rgba = vec![0u8; width * height * 4];
-    rgba.par_chunks_exact_mut(4).enumerate().for_each(|(i, pixel)| {
-        let x = i % width;
-        let y = i / width;
-        let [r, g, b] = at(x * source_w / width, y * source_h / height);
-        pixel.copy_from_slice(&[r, g, b, 255]);
-    });
+    rgba.par_chunks_exact_mut(4)
+        .enumerate()
+        .for_each(|(i, pixel)| {
+            let x = i % width;
+            let y = i / width;
+            let [r, g, b] = at(x * source_w / width, y * source_h / height);
+            pixel.copy_from_slice(&[r, g, b, 255]);
+        });
 
     (width, height, rgba)
 }
@@ -89,7 +91,10 @@ fn shaded(color: [u8; 3], shade: f32) -> [u8; 3] {
 /// like while it is still carving.
 pub fn relief_at(heightmap: &Grid<f32>, x: usize, y: usize) -> [u8; 3] {
     let elev = *heightmap.get(x as isize, y as isize);
-    shaded(hypsometric_color(relief::to_metres(elev)), shade(heightmap, x, y))
+    shaded(
+        hypsometric_color(relief::to_metres(elev)),
+        shade(heightmap, x, y),
+    )
 }
 
 /// The colour of a pixel no political pass has claimed: the world keeps its own
@@ -188,7 +193,10 @@ pub fn wilderness_at(
 
 /// Mean temperature at a pixel, on the atlas's own cold-to-hot ramp.
 pub fn temperature_at(temp: &Grid<f32>, x: usize, y: usize) -> [u8; 3] {
-    ramp(&RAMP_TEMPERATURE, ((*temp.get(x as isize, y as isize) + 30.0) / 65.0).clamp(0.0, 1.0))
+    ramp(
+        &RAMP_TEMPERATURE,
+        ((*temp.get(x as isize, y as isize) + 30.0) / 65.0).clamp(0.0, 1.0),
+    )
 }
 
 /// Annual rainfall at a pixel, on a dry-sand to wet-green ramp.

@@ -1,6 +1,6 @@
 //! Turning roots into names.
 //!
-//! Every name is built from the family's own forty roots with its own compounding
+//! Every name is built from the family's own hundred roots with its own compounding
 //! rules, so a realm called `Olnarma` is not a string that merely looks foreign:
 //! it is `oln` (people) + `mar` (river) + a polity suffix, assembled by the same
 //! sandhi that joins any other compound.
@@ -68,8 +68,12 @@ pub enum NameKind {
 /// The social weight of a named polity, which decides its suffix.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PolityKind {
+    Empire,
+    CityState,
     State,
     Chiefdom,
+    Tribe,
+    Band,
     People,
 }
 
@@ -82,7 +86,10 @@ fn lower(c: char) -> char {
 
 /// Whether a character is a syllable nucleus.
 fn is_nucleus(c: char) -> bool {
-    matches!(lower(c), 'a' | 'e' | 'i' | 'o' | 'u' | 'y' | 'æ' | 'ã' | 'õ')
+    matches!(
+        lower(c),
+        'a' | 'e' | 'i' | 'o' | 'u' | 'y' | 'æ' | 'ã' | 'õ'
+    )
 }
 
 /// The plain vowel a marked one falls back to when its diacritic has to go.
@@ -102,11 +109,14 @@ pub fn syllable_count(name: &str) -> usize {
     let mut count = 0usize;
     let mut index = 0usize;
     while index < chars.len() {
-        if lower(chars[index]) == 'a' && chars.get(index + 1).is_some_and(|next| lower(*next) == 'e')
-        {
-            count += 1;
-            index += 2;
-            continue;
+        if let Some(next) = chars.get(index + 1) {
+            let first = lower(chars[index]);
+            let second = lower(*next);
+            if (first == 'a' && second == 'e') || (first == second && is_nucleus_letter(first)) {
+                count += 1;
+                index += 2;
+                continue;
+            }
         }
         if is_nucleus(chars[index]) {
             count += 1;
@@ -114,6 +124,10 @@ pub fn syllable_count(name: &str) -> usize {
         index += 1;
     }
     count
+}
+
+fn is_nucleus_letter(c: char) -> bool {
+    matches!(c, 'a' | 'e' | 'i' | 'o' | 'u')
 }
 
 /// Keep the first `max` syllables of a name, whole ones only.
@@ -128,17 +142,21 @@ fn clip_to_syllables(name: &str, max: usize) -> String {
     let mut index = 0usize;
     while index < chars.len() {
         let c = chars[index];
-        if lower(c) == 'a' && chars.get(index + 1).is_some_and(|next| lower(*next) == 'e') {
-            if syllables >= max {
-                break;
+        if let Some(next) = chars.get(index + 1) {
+            let first = lower(c);
+            let second = lower(*next);
+            if (first == 'a' && second == 'e') || (first == second && is_nucleus_letter(first)) {
+                if syllables >= max {
+                    break;
+                }
+                kept.push_str(&pending);
+                pending.clear();
+                kept.push(c);
+                kept.push(chars[index + 1]);
+                syllables += 1;
+                index += 2;
+                continue;
             }
-            kept.push_str(&pending);
-            pending.clear();
-            kept.push(c);
-            kept.push(chars[index + 1]);
-            syllables += 1;
-            index += 2;
-            continue;
         }
         if is_nucleus(c) {
             if syllables >= max {
@@ -334,7 +352,8 @@ impl NameRegistry {
 
         let mut index = 0usize;
         loop {
-            let alternative = tidy_name(&format!("{}{}", suffix_stem(&base), epenthetic(index, lex)));
+            let alternative =
+                tidy_name(&format!("{}{}", suffix_stem(&base), epenthetic(index, lex)));
             if self.used.insert(alternative.clone()) {
                 return alternative;
             }
@@ -411,18 +430,18 @@ pub fn language_name(lex: &Lexicon, family: &str, qualifier: Option<Concept>) ->
 /// A realm name. A state grows a polity suffix from its own roots; a people is
 /// simply its ethnonym.
 pub fn realm_name(lex: &Lexicon, autonym: &str, kind: PolityKind) -> String {
-    match kind {
-        PolityKind::State => {
-            // One root is enough for a polity suffix; two roots make a realm
-            // name that no legend row can hold.
-            let suffix = lex.form(Concept::Hearth);
-            tidy_name(&lex.join(&suffix_stem(autonym), suffix))
-        }
-        PolityKind::Chiefdom => {
-            let suffix = lex.form(Concept::Elder);
-            tidy_name(&lex.join(&suffix_stem(autonym), suffix))
-        }
-        PolityKind::People => tidy_name(autonym),
+    let suffix = match kind {
+        PolityKind::Empire => Some(lex.form(Concept::Crown)),
+        PolityKind::CityState => Some(lex.form(Concept::Temple)),
+        PolityKind::State => Some(lex.form(Concept::Hearth)),
+        PolityKind::Chiefdom => Some(lex.form(Concept::Elder)),
+        PolityKind::Tribe => Some(lex.form(Concept::Kin)),
+        PolityKind::Band => Some(lex.form(Concept::People)),
+        PolityKind::People => None,
+    };
+    match suffix {
+        Some(suffix) => tidy_name(&lex.join(&suffix_stem(autonym), suffix)),
+        None => tidy_name(autonym),
     }
 }
 
@@ -435,6 +454,8 @@ pub fn urheimat_name(lex: &Lexicon, archetype: SoundArchetype) -> String {
         SoundArchetype::NasalRiverine => Concept::River,
         SoundArchetype::SonorousWoodland => Concept::Forest,
         SoundArchetype::GlottalHighland => Concept::Mountain,
+        SoundArchetype::TonalSavanna => Concept::Plain,
+        SoundArchetype::AspiratedSteppe => Concept::Plain,
     };
     tidy_name(&lex.compound_with(
         &[feature],
@@ -474,7 +495,7 @@ pub fn morphology_label(lex: &Lexicon, dna: &PhonologyDna) -> String {
         crate::language::lexicon::MorphemeOrder::HeadFinal => "head-final compounds",
         crate::language::lexicon::MorphemeOrder::HeadInitial => "head-initial compounds",
     };
-    format!("{order}; {}", dna.marker_label())
+    format!("{order}; {}; {}", lex.style.label(), dna.marker_label())
 }
 
 #[cfg(test)]

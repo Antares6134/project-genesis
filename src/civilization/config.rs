@@ -43,9 +43,6 @@ pub struct CivilizationConfig {
     pub contact_distance_px: f32,
     /// A cradle further than this (px) from every other rose on its own.
     pub isolated_distance_px: f32,
-    /// Territory-to-territory reach (px) within which two realms still *know*
-    /// of each other — a traveller's tale, a traded bead, an intermediary.
-    pub rumour_distance_px: f32,
 
     /// Discharge, in m³/s, that makes a river *great*: the bar for a floodplain or
     /// delta cradle, and for calling a river the reason a civilization exists.
@@ -71,39 +68,20 @@ pub struct CivilizationConfig {
     /// `None` draws it from the seed over a wide log-uniform range (five thousand
     /// to two million years), divided by the world's own pace of development (see
     /// [`crate::civilization::epoch::DevelopmentPace`]); `Some(years)` fixes it.
-    /// Deliberately not tied to the epoch: a calendar's zero is a recent
-    /// convention, while this is where a world's real depth lives.
+    /// The epoch is the founding of the first city, while this is where a world's
+    /// real depth lives.
     pub species_emergence_years: Option<i32>,
 
     /// The world's **era of first cities**: the nominal years within which every
     /// cradle after the first rises.
     ///
     /// Contemporaries are not a relay — they share the same centuries. Our own
-    /// first cities span about fifteen hundred years (3 500 → 2 070 BCE), and this
-    /// is that span: the first city stands at internal year zero and every later
-    /// cradle rises somewhere inside the window, so the youngest realm is a few
+    /// first cities span roughly fifteen hundred years, and this is that span: the
+    /// first city stands at Year 0 and every later cradle rises somewhere inside the
+    /// window, so the youngest realm is a few
     /// centuries to a couple of millennia behind the first rather than thousands of
     /// years. Divided by the world's pace, so a slow world's dawn lasts longer.
     pub founding_window_years: i32,
-
-    /// How many years *after* the atlas date the calendar's epoch event is placed.
-    ///
-    /// The atlas portrays the world in its dawn, before its own calendar's year
-    /// zero, so every date it shows is BCE — exactly as a map of our own 2000 BCE is
-    /// dated in the years before the Common Era. Drawn per world over this range, so
-    /// a Copper-age map reads a few centuries to a few millennia before the epoch.
-    pub epoch_after_atlas_years: (i32, i32),
-
-    /// How many of the best provinces the epoch-site selector draws from.
-    ///
-    /// The world's calendar is reckoned from one province, chosen by a seeded
-    /// weighted draw among the finest few candidates — so it is never the top
-    /// score, and never arbitrary.
-    pub epoch_site_candidates: usize,
-
-    /// A province smaller than this (km²) can never be the place a calendar is
-    /// reckoned from: an epoch needs a place, not a speck.
-    pub epoch_site_min_area_km2: f32,
 
     /// People per km² a province supports at full habitability once its civilization
     /// is fully developed. Everything downstream is this number times the province's
@@ -182,10 +160,6 @@ pub struct CivilizationConfig {
     pub simple_farmer_merge_km2: f32,
     /// Ground, in km², that one chiefdom people may span.
     pub complex_farmer_merge_km2: f32,
-    /// Most neighbours a realm may count when the epoch site is chosen. A
-    /// partitioned world has hundreds of societies, so an uncapped tally would
-    /// drown the signal.
-    pub contact_limit: usize,
 
     /// Hard ceiling on the cost of a single expansion step. Stops a realm from
     /// vaulting a mountain wall or an ocean to grab a distant province: the
@@ -206,7 +180,6 @@ impl Default for CivilizationConfig {
 
             contact_distance_px: 430.0,
             isolated_distance_px: 620.0,
-            rumour_distance_px: 1_500.0,
 
             great_river_flow: 3_000.0,
 
@@ -214,9 +187,6 @@ impl Default for CivilizationConfig {
 
             species_emergence_years: None,
             founding_window_years: 1_500,
-            epoch_after_atlas_years: (1_200, 3_200),
-            epoch_site_candidates: 24,
-            epoch_site_min_area_km2: 500.0,
 
             max_density_per_km2: 9.0,
 
@@ -243,7 +213,6 @@ impl Default for CivilizationConfig {
             pastoralist_merge_km2: 7.0e6,
             simple_farmer_merge_km2: 1.6e6,
             complex_farmer_merge_km2: 8.0e5,
-            contact_limit: 8,
 
             max_step_cost: 900.0,
         }

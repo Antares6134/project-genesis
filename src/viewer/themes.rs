@@ -31,16 +31,23 @@ fn lerp_rgb(a: [u8; 3], b: [u8; 3], t: f32) -> [u8; 3] {
     ]
 }
 
-/// A legend swatch: the colour square that heads a legend row.
+/// The width a [`swatch`] claims at the head of a legend row.
 ///
-/// Its size is derived from the body-text height rather than fixed in pixels, so
+/// The size is derived from the body-text height rather than fixed in pixels, so
 /// the swatch keeps its proportion to the row it labels whatever the type scale
 /// is set to — the atlas's `configure_style` therefore never has to be kept in
-/// step with a hand-tuned swatch size.
+/// step with a hand-tuned swatch size. A row that puts more lines *under* its
+/// label needs the same figure to line them up with it, so it is exposed here
+/// rather than copied at the call site.
+pub fn swatch_width(ui: &egui::Ui) -> f32 {
+    ui.text_style_height(&egui::TextStyle::Body) * 1.5
+}
+
+/// A legend swatch: the colour square that heads a legend row.
 pub fn swatch(ui: &mut egui::Ui, color: [u8; 3]) {
     let height = ui.text_style_height(&egui::TextStyle::Body);
     let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(height * 1.5, height * 0.85),
+        egui::vec2(swatch_width(ui), height * 0.85),
         egui::Sense::hover(),
     );
     ui.painter()
@@ -299,8 +306,7 @@ pub fn isotherm_band(temp: f32) -> usize {
     if !temp.is_finite() {
         return 0;
     }
-    let band = (((temp.clamp(TEMPERATURE_MIN, TEMPERATURE_MAX) - TEMPERATURE_MIN)
-        / ISOTHERM_STEP)
+    let band = (((temp.clamp(TEMPERATURE_MIN, TEMPERATURE_MAX) - TEMPERATURE_MIN) / ISOTHERM_STEP)
         .floor()) as usize;
     band.min(ISOTHERM_BANDS - 1)
 }
@@ -483,13 +489,22 @@ mod tests {
             ClimateZone::classify(18.0, 0.9, 0.30),
             ClimateZone::Highland
         );
-        assert_eq!(ClimateZone::classify(5.0, 0.1, 0.05), ClimateZone::ColdSteppe);
+        assert_eq!(
+            ClimateZone::classify(5.0, 0.1, 0.05),
+            ClimateZone::ColdSteppe
+        );
         assert_eq!(
             ClimateZone::classify(5.0, 0.5, 0.05),
             ClimateZone::BorealForest
         );
-        assert_eq!(ClimateZone::classify(25.0, 0.05, 0.05), ClimateZone::HotDesert);
-        assert_eq!(ClimateZone::classify(25.0, 0.30, 0.05), ClimateZone::Savanna);
+        assert_eq!(
+            ClimateZone::classify(25.0, 0.05, 0.05),
+            ClimateZone::HotDesert
+        );
+        assert_eq!(
+            ClimateZone::classify(25.0, 0.30, 0.05),
+            ClimateZone::Savanna
+        );
         assert_eq!(
             ClimateZone::classify(25.0, 0.80, 0.05),
             ClimateZone::TropicalRainforest
@@ -548,10 +563,7 @@ mod tests {
             TerrainClass::classify(-100.0, false, -10.0),
             TerrainClass::Ice
         );
-        assert_eq!(
-            TerrainClass::classify(10.0, true, 12.0),
-            TerrainClass::Lake
-        );
+        assert_eq!(TerrainClass::classify(10.0, true, 12.0), TerrainClass::Lake);
         assert_eq!(
             TerrainClass::classify(100.0, false, 12.0),
             TerrainClass::CoastalLowland

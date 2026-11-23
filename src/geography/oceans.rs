@@ -12,8 +12,8 @@
 //! tiers are assembled from these by the same graph-clustering machinery the
 //! land hierarchy uses (`geopolitics::build_ocean_hierarchy`).
 
-use crate::core::progress::Progress;
 use crate::core::Grid;
+use crate::core::progress::Progress;
 use crate::export::live;
 use crate::geography::config::OceanConfig;
 use rand::prelude::*;
@@ -47,7 +47,9 @@ struct OceanState {
 
 impl Ord for OceanState {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other.cost.cmp(&self.cost)
+        other
+            .cost
+            .cmp(&self.cost)
             .then_with(|| self.x.cmp(&other.x))
             .then_with(|| self.y.cmp(&other.y))
     }
@@ -64,10 +66,15 @@ impl PartialOrd for OceanState {
 /// Inland freshwater lakes are deliberately excluded: they are hydrology
 /// features of the continents, not part of the world ocean.
 #[inline(always)]
-fn is_ocean(heightmap: &Grid<f32>, is_lake: &Grid<bool>, x: isize, y: isize, sea_level: f32) -> bool {
+fn is_ocean(
+    heightmap: &Grid<f32>,
+    is_lake: &Grid<bool>,
+    x: isize,
+    y: isize,
+    sea_level: f32,
+) -> bool {
     *heightmap.get(x, y) <= sea_level && !*is_lake.get(x, y)
 }
-
 
 /// Nearest ocean pixel to `(sx, sy)`, searched in expanding square rings.
 ///
@@ -128,14 +135,24 @@ fn flood_fill(
             continue;
         }
         ids.set(sx, sy, id);
-        heap.push(OceanState { cost: 0, x: sx, y: sy, id });
+        heap.push(OceanState {
+            cost: 0,
+            x: sx,
+            y: sy,
+            id,
+        });
     }
 
     // (dx, dy, step cost) — orthogonal steps are 10, diagonals ≈ 14 (√2).
     let dirs: [(isize, isize, u32); 8] = [
-        (-1, -1, 14), (0, -1, 10), (1, -1, 14),
-        (-1,  0, 10),               (1,  0, 10),
-        (-1,  1, 14), (0,  1, 10), (1,  1, 14),
+        (-1, -1, 14),
+        (0, -1, 10),
+        (1, -1, 14),
+        (-1, 0, 10),
+        (1, 0, 10),
+        (-1, 1, 14),
+        (0, 1, 10),
+        (1, 1, 14),
     ];
 
     let mut claimed = 0usize;
@@ -165,7 +182,12 @@ fn flood_fill(
             let bathymetry = (((target_elev - cur_elev).abs() * 260.0).min(28.0)) as u32;
             let new_cost = state.cost + dist_cost + bathymetry;
             ids.set(nx, ny, state.id);
-            heap.push(OceanState { cost: new_cost, x: nx, y: ny, id: state.id });
+            heap.push(OceanState {
+                cost: new_cost,
+                x: nx,
+                y: ny,
+                id: state.id,
+            });
         }
     }
 

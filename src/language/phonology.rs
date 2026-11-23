@@ -32,6 +32,8 @@ pub enum Phoneme {
     T,
     K,
     Q,
+    Ph,
+    Th,
     B,
     D,
     G,
@@ -68,6 +70,11 @@ pub enum Phoneme {
     VowelY,
     VowelNasalA,
     VowelNasalO,
+    VowelLongA,
+    VowelLongE,
+    VowelLongI,
+    VowelLongO,
+    VowelLongU,
 }
 
 /// The phonetic class of a [`Phoneme`].
@@ -92,6 +99,8 @@ impl Phoneme {
             Phoneme::T => "t",
             Phoneme::K => "k",
             Phoneme::Q => "q",
+            Phoneme::Ph => "ph",
+            Phoneme::Th => "th",
             Phoneme::B => "b",
             Phoneme::D => "d",
             Phoneme::G => "g",
@@ -128,6 +137,11 @@ impl Phoneme {
             Phoneme::VowelY => "y",
             Phoneme::VowelNasalA => "ã",
             Phoneme::VowelNasalO => "õ",
+            Phoneme::VowelLongA => "aa",
+            Phoneme::VowelLongE => "ee",
+            Phoneme::VowelLongI => "ii",
+            Phoneme::VowelLongO => "oo",
+            Phoneme::VowelLongU => "uu",
         }
     }
 
@@ -137,6 +151,8 @@ impl Phoneme {
             | Phoneme::T
             | Phoneme::K
             | Phoneme::Q
+            | Phoneme::Ph
+            | Phoneme::Th
             | Phoneme::B
             | Phoneme::D
             | Phoneme::G => PhonemeClass::Plosive,
@@ -165,7 +181,12 @@ impl Phoneme {
             | Phoneme::VowelAe
             | Phoneme::VowelY
             | Phoneme::VowelNasalA
-            | Phoneme::VowelNasalO => PhonemeClass::Vowel,
+            | Phoneme::VowelNasalO
+            | Phoneme::VowelLongA
+            | Phoneme::VowelLongE
+            | Phoneme::VowelLongI
+            | Phoneme::VowelLongO
+            | Phoneme::VowelLongU => PhonemeClass::Vowel,
         }
     }
 
@@ -209,16 +230,22 @@ pub enum SoundArchetype {
     SonorousWoodland,
     /// High valleys and islands: ejectives, glottal stops, consonant clusters.
     GlottalHighland,
+    /// Warm grassland: long vowels and tone, open syllables.
+    TonalSavanna,
+    /// Temperate steppe: aspirated stops and heavy closed syllables.
+    AspiratedSteppe,
 }
 
 impl SoundArchetype {
-    pub const ALL: [SoundArchetype; 6] = [
+    pub const ALL: [SoundArchetype; 8] = [
         SoundArchetype::GutturalArid,
         SoundArchetype::MelodicMaritime,
         SoundArchetype::SibilantTaiga,
         SoundArchetype::NasalRiverine,
         SoundArchetype::SonorousWoodland,
         SoundArchetype::GlottalHighland,
+        SoundArchetype::TonalSavanna,
+        SoundArchetype::AspiratedSteppe,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -229,6 +256,8 @@ impl SoundArchetype {
             SoundArchetype::NasalRiverine => "Nasal",
             SoundArchetype::SonorousWoodland => "Sonorous",
             SoundArchetype::GlottalHighland => "Glottal",
+            SoundArchetype::TonalSavanna => "Tonal",
+            SoundArchetype::AspiratedSteppe => "Aspirated",
         }
     }
 
@@ -252,6 +281,12 @@ impl SoundArchetype {
             SoundArchetype::GlottalHighland => {
                 "glottal stops and ejectives, a hard speech thrown across a high valley"
             }
+            SoundArchetype::TonalSavanna => {
+                "long vowels and tone, a speech that carries across open grass"
+            }
+            SoundArchetype::AspiratedSteppe => {
+                "aspirated stops and heavy syllables, a voice meant to travel against the wind"
+            }
         }
     }
 
@@ -263,6 +298,8 @@ impl SoundArchetype {
             SoundArchetype::NasalRiverine => 2,
             SoundArchetype::SonorousWoodland => 1,
             SoundArchetype::GlottalHighland => 2,
+            SoundArchetype::TonalSavanna => 1,
+            SoundArchetype::AspiratedSteppe => 2,
         }
     }
 
@@ -274,12 +311,16 @@ impl SoundArchetype {
             SoundArchetype::NasalRiverine => 1,
             SoundArchetype::SonorousWoodland => 1,
             SoundArchetype::GlottalHighland => 1,
+            SoundArchetype::TonalSavanna => 1,
+            SoundArchetype::AspiratedSteppe => 2,
         }
     }
 
     pub const fn max_root_syllables(self) -> u8 {
         match self {
-            SoundArchetype::MelodicMaritime | SoundArchetype::NasalRiverine => 3,
+            SoundArchetype::MelodicMaritime
+            | SoundArchetype::NasalRiverine
+            | SoundArchetype::TonalSavanna => 3,
             _ => 2,
         }
     }
@@ -388,6 +429,40 @@ impl SoundArchetype {
                 Phoneme::L,
                 Phoneme::R,
             ],
+            SoundArchetype::TonalSavanna => &[
+                Phoneme::M,
+                Phoneme::N,
+                Phoneme::Ng,
+                Phoneme::L,
+                Phoneme::R,
+                Phoneme::W,
+                Phoneme::J,
+                Phoneme::B,
+                Phoneme::D,
+                Phoneme::G,
+                Phoneme::K,
+                Phoneme::T,
+                Phoneme::P,
+                Phoneme::S,
+                Phoneme::H,
+            ],
+            SoundArchetype::AspiratedSteppe => &[
+                Phoneme::Ph,
+                Phoneme::Th,
+                Phoneme::K,
+                Phoneme::P,
+                Phoneme::T,
+                Phoneme::S,
+                Phoneme::Sh,
+                Phoneme::Kh,
+                Phoneme::H,
+                Phoneme::M,
+                Phoneme::N,
+                Phoneme::L,
+                Phoneme::R,
+                Phoneme::W,
+                Phoneme::J,
+            ],
         }
     }
 
@@ -440,6 +515,26 @@ impl SoundArchetype {
                 Phoneme::VowelU,
                 Phoneme::VowelAe,
             ],
+            SoundArchetype::TonalSavanna => &[
+                Phoneme::VowelA,
+                Phoneme::VowelE,
+                Phoneme::VowelI,
+                Phoneme::VowelO,
+                Phoneme::VowelU,
+                Phoneme::VowelLongA,
+                Phoneme::VowelLongE,
+                Phoneme::VowelLongI,
+                Phoneme::VowelLongO,
+                Phoneme::VowelLongU,
+            ],
+            SoundArchetype::AspiratedSteppe => &[
+                Phoneme::VowelA,
+                Phoneme::VowelE,
+                Phoneme::VowelI,
+                Phoneme::VowelO,
+                Phoneme::VowelU,
+                Phoneme::VowelY,
+            ],
         }
     }
 
@@ -452,6 +547,8 @@ impl SoundArchetype {
             SoundArchetype::NasalRiverine => vec![CV, CV, CVC, CVC, V, CCV],
             SoundArchetype::SonorousWoodland => vec![CV, CV, CV, CVC, CVC, V],
             SoundArchetype::GlottalHighland => vec![CVC, CVC, CCVC, CCV, CV, CVCC],
+            SoundArchetype::TonalSavanna => vec![CV, CV, CV, CVC, V, CV, CVC],
+            SoundArchetype::AspiratedSteppe => vec![CVC, CVC, CVCC, CCVC, CCVCC, VCC, CV],
         }
     }
 
@@ -473,6 +570,10 @@ impl SoundArchetype {
                     ArticulationMarker::Ejective,
                 ]
             }
+            SoundArchetype::TonalSavanna => {
+                vec![ArticulationMarker::Tone, ArticulationMarker::VowelLength]
+            }
+            SoundArchetype::AspiratedSteppe => vec![ArticulationMarker::Aspiration],
         }
     }
 }
@@ -489,6 +590,8 @@ pub enum SyllableTemplate {
     CCVC,
     CVCC,
     VC,
+    VCC,
+    CCVCC,
 }
 
 impl SyllableTemplate {
@@ -502,6 +605,8 @@ impl SyllableTemplate {
             SyllableTemplate::CCVC => (2, 1, 1),
             SyllableTemplate::CVCC => (1, 1, 2),
             SyllableTemplate::VC => (0, 1, 1),
+            SyllableTemplate::VCC => (0, 1, 2),
+            SyllableTemplate::CCVCC => (2, 1, 2),
         }
     }
 
@@ -514,6 +619,8 @@ impl SyllableTemplate {
             SyllableTemplate::CCVC => "CCVC",
             SyllableTemplate::CVCC => "CVCC",
             SyllableTemplate::VC => "VC",
+            SyllableTemplate::VCC => "VCC",
+            SyllableTemplate::CCVCC => "CCVCC",
         }
     }
 }
@@ -529,6 +636,10 @@ pub enum ArticulationMarker {
     NasalVowels,
     /// A tonal distinction, retained as a semantic marker.
     Tone,
+    /// An aspirated stop series, printed with a trailing `h`.
+    Aspiration,
+    /// A long-vowel distinction, printed as a doubled vowel.
+    VowelLength,
 }
 
 impl ArticulationMarker {
@@ -538,6 +649,8 @@ impl ArticulationMarker {
             ArticulationMarker::Ejective => "ejectives",
             ArticulationMarker::NasalVowels => "nasal vowels",
             ArticulationMarker::Tone => "tone",
+            ArticulationMarker::Aspiration => "aspiration",
+            ArticulationMarker::VowelLength => "long vowels",
         }
     }
 }
@@ -588,7 +701,9 @@ impl PhonologyDna {
             max_coda: archetype.max_coda(),
             allow_geminates: matches!(
                 archetype,
-                SoundArchetype::GutturalArid | SoundArchetype::GlottalHighland
+                SoundArchetype::GutturalArid
+                    | SoundArchetype::GlottalHighland
+                    | SoundArchetype::AspiratedSteppe
             ),
             allow_final_stops: !matches!(archetype, SoundArchetype::MelodicMaritime),
             require_sonority_rise: true,
@@ -653,10 +768,27 @@ impl PhonologyDna {
                     next.consonants.push(Phoneme::Tsh);
                 }
             }
+            SoundLaw::Rhotacism => {
+                if !next.consonants.contains(&Phoneme::R) {
+                    next.consonants.push(Phoneme::R);
+                }
+            }
+            SoundLaw::Debuccalization => {
+                if !next.consonants.contains(&Phoneme::H) {
+                    next.consonants.push(Phoneme::H);
+                }
+            }
+            SoundLaw::Monophthongization => {
+                next.vowels.retain(|vowel| *vowel != Phoneme::VowelAe);
+                if next.vowels.is_empty() {
+                    next.vowels.push(Phoneme::VowelA);
+                }
+            }
             SoundLaw::VowelShift
             | SoundLaw::Fortition
             | SoundLaw::Metathesis
-            | SoundLaw::Umlaut => {}
+            | SoundLaw::Umlaut
+            | SoundLaw::VowelHarmony => {}
         }
         next
     }
@@ -838,10 +970,14 @@ pub enum SoundLaw {
     ClusterSimplification,
     GlottalInsertion,
     Umlaut,
+    Rhotacism,
+    Debuccalization,
+    VowelHarmony,
+    Monophthongization,
 }
 
 impl SoundLaw {
-    pub const ALL: [SoundLaw; 10] = [
+    pub const ALL: [SoundLaw; 14] = [
         SoundLaw::Lenition,
         SoundLaw::Fortition,
         SoundLaw::Palatalization,
@@ -852,6 +988,10 @@ impl SoundLaw {
         SoundLaw::ClusterSimplification,
         SoundLaw::GlottalInsertion,
         SoundLaw::Umlaut,
+        SoundLaw::Rhotacism,
+        SoundLaw::Debuccalization,
+        SoundLaw::VowelHarmony,
+        SoundLaw::Monophthongization,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -866,6 +1006,10 @@ impl SoundLaw {
             SoundLaw::ClusterSimplification => "cluster simplification",
             SoundLaw::GlottalInsertion => "glottal insertion",
             SoundLaw::Umlaut => "umlaut",
+            SoundLaw::Rhotacism => "rhotacism",
+            SoundLaw::Debuccalization => "debuccalization",
+            SoundLaw::VowelHarmony => "vowel harmony",
+            SoundLaw::Monophthongization => "monophthongization",
         }
     }
 }

@@ -53,13 +53,13 @@ pub struct WorldConfig {
     pub fault_band: f32,
 
     // Hydraulic Erosion parameters (NEW)
-    pub erosion_droplets: usize, // e.g. 150_000 droplets
-    pub erosion_inertia: f32,    // 0.0 (no inertia) to 1.0 (droplet moves in straight line)
+    pub erosion_droplets: usize,       // e.g. 150_000 droplets
+    pub erosion_inertia: f32,          // 0.0 (no inertia) to 1.0 (droplet moves in straight line)
     pub sediment_capacity_factor: f32, // Higher = droplets carry and carve more rock
     pub min_sediment_capacity: f32,
-    pub erode_speed: f32,        // Speed of picking up soil
-    pub deposit_speed: f32,      // Speed of depositing sediment in valleys
-    pub evaporation_rate: f32,   // Water evaporation per step
+    pub erode_speed: f32,            // Speed of picking up soil
+    pub deposit_speed: f32,          // Speed of depositing sediment in valleys
+    pub evaporation_rate: f32,       // Water evaporation per step
     pub max_droplet_lifetime: usize, // Max movement steps per droplet
 
     // Thermal weathering parameters (NEW)

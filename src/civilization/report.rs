@@ -2,9 +2,9 @@
 //!
 //! This is the human-readable form of everything the Civilization map mode shows
 //! on hover, in one place, so a run can be read — and diffed against the same seed
-//! run again — without opening a window. It reports the world's calendar first,
-//! then one block per realm in founding order: what it is, where it lives and how
-//! many people it holds.
+//! run again — without opening a window. It reports the world's year count and the
+//! depth of prehistory first, then one block per realm in founding order: what it
+//! is, where it lives and how many people it holds.
 
 use crate::civilization::{Civilization, CivilizationWorld, SocietyTier};
 use crate::core::fmt::{thousands, thousands_u64};
@@ -36,15 +36,6 @@ fn report(world: &CivilizationWorld, all: bool) {
         return;
     }
 
-    println!("   {}", world.epoch_label());
-    println!(
-        "   Epoch site: province #{} ({})",
-        world.timeline.epoch.site_province,
-        match world.timeline.epoch.site_realm {
-            Some(id) => world.name_of(id),
-            None => "unclaimed wilderness",
-        }
-    );
     println!("   {}", world.timeline.prehistory_label());
     println!(
         "   Atlas date: {} | {} societies on {} inhabited provinces | {} km² | population {}",
@@ -133,9 +124,44 @@ fn report_one(civ: &Civilization) {
         "Economy:",
         civ.culture.subsistence.label()
     );
-    println!("      {:<13}{}", "Faith:", civ.faith.kind.label());
+    println!("      {:<13}{}", "Faith:", civ.faith.display_name());
+    if !civ.faith.names.liturgy.is_empty() {
+        println!("      {:<13}{}", "Liturgy:", civ.faith.names.liturgy);
+    }
+    println!("        {:<11}{}", "Creed:", civ.faith.creed());
+    println!("        {}:", civ.faith.deity_title());
+    for line in civ.faith.deity_lines() {
+        println!("          {line}");
+    }
+    println!("        {:<11}{}", "Cosmos:", civ.faith.cosmos());
+    println!("        {:<11}{}", "Ethos:", civ.faith.ethos());
+    println!("        {:<11}{}", "Taboo:", civ.faith.taboo());
+    println!("        {:<11}{}", "Path:", civ.faith.path());
+    println!("        {:<11}{}", "Rites:", civ.faith.praxis());
+    println!("        {:<11}{}", "Temple:", civ.faith.polity());
+    println!("        {:<11}{}", "Manifest:", civ.faith.manifestation());
+    println!("        {:<11}{}", "Emblem:", civ.faith.emblem_name());
+    if !civ.faith.sacred_sites.is_empty() {
+        let title = format!("{}:", civ.faith.sacred_site_title());
+        let lines = civ.faith.sacred_site_lines();
+        if lines.len() == 1 {
+            println!("        {} {}", title, lines[0]);
+        } else {
+            println!("        {title}");
+            for line in lines {
+                println!("          {line}");
+            }
+        }
+    }
+    if !civ.faith.cults.is_empty() {
+        println!("        {:<11}{}", "Cults:", civ.faith.cult_names());
+    }
     println!("      {:<13}{}", "Polity:", civ.culture.government.label());
-    println!("      {:<13}{}", "Hierarchy:", "Later");
+    println!(
+        "      {:<13}{}",
+        "Hierarchy:",
+        civ.culture.hierarchy.label()
+    );
     println!(
         "      {:<13}{}",
         if civ.tier.is_state() {
@@ -180,7 +206,7 @@ fn lineage_line(singular: &str, plural: &str, names: &[&str]) {
 
 /// Print the world's languages: every family, its phonology, its homeland, its
 /// lexicon in miniature, and the languages that descend from it.
-pub fn report_languages(world: &LanguagesWorld) {
+pub fn report_languages(world: &LanguagesWorld, civilizations: Option<&CivilizationWorld>) {
     println!(
         "── Languages & Phonetics (seed {}) ───────────────────",
         world.seed
@@ -234,5 +260,25 @@ pub fn report_languages(world: &LanguagesWorld) {
             .language(world.language_of_realm.get(index).copied().unwrap_or(0))
             .map_or("an unknown tongue", |language| language.name.as_str());
         println!("      {:<34} {:<28} {language}", name, family);
+    }
+
+    if let Some(civilizations) = civilizations {
+        println!();
+        println!("   Named faiths (the first twenty) —");
+        for civ in civilizations.civilizations.iter().take(20) {
+            let faith = &civ.faith;
+            let liturgy = if faith.names.liturgy.is_empty() {
+                String::new()
+            } else {
+                format!(" · liturgy {}", faith.names.liturgy)
+            };
+            println!(
+                "      {:<30} {:<34} {}{}",
+                faith.name,
+                civ.name,
+                faith.creed(),
+                liturgy
+            );
+        }
     }
 }

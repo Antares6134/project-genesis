@@ -141,14 +141,7 @@ pub fn wrap_distance_px(x1: f32, y1: f32, x2: f32, y2: f32, width: usize) -> f32
 /// This is the figure the civilization stage reports when it says a realm rose
 /// "2 400 km from its nearest neighbour": an honest surface distance on the
 /// sphere, not a pixel count that silently lies at high latitude.
-pub fn map_distance_km(
-    x1: f32,
-    y1: f32,
-    x2: f32,
-    y2: f32,
-    width: usize,
-    height: usize,
-) -> f32 {
+pub fn map_distance_km(x1: f32, y1: f32, x2: f32, y2: f32, width: usize, height: usize) -> f32 {
     let w = width as f32;
     let lat1 = row_latitude_rad(y1, height);
     let lat2 = row_latitude_rad(y2, height);
@@ -161,8 +154,7 @@ pub fn map_distance_km(
         d_lon = std::f32::consts::TAU - d_lon;
     }
 
-    let a = (d_lat * 0.5).sin().powi(2)
-        + lat1.cos() * lat2.cos() * (d_lon * 0.5).sin().powi(2);
+    let a = (d_lat * 0.5).sin().powi(2) + lat1.cos() * lat2.cos() * (d_lon * 0.5).sin().powi(2);
     2.0 * PLANET_RADIUS_KM * a.sqrt().clamp(-1.0, 1.0).asin()
 }
 
@@ -182,7 +174,10 @@ mod tests {
         let equatorial = pixel_area_km2(2048, 4096, 8192);
         let subpolar = pixel_area_km2(3072, 4096, 8192); // ≈ 45° N
         // cos(45°) = 0.7071, and an 8K pixel is ≈ 24 km² at the equator.
-        assert!((equatorial - 23.9).abs() < 0.5, "equatorial pixel was {equatorial}");
+        assert!(
+            (equatorial - 23.9).abs() < 0.5,
+            "equatorial pixel was {equatorial}"
+        );
         assert!((subpolar / equatorial - 0.7071).abs() < 0.01);
     }
 

@@ -1,6 +1,6 @@
-use crate::core::progress::Progress;
-use crate::core::Grid;
 use crate::climate::config::{ClimateConfig, PlanetaryMode};
+use crate::core::Grid;
+use crate::core::progress::Progress;
 
 /// Rows of latitude between two progress checkpoints.
 const ROWS_PER_CHECKPOINT: usize = 256;
@@ -31,7 +31,7 @@ pub fn simulate_winds(
         }
 
         let v = y as f32 / (height as f32 - 1.0); // 0.0 (North Pole) to 1.0 (South Pole)
-        let lat_deg = (0.5 - v) * 180.0;          // +90 (North) to -90 (South)
+        let lat_deg = (0.5 - v) * 180.0; // +90 (North) to -90 (South)
 
         // Earth-like 3-cell atmospheric circulation
         let (base_dx, base_dy) = match config.mode {
@@ -57,7 +57,14 @@ pub fn simulate_winds(
         };
 
         for x in 0..width {
-            wind_grid.set(x as isize, y as isize, WindVector { dx: base_dx, dy: base_dy });
+            wind_grid.set(
+                x as isize,
+                y as isize,
+                WindVector {
+                    dx: base_dx,
+                    dy: base_dy,
+                },
+            );
         }
     }
 

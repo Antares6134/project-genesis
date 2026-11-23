@@ -5,7 +5,7 @@ mod themes;
 pub use i18n::Language;
 
 use crate::civilization::SocietyTier;
-use crate::civilization::{Civilization, CivilizationWorld};
+use crate::civilization::{Civilization, CivilizationWorld, Faith, MetaphysicalRoot};
 use crate::core::fmt::{thousands, thousands_u64};
 use crate::core::polar::{
     GLACIAL_LAND_TEMP, ICE_SHELF_TEMP, PACK_ICE_TEMP, frozen_sea_name, is_frozen_sea,
@@ -238,6 +238,9 @@ pub enum MapScope {
     Terrain,
     /// The dawn of history: the physical world with the civilizations on it.
     Civilizations,
+    /// The world's religions: one colour family per metaphysical root, one shade
+    /// per faith.
+    Religions,
     /// The world's language families and their languages.
     Languages,
     /// Political subdivision of the landmasses only.
@@ -263,9 +266,21 @@ impl MapScope {
         matches!(self, MapScope::Civilizations)
     }
 
+    /// True for the scope whose subject is the world's religions.
+    fn is_religions(self) -> bool {
+        matches!(self, MapScope::Religions)
+    }
+
     /// True for the scope whose subject is the world's languages.
     fn is_languages(self) -> bool {
         matches!(self, MapScope::Languages)
+    }
+
+    /// True for the scopes the Civilizations overlay may tint. The scopes whose
+    /// *subject* is a people — their realms, their faiths, their tongues — never
+    /// take it: the tint would repeat what is already painted.
+    fn accepts_civ_overlay(self) -> bool {
+        !self.is_civilizations() && !self.is_religions() && !self.is_languages()
     }
 
     /// The act a scope needs before it has anything to portray.
@@ -284,8 +299,7 @@ impl MapScope {
             MapScope::Physical | MapScope::Climate | MapScope::Temperature => Stage::Climate,
             MapScope::Land => Stage::Provinces,
             MapScope::Water | MapScope::Everywhere => Stage::HydroPolitics,
-            MapScope::Civilizations => Stage::Civilization,
-            MapScope::Languages => Stage::Languages,
+            MapScope::Civilizations | MapScope::Religions | MapScope::Languages => Stage::History,
         }
     }
 
@@ -305,6 +319,7 @@ impl MapScope {
             MapScope::Temperature => "temperature",
             MapScope::Terrain => "terrain",
             MapScope::Civilizations => "civilizations",
+            MapScope::Religions => "religions",
             MapScope::Languages => "languages",
             MapScope::Land => "land",
             MapScope::Water => "water",
@@ -494,7 +509,7 @@ fn export_file_name(
         name.push('_');
         name.push_str(tier);
     }
-    if civilizations_overlay && !scope.is_civilizations() {
+    if civilizations_overlay && scope.accepts_civ_overlay() {
         name.push_str("_civs");
     }
     format!("{name}_{}x{}.png", size.0, size.1)
@@ -804,8 +819,7 @@ fn default_scope(stage: Stage) -> MapScope {
             }
         }
         Stage::Provinces | Stage::Geopolitics | Stage::HydroPolitics => provinces,
-        Stage::Civilization => MapScope::Civilizations,
-        Stage::Languages => MapScope::Languages,
+        Stage::History => MapScope::Civilizations,
     }
 }
 
@@ -1574,6 +1588,7 @@ fn civilization_dossier(
     civ_id: u32,
     civ: &Civilization,
     languages: &LanguagesWorld,
+    language: Language,
 ) {
     // A hover card has to stay a card: at 430 px it never swallows the map.
     ui.set_max_width(CARD_WIDTH);
@@ -1603,9 +1618,15 @@ fn civilization_dossier(
         },
     );
     dossier_row(ui, "Economy:", civ.culture.subsistence.label());
-    dossier_row(ui, "Faith:", civ.faith.kind.label());
+    faith_summary(ui, &civ.faith);
+    caption(
+        ui,
+        language.text(
+            "Liturgy, powers, cosmos, ethos, rites and holy places are on the Religions map.",
+        ),
+    );
     dossier_row(ui, "Polity:", civ.culture.government.label());
-    dossier_row(ui, "Hierarchy:", "Later");
+    dossier_row(ui, "Hierarchy:", civ.culture.hierarchy.label());
 
     ui.separator();
     dossier_row(
@@ -1641,7 +1662,109 @@ fn civilization_dossier(
     lineage_row(ui, "Successor:", "Successors:", &[]);
 }
 
-/// One aligned row of a civilization dossier: a fixed-width label and a value.
+/// The two lines every map mode keeps about a religion: its own name and the
+/// shape of its creed. The Civilizations card stops here; the Religions card
+/// continues with [`faith_details`].
+fn faith_summary(ui: &mut egui::Ui, faith: &Faith) {
+    dossier_row(ui, "Faith:", &faith.display_name());
+    dossier_row(ui, "Creed:", &faith.creed());
+}
+
+/// Everything a faith holds beyond its name and creed: the liturgy, the powers
+/// it reveres, the cosmos it tells, the ethos it asks for, and the rites, polity,
+/// emblem and holy places that carry it.
+fn faith_details(ui: &mut egui::Ui, faith: &Faith) {
+    if !faith.names.liturgy.is_empty() {
+        dossier_row(ui, "Liturgy:", &faith.names.liturgy);
+    }
+    dossier_block(
+        ui,
+        &format!("{}:", faith.deity_title()),
+        &faith.deity_lines(),
+    );
+    dossier_row(ui, "Cosmos:", &faith.cosmos());
+    dossier_row(ui, "Ethos:", &faith.ethos());
+    dossier_row(ui, "Taboo:", &faith.taboo());
+    dossier_row(ui, "Path:", &faith.path());
+    dossier_row(ui, "Rites:", &faith.praxis());
+    dossier_row(ui, "Temple:", &faith.polity());
+    dossier_row(ui, "Manifest:", &faith.manifestation());
+    dossier_row(ui, "Emblem:", &faith.emblem_name());
+    if !faith.sacred_sites.is_empty() {
+        let title = format!("{}:", faith.sacred_site_title());
+        let lines = faith.sacred_site_lines();
+        if lines.len() == 1 {
+            dossier_row(ui, &title, &lines[0]);
+        } else {
+            dossier_block(ui, &title, &lines);
+        }
+    }
+    if !faith.cults.is_empty() {
+        dossier_row(ui, "Cults:", &faith.cult_names());
+    }
+}
+
+/// The full religion card the Religions map mode shows on hover: the faith, its
+/// root colour family, the society that carries it, how many people keep it, and
+/// every level of the creed beneath the name.
+fn religion_dossier(ui: &mut egui::Ui, civ: &Civilization, world: &AtlasWorld, language: Language) {
+    // A hover card has to stay a card: at 430 px it never swallows the map.
+    ui.set_max_width(CARD_WIDTH);
+    let faith = &civ.faith;
+
+    ui.horizontal(|ui| {
+        themes::swatch(ui, civ.religion_color);
+        card_title(ui, faith.display_name());
+    });
+    dossier_row(ui, "Creed:", &faith.creed());
+    caption(ui, language.text("Metaphysical root"));
+    ui.horizontal(|ui| {
+        themes::swatch(ui, faith.root.legend_color());
+        ui.add(
+            egui::Label::new(egui::RichText::new(language.text(faith.root.label())).small()).wrap(),
+        );
+    });
+
+    ui.separator();
+    dossier_row(ui, "Carried by:", &civ.name);
+    dossier_row(
+        ui,
+        "Society:",
+        &format!("{} · {}", civ.tier.form(), civ.environment.label()),
+    );
+    let followers_share = if world.civilizations.total_population > 0 {
+        100.0 * civ.population as f32 / world.civilizations.total_population as f32
+    } else {
+        0.0
+    };
+    dossier_row(
+        ui,
+        "Followers:",
+        &format!(
+            "{} ({followers_share:.1}% of the world)",
+            thousands_u64(civ.population)
+        ),
+    );
+    dossier_row(
+        ui,
+        "Provinces:",
+        &format!("{} · {} km²", civ.provinces.len(), thousands(civ.area_km2)),
+    );
+    if let Some(site) = faith.sacred_sites.first() {
+        dossier_row(
+            ui,
+            "Holy city:",
+            &format!("{} — province #{}", site.name, site.province),
+        );
+    }
+
+    ui.separator();
+    faith_details(ui, faith);
+}
+
+/// One aligned row of a civilization dossier: a fixed-width label and a
+/// wrapped value. The faith block carries long creed lines, and a horizontal
+/// layout will otherwise let them run past the card's width.
 fn dossier_row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.horizontal(|ui| {
         let height = ui.spacing().interact_size.y;
@@ -1649,8 +1772,20 @@ fn dossier_row(ui: &mut egui::Ui, label: &str, value: &str) {
             [DOSSIER_LABEL_WIDTH, height],
             egui::Label::new(egui::RichText::new(label)),
         );
-        ui.label(value);
+        ui.add(egui::Label::new(value).wrap());
     });
+}
+
+/// A labelled block whose values are one indented line each: the deity list and
+/// the sacred-site list. The label is printed once, then the lines sit under it.
+fn dossier_block(ui: &mut egui::Ui, label: &str, lines: &[String]) {
+    dossier_row(ui, label, "");
+    for line in lines {
+        ui.horizontal(|ui| {
+            ui.add_space(DOSSIER_LABEL_WIDTH);
+            ui.add(egui::Label::new(line).wrap());
+        });
+    }
 }
 
 /// A lineage row. The label switches to its plural as soon as a realm has more
@@ -1700,29 +1835,98 @@ fn society_key_row(
     });
 }
 
-/// One society's entry in the dawn legend: its colour and its name, as a button
-/// that flies the map to the society's heartland. Returns `true` when the reader
-/// clicked it.
+/// One row of the nine-family key: a root's main colour, its name, and how much
+/// of the world's inhabited land its religions hold. Wrapped for the same reason
+/// as [`society_key_row`]: a legend row may take a second line, never a wider
+/// panel.
+fn religion_key_row(
+    ui: &mut egui::Ui,
+    root: MetaphysicalRoot,
+    count: usize,
+    share: f32,
+    language: Language,
+) {
+    ui.horizontal(|ui| {
+        themes::swatch(ui, root.legend_color());
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(language.fill(
+                    "{} — {} religions · {}% of the land",
+                    &[&language.text(root.label()), &count, &format!("{share:.1}")],
+                ))
+                .small(),
+            )
+            .wrap(),
+        );
+    });
+}
+
+/// One society's entry in the dawn legend: its colour, its name, and the two
+/// lines that place it — as a block that spans the legend's full width.
+///
+/// The name is a button that flies the map to the society's heartland, and it
+/// is given every pixel the row has left: what the reader hovers — and what is
+/// highlighted when the realm is selected — is the whole row, not just the
+/// word. Its label stays flush with the row's edge. egui's `left_to_right`
+/// layout centres a button's label within it (see [`egui::Layout::left_to_right`]),
+/// which would indent every name by a different amount, so the row's layout is
+/// overridden to start at the left.
+///
+/// The two caption lines are indented to the name's column rather than left on
+/// the panel's edge: an entry then reads as one block — swatch and name, then
+/// what the society is and how many people it holds.
 ///
 /// A society's name is *data* — the atlas did not choose it — so the button
 /// truncates rather than widen the row. Widening a row widens the panel's frame
 /// (see [`society_key_row`]), and the map then covers the panel's left edge.
+///
+/// Returns the name button's response; its rectangle is the row's full width.
 fn society_entry(
     ui: &mut egui::Ui,
     color: [u8; 3],
     name: &str,
+    detail: &str,
+    census: &str,
+    tooltip: &str,
     selected: bool,
-    language: Language,
-) -> bool {
-    let mut clicked = false;
+) -> egui::Response {
+    let mut response = None;
     ui.horizontal(|ui| {
         themes::swatch(ui, color);
-        clicked = ui
-            .add(egui::Button::selectable(selected, egui::RichText::new(name).strong()).truncate())
-            .on_hover_text(language.text("Click to fly to this society's heartland"))
-            .clicked();
+        ui.with_layout(
+            // A horizontal layout aligns a label to its *centre* by default
+            // ("looks best to e.g. center text within a button"); this row's
+            // label has to start at the row's own left edge.
+            egui::Layout::left_to_right(egui::Align::Center).with_main_align(egui::Align::Min),
+            |ui| {
+                // The frame begins where the name does, so the lines under it
+                // line up with the label rather than with the frame's padding.
+                ui.spacing_mut().button_padding.x = 0.0;
+                let width = ui.available_width();
+                let height = ui.spacing().interact_size.y;
+                response = Some(
+                    ui.add(
+                        egui::Button::selectable(selected, egui::RichText::new(name).strong())
+                            .min_size(egui::vec2(width, height))
+                            .truncate(),
+                    )
+                    .on_hover_text(tooltip),
+                );
+            },
+        );
     });
-    clicked
+
+    // The name's column: the swatch and the row's gap, and nothing else.
+    let indent = themes::swatch_width(ui) + ui.spacing().item_spacing.x;
+    ui.horizontal(|ui| {
+        ui.add_space(indent);
+        ui.vertical(|ui| {
+            caption(ui, detail);
+            caption(ui, census);
+        });
+    });
+
+    response.expect("a society entry always draws its name")
 }
 
 impl MapViewer {
@@ -2113,8 +2317,7 @@ impl MapViewer {
     ///
     /// The pipeline is moved onto a worker — every grid is behind an `Arc`, so the
     /// clone copies no pixels — and the result is polled back on a later frame.
-    /// Acts seven and eight are never written: a save taken after them still holds
-    /// acts one to six.
+    /// History is never written: a save taken after it still holds acts one to six.
     fn save_world(&mut self) {
         if self.save_job.is_some() {
             return;
@@ -2455,7 +2658,7 @@ impl MapViewer {
             .min_size(320.0)
             .max_size(GENESIS_PANEL_MAX)
             .show(ui, |ui| {
-                // The panel can hold a seed, three cache controls, eight acts and
+                // The panel can hold a seed, three cache controls, seven acts and
                 // twenty-five constants; on a short window it has to scroll rather
                 // than hide the last act behind the bottom edge.
                 egui::ScrollArea::vertical()
@@ -2488,14 +2691,15 @@ impl MapViewer {
             });
     }
 
-    /// The eight acts, the controls that run them, and the one line about the
+    /// The seven acts, the controls that run them, and the one line about the
     /// last one that ran.
     fn act_section(&mut self, ui: &mut egui::Ui, busy: bool) {
         let grown = Stage::ALL
             .iter()
             .filter(|stage| matches!(self.genesis.state(**stage), StageState::Done { .. }))
             .count();
-        egui::CollapsingHeader::new(self.tf("🪜 The acts  ·  {} of 8 grown", &[&grown]))
+        let total = Stage::ALL.len();
+        egui::CollapsingHeader::new(self.tf("🪜 The acts  ·  {} of {} grown", &[&grown, &total]))
             // The count is in the label, so the id must not be: an act finishing
             // must not snap the list shut.
             .id_salt("acts")
@@ -2864,7 +3068,7 @@ impl MapViewer {
         }
     }
 
-    /// The eight acts, in order: the one that can be run next is the only button
+    /// The seven acts, in order: the one that can be run next is the only button
     /// that is pressable, and the one running wears its own progress bar.
     fn act_rows(&mut self, ui: &mut egui::Ui, busy: bool) {
         let running = self.job.as_ref().map(|job| job.stage);
@@ -3178,10 +3382,12 @@ impl MapViewer {
         let land_political = matches!(scope, MapScope::Land | MapScope::Everywhere);
         let water_political = matches!(scope, MapScope::Water | MapScope::Everywhere);
         let civ_scope = scope.is_civilizations();
+        let religion_scope = scope.is_religions();
         let language_scope = scope.is_languages();
         // The civilizations' own scope always shows them; every other scope shows
-        // them only when the reader asks for the overlay.
-        let show_civs = (view.show_civilizations && !language_scope) || civ_scope;
+        // them only when the reader asks for the overlay, and the scopes that
+        // portray a people by another name never take it.
+        let show_civs = (view.show_civilizations && scope.accepts_civ_overlay()) || civ_scope;
         let civilizations = &world.civilizations;
         let languages = &world.languages;
 
@@ -3460,13 +3666,15 @@ impl MapViewer {
                         }
                     }
                     final_color = color;
-                } else if civ_scope {
-                    // ── Civilizations scope ────────────────────────────────
+                } else if civ_scope || religion_scope {
+                    // ── Civilizations and Religions scopes ─────────────────
                     // The land is the subject, so the plate is built the way a political
                     // atlas is printed: a small ordered palette of flat fills, ink on the
                     // frontiers and the coast, the sea pushed back to a pale slate, and
                     // the relief carried *inside* each fill rather than mixed into it, so
-                    // a realm keeps one hue from its coast to its mountains.
+                    // a country keeps one hue from its coast to its mountains. The two
+                    // modes differ only in whose palette fills the ground: each realm's
+                    // own colour, or the shade its faith wears under its root.
                     let lake = lake_here;
                     let is_ocean = elev <= sea_level && !lake;
                     let is_waste = waste_here || (id == 0 && elev > sea_level && !lake);
@@ -3492,7 +3700,11 @@ impl MapViewer {
                     } else if lake {
                         final_color = [92.0, 150.0, 186.0];
                     } else if owner != 0 && has_land_node {
-                        let civ_rgb = civilizations.color_of(owner);
+                        let civ_rgb = if religion_scope {
+                            civilizations.religion_color_of(owner)
+                        } else {
+                            civilizations.color_of(owner)
+                        };
                         // Relief multiplies the fill instead of diluting it: the hue stays
                         // exactly the realm's own across the whole of its country.
                         let relief = (0.90 + 0.20 * (shade - 1.0)).clamp(0.82, 1.10);
@@ -3508,22 +3720,39 @@ impl MapViewer {
                         }
                         final_color = color;
 
-                        // The cradle itself: a small dark dot with a pale halo, so it
-                        // reads on a hunter-gatherer khaki as well as on an oxblood state.
+                        // A landmark dot with a pale halo, so it reads on a
+                        // hunter-gatherer khaki as well as on an oxblood state: the
+                        // cradle on the Civilizations map, and the faith's primary
+                        // holy place on the Religions map, where the holiest city is
+                        // the thing worth finding.
                         if let Some(civ) = civilizations.civilization(owner) {
-                            let dx = {
-                                let mut d = (x as f32 - civ.seat_x).abs();
-                                let width = w as f32;
-                                if d > width * 0.5 {
-                                    d = width - d;
-                                }
-                                d
+                            let marker = if religion_scope {
+                                civ.faith
+                                    .sacred_sites
+                                    .first()
+                                    .and_then(|site| {
+                                        hierarchy.provinces.get(site.province as usize)
+                                    })
+                                    .map(|node| (node.center_x, node.center_y))
+                            } else {
+                                Some((civ.seat_x, civ.seat_y))
                             };
-                            let dy = (y as f32 - civ.seat_y).abs();
-                            if dx.max(dy) <= 1.0 {
-                                final_color = blend_rgb(final_color, [26.0, 20.0, 16.0], 0.85);
-                            } else if dx.max(dy) <= 2.0 {
-                                final_color = blend_rgb(final_color, [244.0, 240.0, 230.0], 0.30);
+                            if let Some((marker_x, marker_y)) = marker {
+                                let dx = {
+                                    let mut d = (x as f32 - marker_x).abs();
+                                    let width = w as f32;
+                                    if d > width * 0.5 {
+                                        d = width - d;
+                                    }
+                                    d
+                                };
+                                let dy = (y as f32 - marker_y).abs();
+                                if dx.max(dy) <= 1.0 {
+                                    final_color = blend_rgb(final_color, [26.0, 20.0, 16.0], 0.85);
+                                } else if dx.max(dy) <= 2.0 {
+                                    final_color =
+                                        blend_rgb(final_color, [244.0, 240.0, 230.0], 0.30);
+                                }
                             }
                         }
 
@@ -3555,7 +3784,10 @@ impl MapViewer {
                             // Realm frontiers, and the subdivisions *inside* a realm at
                             // the tier the selector names — drawn as line-work only. The
                             // fill stays the realm's own colour, so a country never
-                            // shatters into a patchwork of shades.
+                            // shatters into a patchwork of shades. The Religions map
+                            // draws only the frontiers, because its subject is where one
+                            // faith ends and the next begins, not how a realm is
+                            // administered inside.
                             final_color = civ_border_shade(
                                 final_color,
                                 province_ids,
@@ -3566,7 +3798,7 @@ impl MapViewer {
                                 y,
                                 h,
                                 tier,
-                                true,
+                                !religion_scope,
                             );
                         }
                     } else {
@@ -3905,6 +4137,7 @@ impl MapViewer {
                         (MapScope::Temperature, "🌡 Temperature"),
                         (MapScope::Terrain, "🪨 Terrain"),
                         (MapScope::Civilizations, "🏺 Civilizations"),
+                        (MapScope::Religions, "🛐 Religions"),
                         (MapScope::Languages, "🗣 Languages"),
                         (MapScope::Land, "🏛 Land"),
                         (MapScope::Water, "🌊 Water"),
@@ -4038,7 +4271,9 @@ impl MapViewer {
                     // Border Toggle (in political and civilization scopes)
                     let borders_label = self.t("Borders");
                     let borders_ready = has_world
-                        && (self.scope.is_political() || self.scope.is_civilizations());
+                        && (self.scope.is_political()
+                            || self.scope.is_civilizations()
+                            || self.scope.is_religions());
                     if ui
                         .add_enabled_ui(borders_ready, |ui| {
                             ui.checkbox(&mut self.show_borders, borders_label)
@@ -4056,9 +4291,7 @@ impl MapViewer {
                     // It is on none of the scopes that portray people by another
                     // name, so there it is shown disabled rather than taken away.
                     let civ_label = self.tf("🏺 Civilizations ({})", &[&civ_count]);
-                    let overlay_ready = has_civs
-                        && !self.scope.is_civilizations()
-                        && !self.scope.is_languages();
+                    let overlay_ready = has_civs && self.scope.accepts_civ_overlay();
                     let mut response = ui
                         .add_enabled_ui(overlay_ready, |ui| {
                             ui.checkbox(&mut self.show_civilizations, civ_label)
@@ -4159,9 +4392,8 @@ impl MapViewer {
                     status_line(
                         ui,
                         self.tf(
-                            "🏺 CIVILIZATIONS — {} · Atlas date: {} · {} · {} realms · {} civilized provinces · population {} · {} people/km²",
+                            "🏺 CIVILIZATIONS — Atlas date: {} · {} · {} realms · {} civilized provinces · population {} · {} people/km²",
                             &[
-                                &dawn.epoch_label(),
                                 &dawn.map_year_label(),
                                 &dawn.age_label(),
                                 &dawn.civilizations.len(),
@@ -4372,7 +4604,6 @@ impl MapViewer {
                         return;
                     }
 
-                    ui.label(egui::RichText::new(world.epoch_label()).small());
                     caption(ui, world.timeline.prehistory_label());
                     ui.label(
                         egui::RichText::new(self.tf(
@@ -4387,17 +4618,6 @@ impl MapViewer {
                         world.age().stratum(),
                         world.age().describe()
                     ));
-                    if ui
-                        .button(self.t("🏛 Fly to the Common Era site"))
-                        .on_hover_text(self.t("The province the world's calendar is reckoned from"))
-                        .clicked()
-                    {
-                        focus_request = Some((
-                            world.timeline.epoch.site_x,
-                            world.timeline.epoch.site_y,
-                            CIV_FOCUS_ZOOM,
-                        ));
-                    }
                     ui.separator();
                     ui.label(self.tf(
                         "{} societies on {} inhabited provinces",
@@ -4463,35 +4683,172 @@ impl MapViewer {
                                 listed += 1;
                                 let id = index as u32 + 1;
                                 let selected = self.selected_civ == Some(id);
+                                let detail = format!(
+                                    "{} · {}",
+                                    civ.environment.label(),
+                                    civ.culture.government.label(),
+                                );
+                                let census = self.tf(
+                                    "{} provinces · {} people",
+                                    &[&civ.provinces.len(), &thousands_u64(civ.population)],
+                                );
                                 if society_entry(
                                     ui,
                                     civ.color,
                                     civ.name.as_str(),
+                                    &detail,
+                                    &census,
+                                    self.t("Click to fly to this society's heartland"),
                                     selected,
-                                    self.language,
-                                ) {
+                                )
+                                .clicked()
+                                {
                                     clicked_civ = Some(id);
                                 }
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} · {}",
-                                        civ.environment.label(),
-                                        civ.culture.government.label(),
-                                    ))
-                                    .small(),
-                                );
-                                caption(
-                                    ui,
-                                    self.tf(
-                                        "{} provinces · {} people",
-                                        &[&civ.provinces.len(), &thousands_u64(civ.population)],
-                                    ),
-                                );
                             }
                             if shown > listed {
                                 caption(
                                     ui,
                                     self.tf("… and {} more, all on the map.", &[&(shown - listed)]),
+                                );
+                            }
+                        }
+                    });
+                });
+        }
+
+        // ── RELIGIONS LEGEND (Religions scope only) ───────────────────────────
+        // The subject is the world's faiths, so the key leads with the nine
+        // metaphysical families and the list beneath it names every religion that
+        // actually rose, grouped under the family whose hue it wears.
+        if self.scope.is_religions() {
+            egui::Panel::right("religions_legend")
+                .frame(panel_frame.clone())
+                .resizable(false)
+                .exact_size(CIV_LEGEND_WIDTH)
+                .show(ui, |ui| {
+                    panel_title(ui, self.t("🛐 Religions of the World"));
+                    let dawn = &world.civilizations;
+                    if dawn.is_empty() {
+                        caption(ui, self.t("No religion has taken root on this world."));
+                        return;
+                    }
+
+                    caption(ui, dawn.timeline.prehistory_label());
+                    ui.label(
+                        egui::RichText::new(self.tf(
+                            "Atlas date: {} · {}",
+                            &[&dawn.map_year_label(), &dawn.age_label()],
+                        ))
+                        .small()
+                        .weak(),
+                    )
+                    .on_hover_text(format!(
+                        "{} — {}",
+                        dawn.age().stratum(),
+                        dawn.age().describe()
+                    ));
+                    ui.separator();
+                    ui.label(self.tf(
+                        "{} religions on {} inhabited provinces",
+                        &[
+                            &dawn.civilizations.len(),
+                            &thousands(dawn.civilized_provinces as f32),
+                        ],
+                    ));
+                    ui.label(self.tf(
+                        "{} religions · {} followers",
+                        &[
+                            &dawn.civilizations.len(),
+                            &thousands_u64(dawn.total_population),
+                        ],
+                    ));
+                    ui.separator();
+
+                    // ── THE NINE-FAMILY KEY ───────────────────────────────
+                    // A root with no religion on this world is not on the map,
+                    // so it buys no row; the families that did rise lead with
+                    // what their hue means.
+                    let counts = dawn.counts_by_root();
+                    let areas = dawn.area_by_root();
+                    let inhabited_area: f32 = areas.iter().sum::<f32>().max(1.0);
+                    for (index, root) in MetaphysicalRoot::ALL.iter().enumerate() {
+                        if counts[index] == 0 {
+                            continue;
+                        }
+                        religion_key_row(
+                            ui,
+                            *root,
+                            counts[index],
+                            100.0 * areas[index] / inhabited_area,
+                            self.language,
+                        );
+                    }
+                    ui.separator();
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for root in MetaphysicalRoot::ALL {
+                            let mut faiths: Vec<(u32, &Civilization)> = dawn
+                                .civilizations
+                                .iter()
+                                .enumerate()
+                                .map(|(index, civ)| (index as u32 + 1, civ))
+                                .filter(|(_, civ)| civ.faith.root == root)
+                                .collect();
+                            if faiths.is_empty() {
+                                continue;
+                            }
+                            // A legend reads like a census: the faiths that hold
+                            // most people come first, founding order breaking ties.
+                            faiths.sort_by(|a, b| {
+                                b.1.population.cmp(&a.1.population).then(a.0.cmp(&b.0))
+                            });
+
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    self.tf("{} ({})", &[&self.t(root.label()), &faiths.len()]),
+                                )
+                                .strong(),
+                            );
+                            let mut listed = 0usize;
+                            for (id, civ) in faiths.iter() {
+                                if listed >= LISTED_PER_TIER {
+                                    break;
+                                }
+                                listed += 1;
+                                let selected = self.selected_civ == Some(*id);
+                                let detail = civ.faith.creed();
+                                let census = self.tf(
+                                    "{} · {} provinces · {} people",
+                                    &[
+                                        &civ.name,
+                                        &civ.provinces.len(),
+                                        &thousands_u64(civ.population),
+                                    ],
+                                );
+                                let name = civ.faith.display_name();
+                                if society_entry(
+                                    ui,
+                                    civ.religion_color,
+                                    name.as_str(),
+                                    &detail,
+                                    &census,
+                                    self.t("Click to fly to this faith's holiest site"),
+                                    selected,
+                                )
+                                .clicked()
+                                {
+                                    clicked_civ = Some(*id);
+                                }
+                            }
+                            if faiths.len() > listed {
+                                caption(
+                                    ui,
+                                    self.tf(
+                                        "… and {} more, all on the map.",
+                                        &[&(faiths.len() - listed)],
+                                    ),
                                 );
                             }
                         }
@@ -4580,12 +4937,21 @@ impl MapViewer {
             }
         }
 
-        // A click on a realm's legend entry flies the map to that realm.
+        // A click on a realm's legend entry flies the map to that realm; on the
+        // Religions map it flies to the faith's holiest place instead, falling
+        // back to the realm's heartland when no site has been named.
         if let Some(id) = clicked_civ {
             self.selected_civ = Some(id);
             if let Some(civ) = world.civilizations.civilization(id) {
                 let zoom = CIV_FOCUS_ZOOM.max(self.zoom);
-                focus_request = Some((civ.seat_x, civ.seat_y, zoom));
+                let mut target = (civ.seat_x, civ.seat_y);
+                if self.scope.is_religions()
+                    && let Some(site) = civ.faith.sacred_sites.first()
+                    && let Some(node) = world.hierarchy.provinces.get(site.province as usize)
+                {
+                    target = (node.center_x, node.center_y);
+                }
+                focus_request = Some((target.0, target.1, zoom));
             }
         }
 
@@ -4805,6 +5171,7 @@ impl MapViewer {
                                 owner,
                                 civ,
                                 &world.languages,
+                                self.language,
                             );
                         } else if lake {
                             card_title(ui, self.t("💧 Inland Freshwater Lake"));
@@ -4911,6 +5278,66 @@ impl MapViewer {
                             ui.label(self.tf(
                                 "Elevation: {} m",
                                 &[&format!("{:.0}", relief::altitude_metres(elev))],
+                            ));
+                            ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
+                        }
+                    } else if self.scope == MapScope::Religions {
+                        // ── The religion readout ──────────────────────────────
+                        // A faith belongs to the society that keeps it, so one
+                        // hover answers both halves of the question: what is
+                        // believed here, and who believes it.
+                        let lake = world
+                            .is_lake
+                            .as_ref()
+                            .is_some_and(|lake| *lake.get(map_x, map_y));
+                        let owner = world.civilizations.owner_of(id);
+                        if owner != 0 && !is_ocean && !lake {
+                            let civ = world
+                                .civilizations
+                                .civilization(owner)
+                                .expect("owner id always indexes a civilization");
+                            religion_dossier(ui, civ, world, self.language);
+                            ui.separator();
+                            ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
+                        } else if lake {
+                            card_title(ui, self.t("💧 Inland Freshwater Lake"));
+                            ui.label(self.t("The water itself keeps no faith."));
+                            ui.separator();
+                            ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
+                        } else if is_ocean {
+                            card_title(ui, self.t("🌊 Open Water"));
+                            ui.label(self.t("No faith is kept on the open sea."));
+                            ui.separator();
+                            ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
+                        } else if is_waste {
+                            card_title(ui, self.t("🏔️ Beyond the Faiths"));
+                            ui.strong(self.t("No religion has settled this ground"));
+                            ui.separator();
+                            ui.label(self.tf(
+                                "Environment: {}",
+                                &[&get_biome_name(display_temp, precip, altitude)],
+                            ));
+                            ui.label(self.tf(
+                                "Elevation: {} m",
+                                &[&format!("{:.0}", relief::altitude_metres(elev))],
+                            ));
+                            ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
+                        } else {
+                            card_title(ui, self.t("🌾 Unclaimed Land"));
+                            ui.strong(self.t("No faith is kept here"));
+                            ui.separator();
+                            ui.label(self.tf(
+                                "Environment: {}",
+                                &[&get_biome_name(display_temp, precip, altitude)],
+                            ));
+                            ui.label(self.tf(
+                                "Elevation: {} m",
+                                &[&format!("{:.0}", relief::altitude_metres(elev))],
+                            ));
+                            ui.label(self.tf("Temperature: {} °C", &[&format!("{:.1}", temp)]));
+                            ui.label(self.tf(
+                                "Precipitation: {} mm/yr",
+                                &[&format!("{:.0}", precip * 1200.0)],
                             ));
                             ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                         }
@@ -5258,6 +5685,7 @@ mod tests {
             MapScope::Water,
             MapScope::Everywhere,
             MapScope::Civilizations,
+            MapScope::Religions,
             MapScope::Languages,
         ] {
             assert!(
@@ -5277,6 +5705,7 @@ mod tests {
             MapScope::Temperature,
             MapScope::Terrain,
             MapScope::Civilizations,
+            MapScope::Religions,
             MapScope::Languages,
             MapScope::Land,
             MapScope::Water,
@@ -5303,6 +5732,39 @@ mod tests {
                 default_scope(stage).available(stage),
                 "the scope the atlas opens on for {} must itself be offered",
                 stage.title()
+            );
+        }
+    }
+
+    /// A scope whose subject is a people — their realms, their religions, their
+    /// tongues — never takes the Civilizations overlay: the tint would repeat the
+    /// layer already painted, and an export would be named for a picture it does
+    /// not contain.
+    #[test]
+    fn the_peoples_scopes_never_take_the_civilizations_overlay() {
+        for scope in [
+            MapScope::Civilizations,
+            MapScope::Religions,
+            MapScope::Languages,
+        ] {
+            assert!(
+                !scope.accepts_civ_overlay(),
+                "{scope:?} must not tint the civilizations over its own subject"
+            );
+        }
+        for scope in [
+            MapScope::Physical,
+            MapScope::Topographic,
+            MapScope::Climate,
+            MapScope::Temperature,
+            MapScope::Terrain,
+            MapScope::Land,
+            MapScope::Water,
+            MapScope::Everywhere,
+        ] {
+            assert!(
+                scope.accepts_civ_overlay(),
+                "{scope:?} must offer the civilizations overlay"
             );
         }
     }
@@ -5514,7 +5976,7 @@ mod tests {
         assert_eq!(viewer.scope, MapScope::Physical);
     }
 
-    /// A world adopted from the full cache opens at act seven, with acts one to
+    /// A world adopted from the full cache opens at history, with acts one to
     /// six done and the rest still locked.
     #[test]
     fn a_world_of_six_acts_opens_at_the_seventh() {
@@ -5531,8 +5993,7 @@ mod tests {
         };
 
         says("✔ 6. Hydro-Political Hierarchy");
-        says("▶ 7. Dawn of Civilization");
-        says("🔒 8. Languages & Phonetics");
+        says("▶ 7. History & Languages");
     }
 
     /// A finished act can be un-done from the panel: rewinding re-offers that act
@@ -5783,6 +6244,40 @@ mod tests {
                 MapScope::Languages,
                 MapTier::Regions,
                 false,
+                (8_192, 4_096)
+            ),
+            "world_9_languages_8192x4096.png"
+        );
+        // The Religions map is its own subject: no tier, and no overlay suffix
+        // even when the checkbox was left on in another scope.
+        assert_eq!(
+            export_file_name(
+                9,
+                MapScope::Religions,
+                MapTier::Regions,
+                false,
+                (8_192, 4_096)
+            ),
+            "world_9_religions_8192x4096.png"
+        );
+        assert_eq!(
+            export_file_name(
+                9,
+                MapScope::Religions,
+                MapTier::Regions,
+                true,
+                (8_192, 4_096)
+            ),
+            "world_9_religions_8192x4096.png"
+        );
+        // The same holds for Languages: the overlay is not painted there, so it
+        // is not in the name either.
+        assert_eq!(
+            export_file_name(
+                9,
+                MapScope::Languages,
+                MapTier::Regions,
+                true,
                 (8_192, 4_096)
             ),
             "world_9_languages_8192x4096.png"
@@ -6143,13 +6638,16 @@ mod tests {
                         }
                         ui.separator();
                         // A society's name comes from the world, not from this
-                        // file: the longest a name can get must still fit.
+                        // file: the longest a name can get must still fit. So
+                        // must the two lines under it.
                         society_entry(
                             ui,
                             SocietyTier::States.legend_color(),
-                            "The Sunlit Isle Confederacy of the Common Era",
+                            "The Sunlit Isle Confederacy of the Green Shore",
+                            "Open Coast · A Government Whose Name Runs On and On",
+                            "12 345 provinces · 5 678 901 people",
+                            "Click to fly to this society's heartland",
                             false,
-                            Language::English,
                         );
                     });
 
@@ -6181,6 +6679,95 @@ mod tests {
             "a key row must wrap inside the panel, never be dropped from it"
         );
     }
+    /// A society's entry is a *row*, not a name: the button that flies the map
+    /// to its heartland claims every pixel the panel has left, and the two lines
+    /// that describe it sit under the name's column.
+    ///
+    /// It used to be a shrink-to-fit button pushed in by the swatch and by its
+    /// own padding, with the captions left on the panel's edge: a narrow,
+    /// indented column that reached neither the panel's edge nor its own
+    /// metadata. The label must also stay flush with the row: egui's horizontal
+    /// layout centres a button's label, and a full-width button would otherwise
+    /// re-indent every name by its own width.
+    #[test]
+    fn a_society_entry_fills_its_legend_panel() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1720.0, 1040.0));
+        let mut row = egui::Rect::NOTHING;
+        let mut painted = Vec::new();
+
+        for frame in 0..3 {
+            let mut input = egui::RawInput::default();
+            input.screen_rect = Some(screen);
+            input.time = Some(1.0 + f64::from(frame));
+            let mut output = ctx.run_ui(input, |ui| {
+                egui::Panel::right("society_entry_panel")
+                    .frame(atlas_panel_frame(ui.style()))
+                    .resizable(false)
+                    .exact_size(CIV_LEGEND_WIDTH)
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            row = society_entry(
+                                ui,
+                                SocietyTier::States.legend_color(),
+                                "Orami",
+                                "River Floodplain · Band Society",
+                                "600 provinces · 212 705 people",
+                                "Click to fly to this society's heartland",
+                                false,
+                            )
+                            .rect;
+                        });
+                    });
+                ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+            });
+            painted = drawn_text_rects(&output);
+            // A test paints nothing, so the texture deltas are ours to discard.
+            output.textures_delta.clear();
+        }
+
+        // The panel's own frame margin is all the room the row leaves unused.
+        let panel_edge = screen.max.x - 12.0;
+        assert!(
+            (row.right() - panel_edge).abs() <= 1.0,
+            "a society's row must fill its legend, but it ends at x = {:.1} \
+             while the panel's content ends at x = {:.1}",
+            row.right(),
+            panel_edge,
+        );
+
+        let text = |needle: &str| -> egui::Rect {
+            painted
+                .iter()
+                .find(|(text, _)| text == needle)
+                .unwrap_or_else(|| panic!("{needle:?} must be painted in the legend"))
+                .1
+        };
+        let name = text("Orami");
+        let detail = text("River Floodplain · Band Society");
+        let census = text("600 provinces · 212 705 people");
+
+        // The name and its two lines share one left edge...
+        for (label, line) in [("environment", detail), ("census", census)] {
+            assert!(
+                (line.min.x - name.min.x).abs() <= 0.5,
+                "the {label} line must line up with the name, but it starts at \
+                 x = {:.1} while the name starts at x = {:.1}",
+                line.min.x,
+                name.min.x,
+            );
+        }
+        // ...and the name starts at the row's edge, never centred in it.
+        assert!(
+            name.min.x - row.min.x <= 0.5,
+            "the name must start at the row's left edge, but the row starts at \
+             x = {:.1} while the name starts at x = {:.1}",
+            row.min.x,
+            name.min.x,
+        );
+    }
 
     /// The survey sheet's own scale belongs to the survey sheet.
     ///
@@ -6197,7 +6784,7 @@ mod tests {
 
         // A world old enough to offer every scope, so only the scope gate — not
         // whether the data exists — decides what is painted.
-        let world = Genesis::for_test(1, Stage::Civilization)
+        let world = Genesis::for_test(1, Stage::History)
             .atlas()
             .expect("a world of seven acts");
 
@@ -6210,6 +6797,7 @@ mod tests {
             MapScope::Temperature,
             MapScope::Terrain,
             MapScope::Civilizations,
+            MapScope::Religions,
             MapScope::Languages,
         ] {
             let mut viewer = MapViewer::from_world(world.clone());
@@ -6445,6 +7033,73 @@ mod tests {
         }
     }
 
+    /// The two religion cards split the cascade: the Civilizations card keeps the
+    /// faith's name and creed, and the Religions card carries the rest. This is
+    /// the contract that keeps the dawn's hover readable.
+    #[test]
+    fn the_faith_cards_split_name_and_creed_from_the_rest() {
+        use crate::civilization::faith::{FaithContext, generate_faith};
+        use crate::civilization::{
+            CradleKind, Environment, Government, Hierarchy, Outlook, Subsistence,
+        };
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let context = FaithContext {
+            environment: Environment::Floodplain,
+            cradle_kind: CradleKind::RiverFloodplain,
+            tier: SocietyTier::States,
+            complexity: 0.70,
+            subsistence: Subsistence::IrrigatedAgriculture,
+            outlook: Outlook::Ceremonial,
+            government: Government::TheocraticRepublic,
+            hierarchy: Hierarchy::SacredKingship,
+            mean_temp_c: 18.0,
+            mean_precip: 0.45,
+            mean_elevation_m: 120.0,
+            sea_px: 0,
+            lake_px: 0,
+            river: true,
+            great_river: true,
+            latitude_deg: 22.0,
+        };
+        let faith = generate_faith(&mut ChaCha8Rng::seed_from_u64(7), &context);
+
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+        let read = |paint: &dyn Fn(&mut egui::Ui)| -> Vec<String> {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| paint(ui));
+            let text = drawn_text(&output)
+                .into_iter()
+                .map(|(line, _)| line)
+                .collect();
+            output.textures_delta.clear();
+            text
+        };
+
+        let summary = read(&|ui| faith_summary(ui, &faith));
+        let says = |lines: &[String], needle: &str| lines.iter().any(|line| line.contains(needle));
+        assert!(
+            says(&summary, "Faith:"),
+            "the summary lost the faith's name"
+        );
+        assert!(says(&summary, "Creed:"), "the summary lost the creed");
+        for moved in ["Liturgy:", "Cosmos:", "Ethos:", "Taboo:", "Rites:"] {
+            assert!(
+                !says(&summary, moved),
+                "the Civilizations card must leave {moved} to the Religions card"
+            );
+        }
+
+        let details = read(&|ui| faith_details(ui, &faith));
+        for present in ["Cosmos:", "Ethos:", "Taboo:", "Path:", "Rites:"] {
+            assert!(
+                says(&details, present),
+                "the full religion card lost {present}"
+            );
+        }
+    }
+
     // ─── THE ATLAS IN OTHER TONGUES ──────────────────────────────────────────
 
     /// The whole shell of the atlas — its toolbar, its genesis panel, its world
@@ -6456,7 +7111,7 @@ mod tests {
         ctx.all_styles_mut(configure_style);
         // A world old enough to have a dawn, so the atlas opens with its toolbar
         // and its Civilizations legend on screen.
-        let genesis = Genesis::for_test(42, Stage::Civilization);
+        let genesis = Genesis::for_test(42, Stage::History);
         let world = genesis.atlas().expect("a world of seven acts");
         let mut viewer =
             MapViewer::with_world(genesis, Some(world)).with_language(Language::German);

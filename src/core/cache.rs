@@ -60,11 +60,9 @@ fn write_cache<T: Serialize>(value: &T, acts: u8, path: &str) -> Result<(), Stri
     // The deepest act the save holds, one byte, straight after the magic. The
     // atlas reads this to describe a cache without decoding its payload; a load
     // ignores it and reads the act off the fields, which stay the one truth.
-    writer
-        .write_all(&[acts])
+    writer.write_all(&[acts]).map_err(|why| why.to_string())?;
+    let mut encoder = zstd::stream::write::Encoder::new(writer, CACHE_ZSTD_LEVEL)
         .map_err(|why| why.to_string())?;
-    let mut encoder =
-        zstd::stream::write::Encoder::new(writer, CACHE_ZSTD_LEVEL).map_err(|why| why.to_string())?;
     // Spread the compression over worker threads. This has to happen before any
     // byte is written: it is a parameter on the compression context, and a frame
     // cannot switch to multithreaded once it has started.
@@ -399,7 +397,11 @@ mod tests {
         let mut cache = little_world();
         cache.ocean = None;
         cache.ocean_hierarchy = None;
-        assert_eq!(cache.stage(), 5, "provinces and the land hierarchy, no ocean");
+        assert_eq!(
+            cache.stage(),
+            5,
+            "provinces and the land hierarchy, no ocean"
+        );
 
         let path = std::env::temp_dir().join("project_genesis_partial_cache_test.bin");
         let path = path.to_string_lossy().to_string();
@@ -547,4 +549,3 @@ mod tests {
         );
     }
 }
-

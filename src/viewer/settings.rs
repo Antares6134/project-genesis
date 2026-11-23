@@ -291,10 +291,8 @@ fn draw_group(
                 ui.add_space(2.0);
                 if ui
                     .add(
-                        egui::Button::new(language.text(
-                            "↺ Reset these to the engine's defaults",
-                        ))
-                        .small(),
+                        egui::Button::new(language.text("↺ Reset these to the engine's defaults"))
+                            .small(),
                     )
                     .clicked()
                 {
@@ -625,7 +623,9 @@ fn draw_constants(
                 ui,
                 changed,
                 language.text("Marine provinces"),
-                language.text("Sea zones partitioned across oceans and gulfs for naval and trade routing."),
+                language.text(
+                    "Sea zones partitioned across oceans and gulfs for naval and trade routing.",
+                ),
                 &thousands(d.ocean_num_provinces as f32),
                 &mut settings.ocean_num_provinces,
                 d.ocean_num_provinces,
@@ -836,13 +836,21 @@ fn mode_setting(
         .width(SETTING_SLIDER_WIDTH)
         .show_ui(ui, |ui| {
             if ui
-                .selectable_value(&mut settings.tidally_locked, false, language.text("Rotating (day & night)"))
+                .selectable_value(
+                    &mut settings.tidally_locked,
+                    false,
+                    language.text("Rotating (day & night)"),
+                )
                 .changed()
             {
                 *changed = true;
             }
             if ui
-                .selectable_value(&mut settings.tidally_locked, true, language.text("Tidally locked (eyeball)"))
+                .selectable_value(
+                    &mut settings.tidally_locked,
+                    true,
+                    language.text("Tidally locked (eyeball)"),
+                )
                 .changed()
             {
                 *changed = true;
@@ -872,14 +880,10 @@ fn parameter_name(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
                 .add_enabled(!at_default, egui::Button::new("↺").frame(false))
-                .on_hover_text(language.fill(
-                    "Back to the engine's default ({})",
-                    &[&default_text],
-                ))
-                .on_disabled_hover_text(language.fill(
-                    "Already the engine's default ({})",
-                    &[&default_text],
-                ))
+                .on_hover_text(language.fill("Back to the engine's default ({})", &[&default_text]))
+                .on_disabled_hover_text(
+                    language.fill("Already the engine's default ({})", &[&default_text]),
+                )
                 .clicked()
             {
                 reset = true;
@@ -918,9 +922,21 @@ mod tests {
     type Nudge = Box<dyn Fn(&mut WorldGenSettings)>;
     fn nudges() -> Vec<(Group, &'static str, Nudge)> {
         vec![
-            (Group::Planetary, "tidally_locked", Box::new(|s| s.tidally_locked = true)),
-            (Group::Planetary, "equator_temp", Box::new(|s| s.equator_temp = 10.0)),
-            (Group::Planetary, "pole_temp", Box::new(|s| s.pole_temp = 15.0)),
+            (
+                Group::Planetary,
+                "tidally_locked",
+                Box::new(|s| s.tidally_locked = true),
+            ),
+            (
+                Group::Planetary,
+                "equator_temp",
+                Box::new(|s| s.equator_temp = 10.0),
+            ),
+            (
+                Group::Planetary,
+                "pole_temp",
+                Box::new(|s| s.pole_temp = 15.0),
+            ),
             (
                 Group::Polar,
                 "polar_cap_start_lat_deg",
@@ -931,7 +947,11 @@ mod tests {
                 "polar_belt_start_lat_deg",
                 Box::new(|s| s.polar_belt_start_lat_deg = 35.0),
             ),
-            (Group::Coastlines, "sea_threshold", Box::new(|s| s.sea_threshold = 0.22)),
+            (
+                Group::Coastlines,
+                "sea_threshold",
+                Box::new(|s| s.sea_threshold = 0.22),
+            ),
             (
                 Group::Coastlines,
                 "continental_freq",
@@ -947,13 +967,21 @@ mod tests {
                 "domain_warp_amp",
                 Box::new(|s| s.domain_warp_amp = 0.75),
             ),
-            (Group::Orogeny, "mountain_lift", Box::new(|s| s.mountain_lift = 0.85)),
+            (
+                Group::Orogeny,
+                "mountain_lift",
+                Box::new(|s| s.mountain_lift = 0.85),
+            ),
             (
                 Group::Orogeny,
                 "fault_noise_freq",
                 Box::new(|s| s.fault_noise_freq = 3.50),
             ),
-            (Group::Orogeny, "fault_band", Box::new(|s| s.fault_band = 0.25)),
+            (
+                Group::Orogeny,
+                "fault_band",
+                Box::new(|s| s.fault_band = 0.25),
+            ),
             (
                 Group::Weathering,
                 "erosion_droplets",
@@ -964,7 +992,11 @@ mod tests {
                 "thermal_iterations",
                 Box::new(|s| s.thermal_iterations = 10),
             ),
-            (Group::Climate, "base_rainfall", Box::new(|s| s.base_rainfall = 0.90)),
+            (
+                Group::Climate,
+                "base_rainfall",
+                Box::new(|s| s.base_rainfall = 0.90),
+            ),
             (
                 Group::Climate,
                 "hadley_dry_depth",
@@ -1005,7 +1037,11 @@ mod tests {
                 "max_waste_share",
                 Box::new(|s| s.max_waste_share = 0.0),
             ),
-            (Group::Geography, "waste_cutoff", Box::new(|s| s.waste_cutoff = 0.90)),
+            (
+                Group::Geography,
+                "waste_cutoff",
+                Box::new(|s| s.waste_cutoff = 0.90),
+            ),
             (
                 Group::Geopolitics,
                 "max_continents",
@@ -1182,13 +1218,15 @@ mod tests {
 
             // The shape's own extent, deliberately not its clip: overflowing is
             // exactly what is in question.
-            ink = output.shapes.iter().fold(egui::Rect::NOTHING, |bounds, clipped| {
-                bounds.union(clipped.shape.visual_bounding_rect())
-            });
+            ink = output
+                .shapes
+                .iter()
+                .fold(egui::Rect::NOTHING, |bounds, clipped| {
+                    bounds.union(clipped.shape.visual_bounding_rect())
+                });
             output.textures_delta.clear();
         }
 
         (ink, panel_rect)
     }
 }
-

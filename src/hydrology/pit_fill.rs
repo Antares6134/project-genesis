@@ -1,5 +1,5 @@
-use crate::core::progress::Progress;
 use crate::core::Grid;
+use crate::core::progress::Progress;
 use crate::export::live;
 use crate::hydrology::config::HydrologyConfig;
 use std::cmp::Ordering;
@@ -104,8 +104,14 @@ pub fn fill_depressions_and_find_lakes(
     }
 
     let neighbors: [(isize, isize); 8] = [
-        (-1, 0), (1, 0), (0, -1), (0, 1),
-        (-1, -1), (1, -1), (-1, 1), (1, 1),
+        (-1, 0),
+        (1, 0),
+        (0, -1),
+        (0, 1),
+        (-1, -1),
+        (1, -1),
+        (-1, 1),
+        (1, 1),
     ];
 
     // 2. Priority flood across terrain
@@ -422,8 +428,14 @@ mod tests {
         // The routing surface, though, drains. Interior rows are the ones the
         // production router actually routes over (it skips the polar rows).
         let neighbours = [
-            (-1, 0), (1, 0), (0, -1), (0, 1),
-            (-1, -1), (1, -1), (-1, 1), (1, 1),
+            (-1, 0),
+            (1, 0),
+            (0, -1),
+            (0, 1),
+            (-1, -1),
+            (1, -1),
+            (-1, 1),
+            (1, 1),
         ];
         let mut stuck = 0;
         for y in 1..h as isize - 1 {
@@ -468,7 +480,10 @@ mod tests {
         let result =
             fill_depressions_and_find_lakes(&heightmap, sea_level, &config, &Progress::silent());
 
-        assert!(!*result.is_lake.get(5, 3), "a one-pixel speck must be drained");
+        assert!(
+            !*result.is_lake.get(5, 3),
+            "a one-pixel speck must be drained"
+        );
         assert!(*result.is_lake.get(8, 3), "a real basin must survive");
         let lakes = result.is_lake.raw_slice().iter().filter(|&&l| l).count();
         assert_eq!(lakes, 9, "exactly the 3x3 basin should remain");
@@ -499,7 +514,10 @@ mod tests {
         let result =
             fill_depressions_and_find_lakes(&heightmap, sea_level, &config, &Progress::silent());
 
-        assert!(!*result.is_lake.get(2, 3), "the world ocean must stay ocean");
+        assert!(
+            !*result.is_lake.get(2, 3),
+            "the world ocean must stay ocean"
+        );
         assert!(
             *result.is_lake.get(10, 3),
             "a walled-off basin below the datum is a lake"

@@ -5,7 +5,7 @@
 //! a state, a chiefdom, a farming village, a herd people or a band of foragers —
 //! because a world at any date is a mosaic of all five, and the map should say so.
 //!
-//! The stage runs in ten passes, each of which is a single loop over a different
+//! The stage runs in nine passes, each of which is a single loop over a different
 //! domain — which is what keeps it order-stable and reproducible for a seed:
 //!
 //! 1. **Census** — every province is measured once: its real area in km² (latitude
@@ -30,26 +30,27 @@
 //! 6. **Assembly** — contiguous provinces of one tier (and, for farming peoples,
 //!    of one state's hinterland) become named societies, split where a belt is too
 //!    large to be one people.
-//! 7. **Development** — from year zero to the atlas date, every *state* grows
-//!    along a single internal axis of development: its own surplus, its neighbours'
+//! 7. **Development** — from Year 0 to the atlas date, every *state* grows along a
+//!    single internal axis of development: its own surplus, its neighbours'
 //!    progress and whatever its ancestral stock already knew. The leading region's
 //!    level at the atlas date *is* the world's [`Age`]. A people that is not a
 //!    state sits where its tier puts it and does not climb.
-//! 8. **Dossier** — the country decides a society's economy, government and faith.
-//! 9. **Contact** — territories that touch, or that lie within a sea-crossing of
-//!    each other, are counted; the count feeds the choice of the epoch site. The
-//!    identities are discarded: the dossier does not list neighbours.
-//! 10. **Ancestral stock** — societies close enough to share a descent get one
+//! 8. **Dossier** — the country decides a society's economy, government and
+//!    seven-level faith (root, domains, cosmology, ethos, praxis, polity and
+//!    manifestation).
+//! 9. **Ancestral stock** — societies close enough to share a descent get one
 //!    tongue family, and an older realm's temple form and rites can pass to a
 //!    younger one.
 
 use crate::civilization::config::CivilizationConfig;
-use crate::civilization::epoch::{
-    DevelopmentPace, Epoch, EpochCandidate, Timeline, place_name, select_epoch_site,
+use crate::civilization::epoch::{DevelopmentPace, Timeline};
+use crate::civilization::faith::{
+    FAITH_SALT, FaithContext, MetaphysicalRoot, apply_contact, generate_faith, inherit_faith,
+    weighted_pick,
 };
 use crate::civilization::{
-    Age, Civilization, CivilizationWorld, CradleKind, Culture, Environment, Faith, FaithKind,
-    Government, Outlook, ScaleClass, SocietyTier, Subsistence,
+    Age, Civilization, CivilizationWorld, CradleKind, Culture, Environment, Faith, Government,
+    Hierarchy, Outlook, ScaleClass, SocietyTier, Subsistence,
 };
 use crate::climate::PlanetaryMode;
 use crate::core::fmt::{thousands, thousands_u64};
@@ -119,7 +120,6 @@ struct ProvinceStats {
     /// Highest river discharge found inside the province, in m³/s.
     flow_max: f32,
     elev_sum_m: f64,
-    elev_max_m: f32,
     /// Pixel sides that touch the open sea / a lake.
     sea_px: u32,
     lake_px: u32,
@@ -264,7 +264,6 @@ pub fn generate_civilizations(
                 s.precip_sum += *precip_grid.get(xi, yi) as f64;
                 s.flow_max = s.flow_max.max(*flow_grid.get(xi, yi));
                 s.elev_sum_m += metres as f64;
-                s.elev_max_m = s.elev_max_m.max(metres);
                 s.sea_px += sea_px;
                 s.lake_px += lake_px;
                 s.pop_seed += density.max(0.0) as f64 * pixel_area as f64;
@@ -1029,6 +1028,10 @@ pub fn generate_civilizations(
     // siblings on a world resemble each other while strangers do not.
     let mut cultures: Vec<Culture> = Vec::with_capacity(skeletons.len());
     let mut faiths: Vec<Faith> = Vec::with_capacity(skeletons.len());
+    // Religion has its own stream, so this rewrite cannot move a cradle or a
+    // population: the dawn's other draws stay exactly where they were.
+    let mut faith_rng = ChaCha8Rng::seed_from_u64(seed ^ FAITH_SALT);
+    let mut faith_contexts: Vec<FaithContext> = Vec::with_capacity(skeletons.len());
     for rank in 0..skeletons.len() {
         let ancestor = family_ancestor[rank];
         let inherited_culture = if ancestor != rank {
@@ -1047,10 +1050,40 @@ pub fn generate_civilizations(
             schemes[rank],
             inherited_culture.as_ref(),
         );
-        let faith = build_faith(&mut rng, &skeletons[rank], inherited_faith.as_ref());
+        let sk = &skeletons[rank];
+        let stats = &sk.seat_stats;
+        let context = FaithContext {
+            environment: sk.environment,
+            cradle_kind: sk.cradle_kind,
+            tier: sk.tier,
+            complexity: sk.complexity,
+            subsistence: schemes[rank].subsistence,
+            outlook: schemes[rank].outlook,
+            government: culture.government,
+            hierarchy: culture.hierarchy,
+            mean_temp_c: stats.temp_mean(),
+            mean_precip: stats.precip_mean(),
+            mean_elevation_m: stats.elev_mean_m(),
+            sea_px: stats.sea_px,
+            lake_px: stats.lake_px,
+            river: stats.flow_max >= min_river_flow,
+            great_river: stats.flow_max >= config.great_river_flow,
+            latitude_deg: sphere::row_latitude_deg(sk.cradle.cy, h),
+        };
+        let faith = match inherited_faith {
+            Some(parent) if faith_rng.random::<f32>() < 0.65 => {
+                inherit_faith(&mut faith_rng, &parent, &context)
+            }
+            _ => generate_faith(&mut faith_rng, &context),
+        };
         cultures.push(culture);
         faiths.push(faith);
+        faith_contexts.push(context);
     }
+
+    // Faiths that share a frontier argue, trade and conquer. The pass reads a
+    // snapshot, so a conversion can cross one frontier this atlas, not three.
+    apply_contact(&mut faith_rng, &mut faiths, &faith_contexts, &adjacency);
 
     // ─── 7. POPULATION ───────────────────────────────────────────────────────
     // A province's population is its own carrying capacity from the census, times
@@ -1083,87 +1116,14 @@ pub fn generate_civilizations(
         populations.push(total);
     }
 
-    // ─── 8. CONTACT ──────────────────────────────────────────────────────────
-    // Two realms are linked when their provinces touch across dry land (a
-    // frontier), when only a strait or a short sea crossing lies between them (a
-    // sea route), or when they are close enough for travellers to carry word of
-    // each other (a rumour). Every other realm rose completely alone.
-    let mut reach: BTreeMap<(u32, u32), f32> = BTreeMap::new();
-    for (rank, sk) in skeletons.iter().enumerate() {
-        let a = rank as u32 + 1;
-        for &p in &sk.provinces {
-            let node = &hierarchy.provinces[p as usize];
-            for &(nb, _) in &node.neighbors {
-                let idx = nb as usize;
-                if idx >= n {
-                    continue;
-                }
-                let other = owner[idx] as u32;
-                if other == 0 || other == a {
-                    continue;
-                }
-                let other_node = &hierarchy.provinces[idx];
-                let px = sphere::wrap_distance_px(
-                    node.center_x,
-                    node.center_y,
-                    other_node.center_x,
-                    other_node.center_y,
-                    w,
-                );
-                let key = (a.min(other), a.max(other));
-                let slot = reach.entry(key).or_insert(px);
-                if px < *slot {
-                    *slot = px;
-                }
-            }
-        }
-    }
-
-    // How many neighbours each realm can reach. The dossier no longer lists them,
-    // but the epoch still prefers a crossroads, so the count is kept and the
-    // identities discarded.
-    let mut contact_counts: Vec<usize> = vec![0; skeletons.len()];
-    for a in 0..skeletons.len() {
-        let mut distances: Vec<f32> = Vec::new();
-        for b in 0..skeletons.len() {
-            if a == b {
-                continue;
-            }
-            let id_a = a as u32 + 1;
-            let id_b = b as u32 + 1;
-            let key = (id_a.min(id_b), id_a.max(id_b));
-            let px = match reach.get(&key) {
-                Some(px) => *px,
-                None => {
-                    let seat_px = distance(&skeletons[a].cradle, &skeletons[b].cradle);
-                    if seat_px > config.rumour_distance_px {
-                        continue;
-                    }
-                    seat_px
-                }
-            };
-            distances.push(px);
-        }
-        distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        distances.truncate(config.contact_limit);
-        contact_counts[a] = distances.len();
-    }
-
-    // ─── 10b. THE EPOCH AND THE DEPTH OF PREHISTORY ───────────────────────────
-    // The world's calendar is reckoned from one place and one year, and both come
-    // out of the seed. The place is a province chosen for the shape a founding
-    // story takes — a crossroads between realms, a lone peak, a lake, an island —
-    // and never a cradle or a throne; the year is a few centuries into the life of
-    // whoever held it, so the place and the date belong to one story. What actually
-    // happened there is left undefined: the atlas only says it mattered.
-    //
-    // The depth of prehistory — how long this world's peoples lived before the
-    // first city — is drawn here too, at the very end, so that every earlier draw
-    // in the stage is untouched and a world generated before this stage existed
-    // still produces the same civilizations. It is a wide, seeded span divided by
-    // the world's own pace, and there is nothing Earth-like about it: a gentle
-    // world may reach its first city in five thousand years and a hard or
-    // tidally-locked one may take a million.
+    // ─── 8. THE DEPTH OF PREHISTORY ───────────────────────────────────────────
+    // The calendar begins at the first city — Year 0 — and everything before it is
+    // prehistory. Its depth is drawn at the very end, so that every earlier draw in
+    // the stage is untouched and a world generated before this stage existed still
+    // produces the same civilizations. It is a wide, seeded span divided by the
+    // world's own pace, and there is nothing Earth-like about it: a gentle world may
+    // reach its first city in five thousand years and a hard or tidally-locked one
+    // may take a million.
     let depth_years = config.species_emergence_years.unwrap_or_else(|| {
         // Log-uniform over five thousand to two million years: the honest
         // distribution for a quantity that spans orders of magnitude.
@@ -1176,39 +1136,20 @@ pub fn generate_civilizations(
         thousands(prehistory_years as f32),
     );
 
-    let epoch_candidates =
-        build_epoch_candidates(&stats, hierarchy, &owner, &contact_counts, &seats);
-    let epoch_site = select_epoch_site(
-        &epoch_candidates,
-        config.epoch_site_min_area_km2,
-        config.epoch_site_candidates,
-        &mut rng,
-    );
-    let epoch = choose_epoch(
-        epoch_site,
-        &epoch_candidates,
-        &owner,
-        config,
-        hierarchy,
-        map_year,
-        &mut rng,
-    );
     let timeline = Timeline {
         prehistory_years,
         atlas_year: map_year,
         age: Age::from_development(frontier as f32),
-        epoch,
     };
-    // Every date the atlas shows is this one shift away from the internal frame.
-    let epoch_offset = timeline.epoch.absolute_year;
 
-    // ─── 11. ASSEMBLE ────────────────────────────────────────────────────────
-    // Every date the atlas ever shows is written in the world's own era, so the
-    // internal frame is converted exactly once, here: a realm's founding and the
-    // map date both become years of the Common Era, negative for BCE. Nothing
-    // above this point ever saw a CE year, and nothing below it sees anything else.
+    // ─── 9. ASSEMBLE ─────────────────────────────────────────────────────────
+    // The internal frame *is* the world's calendar: the first city stands at Year 0
+    // and every date the atlas shows is a plain count from it. No conversion is
+    // applied to a realm's founding or to the map date.
     let tiers_of: Vec<SocietyTier> = skeletons.iter().map(|skeleton| skeleton.tier).collect();
+    let roots_of: Vec<MetaphysicalRoot> = faiths.iter().map(|faith| faith.root).collect();
     let colors = assign_colors(&tiers_of, &adjacency);
+    let religion_colors = assign_religion_colors(&roots_of, &adjacency);
     let mut civilizations: Vec<Civilization> = Vec::with_capacity(skeletons.len());
     for rank in 0..skeletons.len() {
         let sk = &skeletons[rank];
@@ -1216,6 +1157,7 @@ pub fn generate_civilizations(
         civilizations.push(Civilization {
             name: names[rank].clone(),
             color: colors[rank],
+            religion_color: religion_colors[rank],
             tier: sk.tier,
             environment: sk.environment,
             cradle_kind: sk.cradle_kind,
@@ -1233,7 +1175,7 @@ pub fn generate_civilizations(
             // A state carries a founding date; a people carry none, because nobody
             // founded them.
             founding_year: if sk.tier.is_state() {
-                Some(sk.founding_year_internal - epoch_offset)
+                Some(sk.founding_year_internal)
             } else {
                 None
             },
@@ -1252,8 +1194,7 @@ pub fn generate_civilizations(
     let civilized_area_km2: f32 = civilizations.iter().map(|c| c.area_km2).sum();
 
     println!(
-        "✓ {} | atlas date: {} | {} civilized provinces | {} km² | population {}",
-        timeline.epoch_label(),
+        "✓ atlas date: {} | {} civilized provinces | {} km² | population {}",
         timeline.atlas_label(),
         civilized_provinces,
         civilized_area_km2 as u64,
@@ -1262,7 +1203,7 @@ pub fn generate_civilizations(
 
     CivilizationWorld {
         seed,
-        map_year: map_year - epoch_offset,
+        map_year,
         timeline,
         civilizations,
         province_owner: owner,
@@ -1344,78 +1285,6 @@ fn civilization_name(id: u32) -> String {
     format!("Civilization #{id}")
 }
 
-/// Gather every province worth considering as the place a calendar is reckoned
-/// from.
-///
-/// Runs after contacts, because a crossroads is only a crossroads once somebody is
-/// standing on the other side of it. Every field is a measurement the census
-/// already took, so the choice can be audited line by line.
-fn build_epoch_candidates(
-    stats: &[ProvinceStats],
-    hierarchy: &GeopoliticalHierarchy,
-    owner: &[u16],
-    contact_counts: &[usize],
-    seats: &[u32],
-) -> Vec<EpochCandidate> {
-    let mut out = Vec::new();
-    for (i, s) in stats.iter().enumerate() {
-        if !s.present {
-            continue;
-        }
-        let node = &hierarchy.provinces[i];
-        let prov = i as u32;
-
-        // Crossroads: which realms, and how many great regions, meet here.
-        let mut frontier_realm_ids: Vec<u16> = Vec::new();
-        let mut superregions: Vec<u32> = vec![node.superregion_id];
-        for &(nb, _) in &node.neighbors {
-            let nb_idx = nb as usize;
-            let other_owner = owner.get(nb_idx).copied().unwrap_or(0);
-            if other_owner != 0 && !frontier_realm_ids.contains(&other_owner) {
-                frontier_realm_ids.push(other_owner);
-            }
-            if let Some(superregion) = hierarchy
-                .provinces
-                .get(nb_idx)
-                .map(|n| n.superregion_id)
-                .filter(|sr| !superregions.contains(sr))
-            {
-                superregions.push(superregion);
-            }
-        }
-
-        // A story travels with trade: how far could the holder's word carry?
-        let holder = owner.get(i).copied().unwrap_or(0);
-        let realm_contacts = if holder == 0 {
-            0
-        } else {
-            contact_counts
-                .get(holder as usize - 1)
-                .copied()
-                .unwrap_or(0)
-        };
-
-        out.push(EpochCandidate {
-            prov,
-            area_km2: s.area_km2,
-            hab: s.hab_mean(),
-            temp: s.temp_mean(),
-            precip: s.precip_mean(),
-            coastal: s.sea_px > 0,
-            lakeshore: s.lake_px > 0,
-            island: node.anchor_id != node.id,
-            peak_m: s.elev_max_m,
-            mean_m: s.elev_mean_m(),
-            flow_max: s.flow_max,
-            frontier_realms: frontier_realm_ids.len(),
-            group_span: superregions.len(),
-            realm_contacts,
-            is_seat: seats.contains(&prov),
-        });
-    }
-    out
-}
-
 /// The founding years of every cradle after the first, in the world's internal
 /// frame: one bounded draw each, sorted so the roster stays in founding order.
 ///
@@ -1448,58 +1317,6 @@ fn founding_offsets(
     offsets
 }
 
-/// Decide the world's epoch: where the event happened, and when.
-///
-/// The year is placed *after* the map date, not before it. The atlas portrays the
-/// world in its dawn — a few centuries to a couple of millennia before its
-/// calendar's own year zero — so every date it shows is BCE, exactly as a map of our
-/// own 2000 BCE is dated in the years before the Common Era. The epoch stays a
-/// *convention*, not a beginning: as later builds carry the ladder past this horizon,
-/// worlds will begin to stand after the event and read CE.
-///
-/// The place is still chosen for the shape a founding story takes, and is still
-/// never a cradle: the epoch of a real calendar is a crossroads whose story travelled
-/// further than any army could, not the capital of whoever was strongest.
-#[allow(clippy::too_many_arguments)]
-fn choose_epoch(
-    site: Option<u32>,
-    candidates: &[EpochCandidate],
-    owner: &[u16],
-    config: &CivilizationConfig,
-    hierarchy: &GeopoliticalHierarchy,
-    atlas_year: i32,
-    rng: &mut ChaCha8Rng,
-) -> Epoch {
-    let site = site.unwrap_or(0);
-    let site_realm = owner
-        .get(site as usize)
-        .copied()
-        .filter(|&o| o != 0)
-        .map(u32::from);
-
-    // A later convention, so the world it dates stands before it.
-    let (epoch_lo, epoch_hi) = config.epoch_after_atlas_years;
-    let year = atlas_year + rng.random_range(epoch_lo..=epoch_hi);
-
-    let candidate = candidates.iter().find(|c| c.prov == site);
-    let (site_x, site_y) = hierarchy
-        .provinces
-        .get(site as usize)
-        .map_or((0.0, 0.0), |n| (n.center_x, n.center_y));
-    let site_name = candidate
-        .map(place_name)
-        .unwrap_or_else(|| format!("Province #{site}"));
-
-    Epoch {
-        absolute_year: year,
-        site_province: site,
-        site_x,
-        site_y,
-        site_name,
-        site_realm,
-    }
-}
-
 /// Union-find root of an ancestral-stock family, path-compressed.
 fn family_find(parent: &mut Vec<usize>, mut i: usize) -> usize {
     while parent[i] != i {
@@ -1513,10 +1330,8 @@ fn family_find(parent: &mut Vec<usize>, mut i: usize) -> usize {
 
 /// Which realms share a frontier, for the development pass.
 ///
-/// The rich contact pass runs after the dossiers and is far too expensive to
-/// repeat here; this is only the cheap half of it — two realms are adjacent when
-/// one holds a province whose neighbour the other holds. Sorted, so the walk over
-/// it is order-stable.
+/// A realm is adjacent to another when one holds a province whose neighbour the
+/// other holds. Sorted, so the walk over it is order-stable.
 fn frontier_adjacency(owner: &[u16], hierarchy: &GeopoliticalHierarchy) -> BTreeMap<u16, Vec<u16>> {
     let mut adjacency: BTreeMap<u16, Vec<u16>> = BTreeMap::new();
     for (i, node) in hierarchy.provinces.iter().enumerate() {
@@ -1577,7 +1392,46 @@ fn assign_colors(tiers: &[SocietyTier], adjacency: &BTreeMap<u16, Vec<u16>>) -> 
     colors
 }
 
-/// Integrate every *state's* development from the first city to the atlas date.
+/// Give every religion its colour: the metaphysical root carries the hue, the
+/// religion the shade.
+///
+/// The same greedy walk as [`assign_colors`], run inside each root's family: a
+/// religion takes the first shade none of its *same-root* neighbours is already
+/// wearing. Religions of different roots never compete, because their hue
+/// families are already distinct. A frontier between two religions of one kind
+/// therefore never divides two patches of the same shade, while a frontier
+/// between two kinds is drawn between two families at once.
+fn assign_religion_colors(
+    roots: &[MetaphysicalRoot],
+    adjacency: &BTreeMap<u16, Vec<u16>>,
+) -> Vec<[u8; 3]> {
+    let mut chosen = vec![usize::MAX; roots.len()];
+    let mut colors = vec![[0u8; 3]; roots.len()];
+    for (rank, &root) in roots.iter().enumerate() {
+        let mut taken = [false; MetaphysicalRoot::SHADES];
+        if let Some(neighbours) = adjacency.get(&(rank as u16 + 1)) {
+            for &neighbour in neighbours {
+                if neighbour == 0 {
+                    continue;
+                }
+                let other = neighbour as usize - 1;
+                if other == rank || other >= roots.len() || roots[other] != root {
+                    continue;
+                }
+                let shade = chosen[other];
+                if shade < MetaphysicalRoot::SHADES {
+                    taken[shade] = true;
+                }
+            }
+        }
+        let pick = (0..MetaphysicalRoot::SHADES)
+            .find(|&shade| !taken[shade])
+            .unwrap_or(0);
+        chosen[rank] = pick;
+        colors[rank] = root.shade(pick);
+    }
+    colors
+}
 ///
 /// Year zero is the first city and `map_year` is the atlas date, stepped in fixed
 /// [`DEVELOPMENT_STEP_YEARS`] increments. At each step a state grows from its own
@@ -2760,22 +2614,6 @@ const ARTS_POOL: [&str; 10] = [
     "calendar stones",
 ];
 
-/// Observances a visitor would notice, drawn three at a time.
-const FAITH_PRACTICES: [&str; 12] = [
-    "seasonal flood festivals",
-    "offerings of first fruits",
-    "sky-watching for the calendar",
-    "ancestor masks and funeral wealth",
-    "blood offerings at the river ford",
-    "sacred groves left uncut",
-    "sea burials for the drowned",
-    "the mummification of rulers",
-    "a sacred marriage of king and river",
-    "pilgrimage to the high oracle",
-    "sacred beer and communal feasting",
-    "star-named months",
-];
-
 // ─── DOSSIER BUILDERS ────────────────────────────────────────────────────────
 
 /// Read a realm's whole material and social life off the country it was born in.
@@ -2803,6 +2641,18 @@ fn build_culture(
     // rises, a state once it is high — and how it eats and what it values decide
     // what kind of state it is.
     let government = build_government(rng, subsistence, outlook, sk.scale, sk.complexity);
+
+    // Hierarchy: how the society itself is ranked. A kinship society follows
+    // straight from its government; a state's order is a weighted draw among the
+    // state hierarchies, steered by its institutions, economy, temper and reach.
+    let hierarchy = build_hierarchy(
+        rng,
+        government,
+        subsistence,
+        outlook,
+        sk.scale,
+        sk.complexity,
+    );
 
     let architecture = match inherited {
         Some(ancestor) if rng.random::<f32>() < 0.7 => ancestor.architecture,
@@ -2832,6 +2682,7 @@ fn build_culture(
     Culture {
         subsistence,
         government,
+        hierarchy,
         outlook,
         architecture,
         arts,
@@ -3059,179 +2910,211 @@ fn state_options(subsistence: Subsistence) -> &'static [Government] {
     }
 }
 
-/// Pick one government from a weighted list, deterministically.
-fn weighted_government(rng: &mut ChaCha8Rng, options: &[(Government, f32)]) -> Government {
-    let total: f32 = options.iter().map(|(_, weight)| *weight).sum();
-    let mut roll = rng.random::<f32>() * total;
-    for &(government, weight) in options {
-        if roll < weight {
-            return government;
+/// Read a realm's social hierarchy off the same facts that decide its government.
+///
+/// The pre-state forms follow straight from the government: a band is egalitarian,
+/// a tribe is a web of councils and lineages rather than a ladder, and a chiefdom
+/// is already ranked. A state draws among the six state forms, weighted by how it
+/// is governed, how it eats, what it values and how broad it has grown — so the
+/// draw only ever chooses among orders its own facts make plausible.
+fn build_hierarchy(
+    rng: &mut ChaCha8Rng,
+    government: Government,
+    subsistence: Subsistence,
+    outlook: Outlook,
+    scale: ScaleClass,
+    complexity: f32,
+) -> Hierarchy {
+    // ── Kinship societies: the hierarchy is the government. ───────────────────
+    match government {
+        Government::Band => return Hierarchy::Egalitarian,
+        Government::Tribe => {
+            // A tribe is a web of overlapping authorities, but a small or newly
+            // settled one can still be effectively egalitarian.
+            return weighted_hierarchy(
+                rng,
+                &[
+                    (Hierarchy::Heterarchical, 3.0),
+                    (Hierarchy::Egalitarian, 1.0),
+                ],
+            );
         }
-        roll -= weight;
+        Government::Chiefdom => return Hierarchy::RankedKinship,
+        Government::DivineMonarchy
+        | Government::TheocraticRepublic
+        | Government::AristocraticRepublic
+        | Government::PlutocraticRepublic
+        | Government::Oligarchy
+        | Government::Tyranny => {}
     }
-    options
-        .last()
-        .map_or(Government::Oligarchy, |(government, _)| *government)
+
+    // ── States: every state order is possible, but institutions pull hard. ────
+    let mut weights: Vec<(Hierarchy, f32)> = vec![
+        (Hierarchy::WarriorElite, 1.0),
+        (Hierarchy::Oligarchic, 1.0),
+        (Hierarchy::Bureaucratic, 1.0),
+        (Hierarchy::SacredKingship, 1.0),
+        (Hierarchy::Caste, 0.5),
+        (
+            Hierarchy::Imperial,
+            if scale == ScaleClass::Large {
+                0.9
+            } else {
+                0.15
+            },
+        ),
+    ];
+
+    // The regime decides which rank-holders the state is built around.
+    match government {
+        Government::DivineMonarchy => {
+            bias(&mut weights, Hierarchy::SacredKingship, 5.0);
+            bias(&mut weights, Hierarchy::Imperial, 1.6);
+            bias(&mut weights, Hierarchy::Caste, 0.9);
+            bias(&mut weights, Hierarchy::Bureaucratic, 0.6);
+            bias(&mut weights, Hierarchy::Oligarchic, 0.4);
+            bias(&mut weights, Hierarchy::WarriorElite, 0.4);
+        }
+        Government::TheocraticRepublic => {
+            bias(&mut weights, Hierarchy::Bureaucratic, 4.0);
+            bias(&mut weights, Hierarchy::SacredKingship, 2.4);
+            bias(&mut weights, Hierarchy::Caste, 1.5);
+            bias(&mut weights, Hierarchy::Oligarchic, 0.8);
+            bias(&mut weights, Hierarchy::Imperial, 0.6);
+            bias(&mut weights, Hierarchy::WarriorElite, 0.4);
+        }
+        Government::AristocraticRepublic => {
+            bias(&mut weights, Hierarchy::Oligarchic, 4.0);
+            bias(&mut weights, Hierarchy::WarriorElite, 1.8);
+            bias(&mut weights, Hierarchy::Caste, 1.5);
+            bias(&mut weights, Hierarchy::Bureaucratic, 1.0);
+            bias(&mut weights, Hierarchy::Imperial, 0.8);
+            bias(&mut weights, Hierarchy::SacredKingship, 0.5);
+        }
+        Government::PlutocraticRepublic => {
+            bias(&mut weights, Hierarchy::Oligarchic, 4.0);
+            bias(&mut weights, Hierarchy::Bureaucratic, 1.6);
+            bias(&mut weights, Hierarchy::WarriorElite, 1.0);
+            bias(&mut weights, Hierarchy::Caste, 0.8);
+            bias(&mut weights, Hierarchy::Imperial, 0.9);
+            bias(&mut weights, Hierarchy::SacredKingship, 0.4);
+        }
+        Government::Oligarchy => {
+            bias(&mut weights, Hierarchy::Oligarchic, 4.0);
+            bias(&mut weights, Hierarchy::Caste, 1.8);
+            bias(&mut weights, Hierarchy::Bureaucratic, 1.4);
+            bias(&mut weights, Hierarchy::WarriorElite, 1.2);
+            bias(&mut weights, Hierarchy::Imperial, 0.7);
+            bias(&mut weights, Hierarchy::SacredKingship, 0.4);
+        }
+        Government::Tyranny => {
+            bias(&mut weights, Hierarchy::WarriorElite, 4.0);
+            bias(&mut weights, Hierarchy::Imperial, 1.8);
+            bias(&mut weights, Hierarchy::Oligarchic, 1.0);
+            bias(&mut weights, Hierarchy::Bureaucratic, 0.8);
+            bias(&mut weights, Hierarchy::Caste, 0.6);
+            bias(&mut weights, Hierarchy::SacredKingship, 0.5);
+        }
+        Government::Band | Government::Tribe | Government::Chiefdom => {}
+    }
+
+    // A public temper ranks its own kind of person highest.
+    match outlook {
+        Outlook::Cosmopolitan => {
+            bias(&mut weights, Hierarchy::Imperial, 1.8);
+            bias(&mut weights, Hierarchy::Bureaucratic, 1.6);
+            bias(&mut weights, Hierarchy::Oligarchic, 1.1);
+        }
+        Outlook::Mercantile => {
+            bias(&mut weights, Hierarchy::Oligarchic, 2.0);
+            bias(&mut weights, Hierarchy::Bureaucratic, 1.3);
+        }
+        Outlook::Martial => {
+            bias(&mut weights, Hierarchy::WarriorElite, 2.2);
+            bias(&mut weights, Hierarchy::Imperial, 1.6);
+        }
+        Outlook::Scholarly => {
+            bias(&mut weights, Hierarchy::Bureaucratic, 2.0);
+            bias(&mut weights, Hierarchy::SacredKingship, 1.2);
+        }
+        Outlook::Ceremonial => {
+            bias(&mut weights, Hierarchy::SacredKingship, 2.2);
+            bias(&mut weights, Hierarchy::Caste, 2.0);
+        }
+        Outlook::Artistic => {
+            bias(&mut weights, Hierarchy::SacredKingship, 1.4);
+            bias(&mut weights, Hierarchy::Oligarchic, 1.2);
+        }
+        Outlook::Isolationist => {
+            bias(&mut weights, Hierarchy::Caste, 1.8);
+            bias(&mut weights, Hierarchy::Oligarchic, 1.3);
+        }
+    }
+
+    // The economy decides which kind of rank the land and water can support.
+    match subsistence {
+        Subsistence::IrrigatedAgriculture => {
+            bias(&mut weights, Hierarchy::Bureaucratic, 2.2);
+            bias(&mut weights, Hierarchy::SacredKingship, 1.5);
+            bias(&mut weights, Hierarchy::Imperial, 1.4);
+        }
+        Subsistence::DrylandFarming => {
+            bias(&mut weights, Hierarchy::Oligarchic, 1.4);
+            bias(&mut weights, Hierarchy::WarriorElite, 1.3);
+        }
+        Subsistence::Pastoralism => {
+            bias(&mut weights, Hierarchy::WarriorElite, 2.2);
+            bias(&mut weights, Hierarchy::Oligarchic, 1.2);
+        }
+        Subsistence::FishingAndSeafaring => {
+            bias(&mut weights, Hierarchy::Oligarchic, 1.8);
+        }
+        Subsistence::ShiftingCultivation => {
+            bias(&mut weights, Hierarchy::Caste, 2.6);
+        }
+        Subsistence::TerraceFarming => {
+            bias(&mut weights, Hierarchy::Caste, 2.2);
+            bias(&mut weights, Hierarchy::Oligarchic, 1.3);
+        }
+        // A state does not live by foraging; the arm exists so the match is total.
+        Subsistence::Foraging => {}
+    }
+
+    // Reach and development decide whether the order can grow into an empire.
+    match scale {
+        ScaleClass::Large => bias(&mut weights, Hierarchy::Imperial, 2.6),
+        ScaleClass::Medium => bias(&mut weights, Hierarchy::Imperial, 1.2),
+        ScaleClass::Small => bias(&mut weights, Hierarchy::Imperial, 0.15),
+    }
+    if complexity > 0.75 {
+        bias(&mut weights, Hierarchy::Imperial, 1.8);
+        bias(&mut weights, Hierarchy::Bureaucratic, 1.3);
+    } else if complexity < 0.45 {
+        // An early state is held together by force more readily than by office.
+        bias(&mut weights, Hierarchy::WarriorElite, 1.4);
+        bias(&mut weights, Hierarchy::Imperial, 0.5);
+    }
+
+    let hierarchy = weighted_hierarchy(rng, &weights);
+    debug_assert!(hierarchy.is_state());
+    hierarchy
 }
 
-/// Read a realm's faith off the same country its economy came from.
-///
-/// The creed follows the water: river peoples worship the flood, islanders the
-/// tide, highlanders the storm and the stars, forest peoples the earth. A realm
-/// that descends from the head of its family keeps its ancestor's creed more
-/// often than not — the second thing a shared stock transmits after the tongue.
-fn build_faith(rng: &mut ChaCha8Rng, sk: &Skeleton, inherited: Option<&Faith>) -> Faith {
-    let kind = match inherited {
-        Some(ancestor) if rng.random::<f32>() < 0.6 => ancestor.kind,
-        _ => match sk.cradle_kind {
-            CradleKind::RiverFloodplain | CradleKind::RiverDelta | CradleKind::DesertOasis => {
-                if rng.random::<f32>() < 0.75 {
-                    FaithKind::RiverFertility
-                } else {
-                    FaithKind::Solar
-                }
-            }
-            CradleKind::Lacustrine => {
-                if rng.random::<f32>() < 0.6 {
-                    FaithKind::RiverFertility
-                } else {
-                    FaithKind::EarthMother
-                }
-            }
-            CradleKind::CoastalMaritime | CradleKind::IslandShore => {
-                if rng.random::<f32>() < 0.75 {
-                    FaithKind::SeaAndTide
-                } else {
-                    FaithKind::Solar
-                }
-            }
-            CradleKind::HighlandValley => {
-                let pool = [
-                    FaithKind::SkyAndStorm,
-                    FaithKind::StarAndOmen,
-                    FaithKind::Ancestral,
-                ];
-                *pool.choose(rng).unwrap()
-            }
-            CradleKind::SteppeGrassland => {
-                let pool = [
-                    FaithKind::SkyAndStorm,
-                    FaithKind::StarAndOmen,
-                    FaithKind::Solar,
-                ];
-                *pool.choose(rng).unwrap()
-            }
-            CradleKind::SavannaHeartland => {
-                let pool = [FaithKind::Solar, FaithKind::Solar, FaithKind::EarthMother];
-                *pool.choose(rng).unwrap()
-            }
-            CradleKind::WoodlandHeartland => {
-                let pool = [
-                    FaithKind::EarthMother,
-                    FaithKind::SkyAndStorm,
-                    FaithKind::Ancestral,
-                ];
-                *pool.choose(rng).unwrap()
-            }
-            CradleKind::RainforestClearing => {
-                let pool = [
-                    FaithKind::EarthMother,
-                    FaithKind::EarthMother,
-                    FaithKind::Ancestral,
-                ];
-                *pool.choose(rng).unwrap()
-            }
-        },
-    };
-
-    let clergy_pool: &[&'static str] = match kind {
-        FaithKind::RiverFertility => &[
-            "a temple priesthood that measures the flood",
-            "the keepers of the river shrine",
-            "a college of diviners who read the silt",
-        ],
-        FaithKind::Solar => &[
-            "a priesthood of the sun calendar",
-            "the sky-watchers of the temple roof",
-        ],
-        FaithKind::SkyAndStorm => &[
-            "an oracle college in the high passes",
-            "storm-callers who read the clouds",
-        ],
-        FaithKind::Ancestral => &[
-            "the clan elders, who are their own priests",
-            "masked lineage-keepers",
-        ],
-        FaithKind::SeaAndTide => &[
-            "shrine-keepers at the landing place",
-            "tide-readers who bless each hull",
-        ],
-        FaithKind::EarthMother => &[
-            "the harvest priestesses",
-            "village shrine-keepers of the mother",
-        ],
-        FaithKind::StarAndOmen => &[
-            "astronomer-priests on a raised platform",
-            "omen-readers who chart the wandering lights",
-        ],
-    };
-    let clergy = *clergy_pool.choose(rng).unwrap();
-
-    // Observances: the common stock of early religion, weighted towards the three
-    // that this particular creed would care about most.
-    let mut pool: Vec<&'static str> = FAITH_PRACTICES.to_vec();
-    let favoured: &[&'static str] = match kind {
-        FaithKind::RiverFertility => &[
-            "seasonal flood festivals",
-            "a sacred marriage of king and river",
-            "sacred groves left uncut",
-        ],
-        FaithKind::Solar => &[
-            "star-named months",
-            "sky-watching for the calendar",
-            "offerings of first fruits",
-        ],
-        FaithKind::SkyAndStorm => &[
-            "pilgrimage to the high oracle",
-            "sky-watching for the calendar",
-            "offerings of first fruits",
-        ],
-        FaithKind::Ancestral => &[
-            "ancestor masks and funeral wealth",
-            "the mummification of rulers",
-            "sacred beer and communal feasting",
-        ],
-        FaithKind::SeaAndTide => &[
-            "sea burials for the drowned",
-            "blood offerings at the river ford",
-            "sacred beer and communal feasting",
-        ],
-        FaithKind::EarthMother => &[
-            "offerings of first fruits",
-            "sacred groves left uncut",
-            "sacred beer and communal feasting",
-        ],
-        FaithKind::StarAndOmen => &[
-            "star-named months",
-            "sky-watching for the calendar",
-            "ancestor masks and funeral wealth",
-        ],
-    };
-    pool.extend(favoured.iter().copied());
-
-    let mut practices: Vec<&'static str> = Vec::with_capacity(3);
-    while practices.len() < 3 {
-        let practice = *pool.choose(rng).unwrap();
-        if !practices.contains(&practice) {
-            practices.push(practice);
-        }
+/// Multiply one entry's weight in place; a no-op if the entry is absent.
+fn bias(weights: &mut [(Hierarchy, f32)], form: Hierarchy, factor: f32) {
+    if let Some(entry) = weights.iter_mut().find(|(entry, _)| *entry == form) {
+        entry.1 *= factor;
     }
+}
 
-    Faith {
-        kind,
-        clergy,
-        practices,
-    }
+/// Pick one government from a weighted list, deterministically.
+fn weighted_government(rng: &mut ChaCha8Rng, options: &[(Government, f32)]) -> Government {
+    weighted_pick(rng, options, Government::Oligarchy)
+}
+
+/// Pick one social hierarchy from a weighted list, deterministically.
+fn weighted_hierarchy(rng: &mut ChaCha8Rng, options: &[(Hierarchy, f32)]) -> Hierarchy {
+    weighted_pick(rng, options, Hierarchy::Oligarchic)
 }
 
 #[cfg(test)]
@@ -3360,6 +3243,73 @@ mod tests {
         assert_eq!(seen.len(), SocietyTier::SHADES);
     }
 
+    /// Two neighbouring religions of one metaphysical root never wear the same
+    /// shade: the frontier would dissolve into a single fill.
+    #[test]
+    fn neighbouring_religions_of_one_root_never_share_a_shade() {
+        for root in MetaphysicalRoot::ALL {
+            let roots = vec![root; MetaphysicalRoot::SHADES];
+            let adjacency = ring(MetaphysicalRoot::SHADES as u16);
+            let colors = assign_religion_colors(&roots, &adjacency);
+            for rank in 0..MetaphysicalRoot::SHADES as u16 {
+                for &neighbour in &adjacency[&(rank + 1)] {
+                    assert_ne!(
+                        colors[rank as usize],
+                        colors[neighbour as usize - 1],
+                        "{} repeated a shade across a frontier",
+                        root.label()
+                    );
+                }
+            }
+            // The same world always paints the same map.
+            assert_eq!(colors, assign_religion_colors(&roots, &adjacency));
+        }
+    }
+
+    /// A root's whole family is available even when every religion of that root
+    /// touches every other: the greedy walk never runs out of shades.
+    #[test]
+    fn a_root_shade_is_always_free() {
+        let n = MetaphysicalRoot::SHADES as u16;
+        let mut adjacency: BTreeMap<u16, Vec<u16>> = BTreeMap::new();
+        for rank in 0..n {
+            for other in 0..n {
+                if other != rank {
+                    adjacency.entry(rank + 1).or_default().push(other + 1);
+                }
+            }
+        }
+        let roots = vec![MetaphysicalRoot::Polytheism; MetaphysicalRoot::SHADES];
+        let colors = assign_religion_colors(&roots, &adjacency);
+        let mut seen = colors.clone();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), MetaphysicalRoot::SHADES);
+    }
+
+    /// Neighbours of different roots are not forced out of their own families:
+    /// a religion of one root keeps its natural shade even beside another kind.
+    #[test]
+    fn roots_keep_their_own_shades_beside_other_roots() {
+        let roots = [
+            MetaphysicalRoot::Monotheism,
+            MetaphysicalRoot::Dualism,
+            MetaphysicalRoot::Monotheism,
+        ];
+        let adjacency = BTreeMap::from([
+            (1u16, vec![2u16, 3u16]),
+            (2u16, vec![1u16, 3u16]),
+            (3u16, vec![1u16, 2u16]),
+        ]);
+        let colors = assign_religion_colors(&roots, &adjacency);
+        assert_ne!(
+            colors[0], colors[2],
+            "two neighbouring monotheisms shared a shade"
+        );
+        assert_eq!(colors[0], MetaphysicalRoot::Monotheism.shade(0));
+        assert_eq!(colors[1], MetaphysicalRoot::Dualism.shade(0));
+    }
+
     /// Every tier's development sits in the band of the government axis its own
     /// institutions belong to: a band of foragers is never a state, and a ranked
     /// chiefdom never grows an apparatus.
@@ -3416,6 +3366,147 @@ mod tests {
                 Outlook::Mercantile,
                 ScaleClass::Small,
                 0.8,
+            )
+        };
+        assert_eq!(draw(99), draw(99));
+    }
+
+    /// A kinship society's hierarchy follows its government: a band is
+    /// egalitarian, a chiefdom is ranked, and a tribe lives between the two.
+    #[test]
+    fn a_kinship_society_takes_its_own_hierarchy() {
+        let mut rng = ChaCha8Rng::seed_from_u64(13);
+        assert_eq!(
+            build_hierarchy(
+                &mut rng,
+                Government::Band,
+                Subsistence::Foraging,
+                Outlook::Isolationist,
+                ScaleClass::Small,
+                0.02,
+            ),
+            Hierarchy::Egalitarian
+        );
+        assert_eq!(
+            build_hierarchy(
+                &mut rng,
+                Government::Chiefdom,
+                Subsistence::DrylandFarming,
+                Outlook::Ceremonial,
+                ScaleClass::Small,
+                0.20,
+            ),
+            Hierarchy::RankedKinship
+        );
+        let mut saw_heterarchy = false;
+        for _ in 0..64 {
+            let hierarchy = build_hierarchy(
+                &mut rng,
+                Government::Tribe,
+                Subsistence::DrylandFarming,
+                Outlook::Ceremonial,
+                ScaleClass::Small,
+                0.10,
+            );
+            assert!(matches!(
+                hierarchy,
+                Hierarchy::Heterarchical | Hierarchy::Egalitarian
+            ));
+            saw_heterarchy |= hierarchy == Hierarchy::Heterarchical;
+        }
+        assert!(saw_heterarchy, "a tribe never drew a heterarchical order");
+    }
+
+    /// The dossier's vocabulary is fixed: exactly these nine terms, spelled so.
+    #[test]
+    fn hierarchy_labels_are_the_nine_terms() {
+        for (form, label) in [
+            (Hierarchy::Egalitarian, "Egalitarian"),
+            (Hierarchy::Heterarchical, "Heterarchical"),
+            (Hierarchy::RankedKinship, "Ranked Kinship"),
+            (Hierarchy::WarriorElite, "Warrior-Elite"),
+            (Hierarchy::Oligarchic, "Oligarchic"),
+            (Hierarchy::Bureaucratic, "Bureaucratic"),
+            (Hierarchy::SacredKingship, "Sacred Kingship"),
+            (Hierarchy::Caste, "Caste"),
+            (Hierarchy::Imperial, "Imperial"),
+        ] {
+            assert_eq!(form.label(), label);
+        }
+    }
+
+    /// Every state order is reachable, and no state ever claims a kinship form.
+    #[test]
+    fn every_state_hierarchy_is_reachable() {
+        let mut rng = ChaCha8Rng::seed_from_u64(17);
+        let mut seen = std::collections::BTreeSet::new();
+        for government in [
+            Government::DivineMonarchy,
+            Government::TheocraticRepublic,
+            Government::AristocraticRepublic,
+            Government::PlutocraticRepublic,
+            Government::Oligarchy,
+            Government::Tyranny,
+        ] {
+            for subsistence in ECONOMIES {
+                for outlook in [
+                    Outlook::Cosmopolitan,
+                    Outlook::Mercantile,
+                    Outlook::Martial,
+                    Outlook::Scholarly,
+                    Outlook::Ceremonial,
+                    Outlook::Artistic,
+                    Outlook::Isolationist,
+                ] {
+                    for scale in [ScaleClass::Small, ScaleClass::Medium, ScaleClass::Large] {
+                        for complexity in [0.35, 0.60, 0.90] {
+                            let hierarchy = build_hierarchy(
+                                &mut rng,
+                                government,
+                                subsistence,
+                                outlook,
+                                scale,
+                                complexity,
+                            );
+                            assert!(
+                                hierarchy.is_state(),
+                                "{government:?} produced the kinship hierarchy {}",
+                                hierarchy.label()
+                            );
+                            seen.insert(hierarchy.label());
+                        }
+                    }
+                }
+            }
+        }
+        for form in [
+            Hierarchy::WarriorElite,
+            Hierarchy::Oligarchic,
+            Hierarchy::Bureaucratic,
+            Hierarchy::SacredKingship,
+            Hierarchy::Caste,
+            Hierarchy::Imperial,
+        ] {
+            assert!(
+                seen.contains(form.label()),
+                "no state ever became {}",
+                form.label()
+            );
+        }
+    }
+
+    /// The same seed draws the same hierarchy — the dossier stays a pure function.
+    #[test]
+    fn hierarchy_is_deterministic() {
+        let draw = |seed: u64| {
+            let mut rng = ChaCha8Rng::seed_from_u64(seed);
+            build_hierarchy(
+                &mut rng,
+                Government::DivineMonarchy,
+                Subsistence::IrrigatedAgriculture,
+                Outlook::Ceremonial,
+                ScaleClass::Large,
+                0.85,
             )
         };
         assert_eq!(draw(99), draw(99));

@@ -1,5 +1,5 @@
-use crate::core::progress::Progress;
 use crate::core::Grid;
+use crate::core::progress::Progress;
 use crate::export::live;
 use crate::terrain::config::WorldConfig;
 

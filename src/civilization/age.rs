@@ -187,8 +187,12 @@ impl Age {
             Age::Refinement => {
                 "alloys are mastered and worked to a finish, and the smith's craft becomes an art of the state"
             }
-            Age::Architecture => "monumental building: the age of the great works in stone and brick",
-            Age::AutomatedMills => "mills and gearing take the grinding of grain from wind and water",
+            Age::Architecture => {
+                "monumental building: the age of the great works in stone and brick"
+            }
+            Age::AutomatedMills => {
+                "mills and gearing take the grinding of grain from wind and water"
+            }
             Age::OceanicCurrents => "deep-water sailing turns the world's oceans into roads",
             Age::Industrial => "coal, steam and the factory remake how everything is made",
             Age::Information => "computation and instant communication bind the world together",

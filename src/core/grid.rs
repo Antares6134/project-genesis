@@ -141,8 +141,12 @@ impl Grid<f32> {
         let mut max_val = f32::MIN;
 
         for &val in &self.data {
-            if val < min_val { min_val = val; }
-            if val > max_val { max_val = val; }
+            if val < min_val {
+                min_val = val;
+            }
+            if val > max_val {
+                max_val = val;
+            }
         }
 
         let range = max_val - min_val;

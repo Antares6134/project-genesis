@@ -89,8 +89,21 @@ mod tests {
 
     #[test]
     fn conversions_round_trip_on_both_sides_of_the_water_line() {
-        for metres in [-11_000.0f32, -4_150.0, -200.0, -1.0, 0.0, 1.0, 250.0, 6_975.0, 9_000.0] {
-            assert!((to_metres(from_metres(metres)) - metres).abs() < 0.5, "failed at {metres}");
+        for metres in [
+            -11_000.0f32,
+            -4_150.0,
+            -200.0,
+            -1.0,
+            0.0,
+            1.0,
+            250.0,
+            6_975.0,
+            9_000.0,
+        ] {
+            assert!(
+                (to_metres(from_metres(metres)) - metres).abs() < 0.5,
+                "failed at {metres}"
+            );
         }
     }
 

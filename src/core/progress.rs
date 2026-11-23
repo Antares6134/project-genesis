@@ -1,7 +1,7 @@
 //! Progress reporting: what a world looks like while it is still being made.
 //!
 //! The pipeline used to run to completion before a window ever opened, so a
-//! stage had no one to talk to. Now the atlas opens first and the eight acts of
+//! stage had no one to talk to. Now the atlas opens first and the seven acts of
 //! creation are run from its panel, which means a stage has to be able to say
 //! two things *while it runs*: how far along it is, and what the world currently
 //! looks like.
@@ -79,8 +79,17 @@ impl std::fmt::Debug for ProgressEvent {
         match self {
             Self::SubStep { label, total } => write!(f, "SubStep({label}, total {total})"),
             Self::Tick { done, total } => write!(f, "Tick({done}/{total})"),
-            Self::Preview { label, width, height, rgba } => {
-                write!(f, "Preview({label}, {width}x{height}, {} KiB)", rgba.len() / 1024)
+            Self::Preview {
+                label,
+                width,
+                height,
+                rgba,
+            } => {
+                write!(
+                    f,
+                    "Preview({label}, {width}x{height}, {} KiB)",
+                    rgba.len() / 1024
+                )
             }
         }
     }
@@ -173,12 +182,18 @@ pub struct Progress<'a> {
 impl<'a> Progress<'a> {
     /// Nobody is watching: the headless pipeline, the exporters, the tests.
     pub const fn silent() -> Self {
-        Self { sink: None, map: None }
+        Self {
+            sink: None,
+            map: None,
+        }
     }
 
     /// Report to a watching atlas.
     pub fn watching(sink: Arc<Sink>) -> Self {
-        Self { sink: Some(sink), map: None }
+        Self {
+            sink: Some(sink),
+            map: None,
+        }
     }
 
     /// Register the grids this act's previews are painted from.
@@ -199,10 +214,7 @@ impl<'a> Progress<'a> {
     pub fn sub_step(&self, label: &'static str, total: u64) {
         let Some(sink) = &self.sink else { return };
         sink.total.store(total, Ordering::Relaxed);
-        *sink
-            .last_tick
-            .lock()
-            .expect("progress tick clock") = Instant::now() - TICK_INTERVAL * 2;
+        *sink.last_tick.lock().expect("progress tick clock") = Instant::now() - TICK_INTERVAL * 2;
         sink.send(ProgressEvent::SubStep { label, total });
     }
 
@@ -235,7 +247,12 @@ impl<'a> Progress<'a> {
             return;
         }
         let (width, height, rgba) = live::paint(source, paint);
-        sink.send(ProgressEvent::Preview { label, width, height, rgba });
+        sink.send(ProgressEvent::Preview {
+            label,
+            width,
+            height,
+            rgba,
+        });
     }
 
     /// Paint the registered land provinces shaded by a clustering pass.
@@ -274,7 +291,7 @@ impl<'a> Progress<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc::{channel, Receiver};
+    use std::sync::mpsc::{Receiver, channel};
 
     fn watching() -> (Progress<'static>, Receiver<ProgressEvent>) {
         let (tx, rx) = channel();
@@ -317,15 +334,33 @@ mod tests {
 
         let events = drain(&rx);
         assert!(
-            matches!(events.first(), Some(ProgressEvent::SubStep { label: "Valley carving", total: 100 })
-                | Some(ProgressEvent::SubStep { label: "Valley carving", .. })),
+            matches!(
+                events.first(),
+                Some(ProgressEvent::SubStep {
+                    label: "Valley carving",
+                    total: 100
+                }) | Some(ProgressEvent::SubStep {
+                    label: "Valley carving",
+                    ..
+                })
+            ),
             "the sub-step is announced first"
         );
         assert!(
-            matches!(events.get(1), Some(ProgressEvent::Tick { done: 1, total: 100 })),
+            matches!(
+                events.get(1),
+                Some(ProgressEvent::Tick {
+                    done: 1,
+                    total: 100
+                })
+            ),
             "the first tick of the sub-step arrives, with the sub-step's own scale"
         );
-        assert_eq!(events.len(), 2, "the rest of the burst is coalesced: {events:?}");
+        assert_eq!(
+            events.len(),
+            2,
+            "the rest of the burst is coalesced: {events:?}"
+        );
     }
 
     /// A picture is the most expensive thing a stage can send, so it is the most
@@ -341,7 +376,12 @@ mod tests {
         let events = drain(&rx);
         assert_eq!(events.len(), 1, "a burst of previews becomes one picture");
         match &events[0] {
-            ProgressEvent::Preview { width, height, rgba, .. } => {
+            ProgressEvent::Preview {
+                width,
+                height,
+                rgba,
+                ..
+            } => {
                 assert_eq!(*width, crate::export::live::PREVIEW_WIDTH.min(8));
                 assert_eq!(*height, crate::export::live::PREVIEW_WIDTH.min(8));
                 assert_eq!(rgba.len(), width * height * 4, "RGBA, one pixel at a time");

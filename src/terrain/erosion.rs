@@ -1,5 +1,5 @@
-use crate::core::progress::Progress;
 use crate::core::Grid;
+use crate::core::progress::Progress;
 use crate::export::live;
 use crate::terrain::config::WorldConfig;
 use rand::prelude::*;
@@ -102,8 +102,12 @@ pub fn simulate_hydraulic_erosion(
             py += dir_y;
 
             // Cylindrical wrapping on X, pole check on Y
-            if px < 0.0 { px += w; }
-            if px >= w { px -= w; }
+            if px < 0.0 {
+                px += w;
+            }
+            if px >= w {
+                px -= w;
+            }
             if py < 1.0 || py >= h - 2.0 {
                 break;
             }
@@ -114,8 +118,9 @@ pub fn simulate_hydraulic_erosion(
 
             // Calculate sediment carrying capacity
             // Faster water on steeper slopes carries dramatically more soil
-            let capacity = ((-height_diff).max(0.0) * speed * water * config.sediment_capacity_factor)
-                .max(config.min_sediment_capacity);
+            let capacity =
+                ((-height_diff).max(0.0) * speed * water * config.sediment_capacity_factor)
+                    .max(config.min_sediment_capacity);
 
             if sediment > capacity || height_diff > 0.0 {
                 // Moving uphill or carrying too much sediment: DEPOSIT

@@ -15,9 +15,9 @@ pub struct ClimateConfig {
     pub lapse_rate: f32,   // Temperature drop per kilometre of altitude (°C/km), e.g. 6.5
 
     // Moisture & Precipitation
-    pub evaporation_rate: f32,    // How fast oceans vaporize moisture into winds
-    pub rain_shadow_decay: f32,   // How quickly clouds deplete over mountains
-    pub wind_passes: usize,       // Steps for moisture advection across the globe
+    pub evaporation_rate: f32, // How fast oceans vaporize moisture into winds
+    pub rain_shadow_decay: f32, // How quickly clouds deplete over mountains
+    pub wind_passes: usize,    // Steps for moisture advection across the globe
 
     // ── The precipitation model ───────────────────────────────────────────────
     /// Baseline annual precipitation before latitude belts, rain shadows and
@@ -41,7 +41,9 @@ pub struct ClimateConfig {
 impl Default for ClimateConfig {
     fn default() -> Self {
         Self {
-            mode: PlanetaryMode::RotatingStandard { axial_tilt_deg: 23.5 },
+            mode: PlanetaryMode::RotatingStandard {
+                axial_tilt_deg: 23.5,
+            },
             equator_temp: 32.0,
             pole_temp: -28.0,
             lapse_rate: 6.5,

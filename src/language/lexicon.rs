@@ -1,4 +1,4 @@
-//! The semantic core of a language: forty roots, and the rules that join them.
+//! The semantic core of a language: a hundred roots, and the rules that join them.
 //!
 //! A language is not a list of names. It is a small set of meanings — river,
 //! mountain, people, great, first — each of which has a *root*, and a grammar for
@@ -19,7 +19,13 @@ use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-/// The forty meanings every proto-lexicon carries.
+/// The hundred meanings every proto-lexicon carries.
+///
+/// The first forty are the land, the body and the directions; the additions
+/// cover the sky, the sacred and the abstract, so a faith, a deity and an
+/// emblem can be named from the same roots as a river or a realm. Nothing is ever
+/// appended before the fortieth entry: a root's form is generated from its
+/// index, and keeping the core prefix stable keeps older worlds' roots stable.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 pub enum Concept {
     River,
@@ -62,10 +68,71 @@ pub enum Concept {
     East,
     West,
     Middle,
+    // ─── The hundred: sky, living world, society, sacred, relation ───────────
+    Moon,
+    Star,
+    Storm,
+    Night,
+    Dawn,
+    Beast,
+    Serpent,
+    Eye,
+    Blood,
+    Ash,
+    Salt,
+    Island,
+    Wave,
+    Harvest,
+    Hunt,
+    Road,
+    Craft,
+    Crown,
+    Law,
+    Wisdom,
+    Healing,
+    Song,
+    Oath,
+    Path,
+    Order,
+    Deity,
+    Lord,
+    Lady,
+    Mother,
+    Father,
+    Beyond,
+    Fate,
+    Chaos,
+    Harmony,
+    Wheel,
+    Ruin,
+    Truth,
+    Mystery,
+    Soul,
+    Spirit,
+    Dream,
+    Vision,
+    Blessing,
+    Curse,
+    Purity,
+    Sin,
+    Rite,
+    Offering,
+    Sacrifice,
+    Prayer,
+    Temple,
+    Shrine,
+    Priest,
+    Prophet,
+    Hero,
+    Void,
+    One,
+    Many,
+    Twin,
+    All,
 }
 
 impl Concept {
-    pub const CORE: [Concept; 40] = [
+    pub const CORE: [Concept; 100] = [
         Concept::River,
         Concept::Sea,
         Concept::Mountain,
@@ -106,6 +173,66 @@ impl Concept {
         Concept::East,
         Concept::West,
         Concept::Middle,
+        Concept::Moon,
+        Concept::Star,
+        Concept::Storm,
+        Concept::Night,
+        Concept::Dawn,
+        Concept::Beast,
+        Concept::Serpent,
+        Concept::Eye,
+        Concept::Blood,
+        Concept::Ash,
+        Concept::Salt,
+        Concept::Island,
+        Concept::Wave,
+        Concept::Harvest,
+        Concept::Hunt,
+        Concept::Road,
+        Concept::Craft,
+        Concept::Crown,
+        Concept::Law,
+        Concept::Wisdom,
+        Concept::Healing,
+        Concept::Song,
+        Concept::Oath,
+        Concept::Path,
+        Concept::Order,
+        Concept::Deity,
+        Concept::Lord,
+        Concept::Lady,
+        Concept::Mother,
+        Concept::Father,
+        Concept::Beyond,
+        Concept::Fate,
+        Concept::Chaos,
+        Concept::Harmony,
+        Concept::Wheel,
+        Concept::Ruin,
+        Concept::Truth,
+        Concept::Mystery,
+        Concept::Soul,
+        Concept::Spirit,
+        Concept::Dream,
+        Concept::Vision,
+        Concept::Blessing,
+        Concept::Curse,
+        Concept::Purity,
+        Concept::Sin,
+        Concept::Rite,
+        Concept::Offering,
+        Concept::Sacrifice,
+        Concept::Prayer,
+        Concept::Temple,
+        Concept::Shrine,
+        Concept::Priest,
+        Concept::Prophet,
+        Concept::Hero,
+        Concept::Void,
+        Concept::One,
+        Concept::Many,
+        Concept::Twin,
+        Concept::All,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -150,6 +277,66 @@ impl Concept {
             Concept::East => "east",
             Concept::West => "west",
             Concept::Middle => "middle",
+            Concept::Moon => "moon",
+            Concept::Star => "star",
+            Concept::Storm => "storm",
+            Concept::Night => "night",
+            Concept::Dawn => "dawn",
+            Concept::Beast => "beast",
+            Concept::Serpent => "serpent",
+            Concept::Eye => "eye",
+            Concept::Blood => "blood",
+            Concept::Ash => "ash",
+            Concept::Salt => "salt",
+            Concept::Island => "island",
+            Concept::Wave => "wave",
+            Concept::Harvest => "harvest",
+            Concept::Hunt => "hunt",
+            Concept::Road => "road",
+            Concept::Craft => "craft",
+            Concept::Crown => "crown",
+            Concept::Law => "law",
+            Concept::Wisdom => "wisdom",
+            Concept::Healing => "healing",
+            Concept::Song => "song",
+            Concept::Oath => "oath",
+            Concept::Path => "path",
+            Concept::Order => "order",
+            Concept::Deity => "deity",
+            Concept::Lord => "lord",
+            Concept::Lady => "lady",
+            Concept::Mother => "mother",
+            Concept::Father => "father",
+            Concept::Beyond => "beyond",
+            Concept::Fate => "fate",
+            Concept::Chaos => "chaos",
+            Concept::Harmony => "harmony",
+            Concept::Wheel => "wheel",
+            Concept::Ruin => "ruin",
+            Concept::Truth => "truth",
+            Concept::Mystery => "mystery",
+            Concept::Soul => "soul",
+            Concept::Spirit => "spirit",
+            Concept::Dream => "dream",
+            Concept::Vision => "vision",
+            Concept::Blessing => "blessing",
+            Concept::Curse => "curse",
+            Concept::Purity => "purity",
+            Concept::Sin => "sin",
+            Concept::Rite => "rite",
+            Concept::Offering => "offering",
+            Concept::Sacrifice => "sacrifice",
+            Concept::Prayer => "prayer",
+            Concept::Temple => "temple",
+            Concept::Shrine => "shrine",
+            Concept::Priest => "priest",
+            Concept::Prophet => "prophet",
+            Concept::Hero => "hero",
+            Concept::Void => "void",
+            Concept::One => "one",
+            Concept::Many => "many",
+            Concept::Twin => "twin",
+            Concept::All => "all",
         }
     }
 
@@ -188,6 +375,38 @@ pub enum MorphemeOrder {
     HeadInitial,
 }
 
+/// How a family prefers to join and close a name.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum NamingStyle {
+    Plain,
+    Genitive,
+    Epenthetic,
+    Augmentative,
+    Templatic,
+}
+
+impl NamingStyle {
+    pub fn from_seed(seed: u64) -> Self {
+        match seed % 5 {
+            0 => NamingStyle::Plain,
+            1 => NamingStyle::Genitive,
+            2 => NamingStyle::Epenthetic,
+            3 => NamingStyle::Augmentative,
+            _ => NamingStyle::Templatic,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            NamingStyle::Plain => "plain compounds",
+            NamingStyle::Genitive => "genitive compounds",
+            NamingStyle::Epenthetic => "epenthetic compounds",
+            NamingStyle::Augmentative => "augmentative compounds",
+            NamingStyle::Templatic => "templatic compounds",
+        }
+    }
+}
+
 /// What joins two roots when their sounds collide.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum BridgeRule {
@@ -197,11 +416,12 @@ pub enum BridgeRule {
     Diminutive,
 }
 
-/// The forty-root lexicon of one language.
+/// The hundred-root lexicon of one language.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Lexicon {
     pub roots: Vec<Root>,
     pub order: MorphemeOrder,
+    pub style: NamingStyle,
     pub genitive_suffix: Option<String>,
     pub plural_suffix: Option<String>,
     pub diminutive_suffix: Option<String>,
@@ -236,20 +456,18 @@ impl Lexicon {
             let mut syllables = dna.word(&mut rng, 1 + (index % max_syllables));
             let mut form = dna.render(&syllables);
             let mut tries = 0;
-            while used.contains(&form) && tries < 12 {
+            while used.contains(&form) && tries < 32 {
                 tries += 1;
                 syllables = dna.word(&mut rng, 1 + (tries % max_syllables));
                 form = dna.render(&syllables);
             }
-            if used.contains(&form) {
-                form.push(
-                    dna.rules
-                        .epenthetic_vowel
-                        .symbol()
-                        .chars()
-                        .next()
-                        .unwrap_or('a'),
-                );
+            // A hundred roots leave more room for a collision than forty did. The
+            // fallback stays phonetic: an epenthetic vowel, repeated until the
+            // form is unique. No numeral ever enters a root.
+            let mut repairs = 0;
+            while used.contains(&form) && repairs < 64 && !dna.vowels.is_empty() {
+                form.push_str(dna.vowels[repairs % dna.vowels.len()].symbol());
+                repairs += 1;
             }
             used.insert(form.clone());
             roots.push(Root {
@@ -262,6 +480,7 @@ impl Lexicon {
         Self {
             roots,
             order,
+            style: NamingStyle::from_seed(dna.seed),
             genitive_suffix,
             plural_suffix,
             diminutive_suffix,
@@ -481,6 +700,26 @@ fn transform(form: &str, law: SoundLaw) -> String {
                 .replace("au", "ou")
                 .replace("ia", "ie");
         }
+        SoundLaw::Rhotacism => {
+            out = out.replace('s', "r").replace('z', "r");
+        }
+        SoundLaw::Debuccalization => {
+            out = out.replace('p', "h").replace('t', "h").replace('k', "h");
+        }
+        SoundLaw::VowelHarmony => {
+            out = out
+                .replace("ea", "ee")
+                .replace("oa", "oo")
+                .replace("ua", "uu");
+        }
+        SoundLaw::Monophthongization => {
+            out = out
+                .replace("ae", "e")
+                .replace("ai", "e")
+                .replace("au", "o")
+                .replace("ei", "i")
+                .replace("ou", "u");
+        }
     }
     if out.is_empty() {
         form.to_string()
@@ -492,7 +731,7 @@ fn transform(form: &str, law: SoundLaw) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::language::phonology::SoundArchetype;
+    use crate::language::phonology::{SoundArchetype, SoundLaw};
 
     fn lexicon(archetype: SoundArchetype) -> Lexicon {
         let dna = PhonologyDna::build(archetype, 4_242);
@@ -501,6 +740,7 @@ mod tests {
 
     #[test]
     fn every_concept_has_a_root_and_no_two_roots_collide() {
+        assert_eq!(Concept::CORE.len(), 100, "the lexicon core was re-sized");
         for archetype in SoundArchetype::ALL {
             let lex = lexicon(archetype);
             assert_eq!(lex.roots.len(), Concept::CORE.len());
@@ -545,6 +785,20 @@ mod tests {
         match lex.order {
             MorphemeOrder::HeadFinal => assert_eq!(compound, lex.join(river, people)),
             MorphemeOrder::HeadInitial => assert_eq!(compound, lex.join(people, river)),
+        }
+    }
+
+    #[test]
+    fn every_sound_law_leaves_a_usable_lexicon() {
+        for law in SoundLaw::ALL {
+            let mut lex = lexicon(SoundArchetype::GutturalArid);
+            let before: Vec<String> = lex.roots.iter().map(|root| root.form.clone()).collect();
+            lex.apply_law(law);
+            assert!(
+                lex.roots.iter().all(|root| !root.form.is_empty()),
+                "{law:?}"
+            );
+            assert_eq!(lex.roots.len(), before.len(), "{law:?}");
         }
     }
 

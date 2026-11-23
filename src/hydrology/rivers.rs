@@ -31,7 +31,10 @@ pub fn extract_rivers_and_basins(
                 if water >= config.min_river_flow {
                     is_river.set(x as isize, y as isize, true);
                     // River width scales with square root of flow volume
-                    let normalized_width = ((water - config.min_river_flow) / config.major_river_flow).sqrt().clamp(0.2, 3.5);
+                    let normalized_width = ((water - config.min_river_flow)
+                        / config.major_river_flow)
+                        .sqrt()
+                        .clamp(0.2, 3.5);
                     river_width.set(x as isize, y as isize, normalized_width);
                 }
             }
@@ -46,7 +49,9 @@ pub fn extract_rivers_and_basins(
         for x in 0..w {
             let elev = *filled_heights.get(x as isize, y as isize);
             if elev > sea_level {
-                if let FlowDir::Target(tx, ty) = *flow_res.flow_direction.get(x as isize, y as isize) {
+                if let FlowDir::Target(tx, ty) =
+                    *flow_res.flow_direction.get(x as isize, y as isize)
+                {
                     if *filled_heights.get(tx, ty) <= sea_level {
                         // This land tile directly pours into the ocean!
                         basin_id.set(x as isize, y as isize, current_basin);

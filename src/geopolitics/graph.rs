@@ -3,28 +3,28 @@ use crate::geopolitics::hierarchy::ProvinceNode;
 use std::collections::HashMap;
 
 pub struct ProvinceAccumulator {
-    pub count:     usize,
+    pub count: usize,
     pub sum_cos_x: f64,
     pub sum_sin_x: f64,
-    pub sum_y:     f64,
+    pub sum_y: f64,
 }
 
 pub struct ExtractedGraph {
     pub provinces: Vec<ProvinceNode>,
-    pub max_id:    u32,
+    pub max_id: u32,
 }
 
 // ─── Disjoint-Set Union (path-compressed with rank) ─────────────────────────
 struct DisjointSet {
     parent: Vec<usize>,
-    rank:   Vec<u8>,
+    rank: Vec<u8>,
 }
 
 impl DisjointSet {
     fn new(size: usize) -> Self {
         Self {
             parent: (0..size).collect(),
-            rank:   vec![0; size],
+            rank: vec![0; size],
         }
     }
 
@@ -39,13 +39,19 @@ impl DisjointSet {
     fn union(&mut self, i: usize, j: usize) {
         let ri = self.find(i);
         let rj = self.find(j);
-        if ri == rj { return; }
+        if ri == rj {
+            return;
+        }
         match self.rank[ri].cmp(&self.rank[rj]) {
-            std::cmp::Ordering::Less    => { self.parent[ri] = rj; }
-            std::cmp::Ordering::Greater => { self.parent[rj] = ri; }
-            std::cmp::Ordering::Equal   => {
+            std::cmp::Ordering::Less => {
+                self.parent[ri] = rj;
+            }
+            std::cmp::Ordering::Greater => {
                 self.parent[rj] = ri;
-                self.rank[ri]  += 1;
+            }
+            std::cmp::Ordering::Equal => {
+                self.parent[rj] = ri;
+                self.rank[ri] += 1;
             }
         }
     }
@@ -54,7 +60,9 @@ impl DisjointSet {
 /// Spherical wrap-around distance on the X axis.
 fn wrap_dist_sq(x1: f32, y1: f32, x2: f32, y2: f32, w: f32) -> f32 {
     let mut dx = (x1 - x2).abs();
-    if dx > w * 0.5 { dx = w - dx; }
+    if dx > w * 0.5 {
+        dx = w - dx;
+    }
     let dy = y1 - y2;
     dx * dx + dy * dy
 }
@@ -71,9 +79,9 @@ fn wrap_dist_sq(x1: f32, y1: f32, x2: f32, y2: f32, w: f32) -> f32 {
 /// 3. Each island identifies its Anchor Coast (the mainland coastal province with the absolute minimum distance).
 pub fn extract_province_graph(
     province_grid: &Grid<u32>,
-    heightmap:     &Grid<f32>,
-    is_lake:       &Grid<bool>,
-    sea_level:     f32,
+    heightmap: &Grid<f32>,
+    is_lake: &Grid<bool>,
+    sea_level: f32,
     max_continents: usize,
 ) -> ExtractedGraph {
     let w = province_grid.width;
@@ -83,32 +91,41 @@ pub fn extract_province_graph(
     // ── Find maximum province ID ──────────────────────────────────────────────
     let mut max_id = 0u32;
     for &id in province_grid.raw_slice() {
-        if id > max_id { max_id = id; }
+        if id > max_id {
+            max_id = id;
+        }
     }
 
     let n = max_id as usize;
 
     // ── Accumulators for province centers & pixel counts ─────────────────────
-    let mut accs: Vec<ProvinceAccumulator> = (0..=n).map(|_| ProvinceAccumulator {
-        count: 0, sum_cos_x: 0.0, sum_sin_x: 0.0, sum_y: 0.0,
-    }).collect();
+    let mut accs: Vec<ProvinceAccumulator> = (0..=n)
+        .map(|_| ProvinceAccumulator {
+            count: 0,
+            sum_cos_x: 0.0,
+            sum_sin_x: 0.0,
+            sum_y: 0.0,
+        })
+        .collect();
 
     for y in 0..h {
         let fy = y as f64;
         for x in 0..w {
             let id = *province_grid.get(x as isize, y as isize);
-            if id == 0 { continue; }
+            if id == 0 {
+                continue;
+            }
             let angle = (x as f64 / w as f64) * std::f64::consts::TAU;
-            let acc   = &mut accs[id as usize];
-            acc.count    += 1;
+            let acc = &mut accs[id as usize];
+            acc.count += 1;
             acc.sum_cos_x += angle.cos();
             acc.sum_sin_x += angle.sin();
-            acc.sum_y    += fy;
+            acc.sum_y += fy;
         }
     }
 
     // ── Edge maps ─────────────────────────────────────────────────────────────
-    let mut land_edges:     HashMap<(u32, u32), u32> = HashMap::new();
+    let mut land_edges: HashMap<(u32, u32), u32> = HashMap::new();
     let mut maritime_edges: HashMap<(u32, u32), u32> = HashMap::new();
 
     let add_to = |map: &mut HashMap<(u32, u32), u32>, a: u32, b: u32, cost: u32| {
@@ -123,12 +140,14 @@ pub fn extract_province_graph(
     for y in 0..h {
         for x in 0..w {
             let id = *province_grid.get(x as isize, y as isize);
-            if id == 0 { continue; }
+            if id == 0 {
+                continue;
+            }
 
             let cur_elev = *heightmap.get(x as isize, y as isize);
 
             // Right neighbour
-            let rx  = province_grid.wrap_x(x as isize + 1) as isize;
+            let rx = province_grid.wrap_x(x as isize + 1) as isize;
             let rid = *province_grid.get(rx, y as isize);
             if rid != 0 && rid != id {
                 let target_elev = *heightmap.get(rx, y as isize);
@@ -139,7 +158,7 @@ pub fn extract_province_graph(
 
             // Down neighbour
             if y + 1 < h {
-                let dy  = y as isize + 1;
+                let dy = y as isize + 1;
                 let down_id = *province_grid.get(x as isize, dy);
                 if down_id != 0 && down_id != id {
                     let target_elev = *heightmap.get(x as isize, dy);
@@ -171,7 +190,7 @@ pub fn extract_province_graph(
 
                 if sample_this_pixel {
                     for i in 0..16u32 {
-                        let theta  = (i as f32 / 16.0) * std::f32::consts::TAU;
+                        let theta = (i as f32 / 16.0) * std::f32::consts::TAU;
                         let step_x = theta.cos();
                         let step_y = theta.sin();
 
@@ -181,7 +200,9 @@ pub fn extract_province_graph(
                                 as isize;
                             let ny = y as isize + (step_y * d as f32).round() as isize;
 
-                            if ny < 0 || ny >= h as isize { break; }
+                            if ny < 0 || ny >= h as isize {
+                                break;
+                            }
 
                             // If we hit land:
                             if !is_water_at(nx, ny) {
@@ -204,7 +225,10 @@ pub fn extract_province_graph(
     for i in 1..=n {
         let acc = &accs[i];
         if acc.count > 0 {
-            let avg_angle = acc.sum_sin_x.atan2(acc.sum_cos_x).rem_euclid(std::f64::consts::TAU);
+            let avg_angle = acc
+                .sum_sin_x
+                .atan2(acc.sum_cos_x)
+                .rem_euclid(std::f64::consts::TAU);
             let cx = ((avg_angle / std::f64::consts::TAU) * w as f64) as f32;
             let cy = (acc.sum_y / acc.count as f64) as f32;
             centers[i] = (cx, cy);
@@ -245,8 +269,7 @@ pub fn extract_province_graph(
     let ceiling = max_continents.max(1) as u32;
 
     for (_root, members) in &sorted_landmasses {
-        let is_major = members.len() >= 120
-            || (total_continents < 4 && members.len() >= 20);
+        let is_major = members.len() >= 120 || (total_continents < 4 && members.len() >= 20);
 
         if is_major && total_continents < ceiling {
             total_continents += 1;
@@ -325,8 +348,12 @@ pub fn extract_province_graph(
 
     // ── Guaranteed Graph Connectivity ─────────────────────────────────────────
     let mut full_ds = DisjointSet::new(n + 1);
-    for &(a, b) in land_edges.keys() { full_ds.union(a as usize, b as usize); }
-    for &(a, b) in maritime_edges.keys() { full_ds.union(a as usize, b as usize); }
+    for &(a, b) in land_edges.keys() {
+        full_ds.union(a as usize, b as usize);
+    }
+    for &(a, b) in maritime_edges.keys() {
+        full_ds.union(a as usize, b as usize);
+    }
 
     let mut comp_members: HashMap<usize, Vec<u32>> = HashMap::new();
     for i in 1..=n {
@@ -344,7 +371,9 @@ pub fn extract_province_graph(
         let main_members = &sorted_comps[0].1;
 
         for (root, members) in &sorted_comps[1..] {
-            if *root == main_root { continue; }
+            if *root == main_root {
+                continue;
+            }
             let mut best_pair = (members[0], main_members[0]);
             let mut min_d2 = f32::MAX;
 
@@ -395,9 +424,15 @@ pub fn extract_province_graph(
     // ── Build ProvinceNode list ───────────────────────────────────────────────
     let mut provinces = Vec::with_capacity(n + 1);
     provinces.push(ProvinceNode {
-        id: 0, center_x: 0.0, center_y: 0.0, pixel_count: 0,
+        id: 0,
+        center_x: 0.0,
+        center_y: 0.0,
+        pixel_count: 0,
         neighbors: vec![],
-        area_id: 0, region_id: 0, superregion_id: 0, continent_id: 0,
+        area_id: 0,
+        region_id: 0,
+        superregion_id: 0,
+        continent_id: 0,
         anchor_id: 0,
     });
 
@@ -405,9 +440,15 @@ pub fn extract_province_graph(
         let acc = &accs[i];
         if acc.count == 0 {
             provinces.push(ProvinceNode {
-                id: i as u32, center_x: 0.0, center_y: 0.0, pixel_count: 0,
+                id: i as u32,
+                center_x: 0.0,
+                center_y: 0.0,
+                pixel_count: 0,
                 neighbors: vec![],
-                area_id: 0, region_id: 0, superregion_id: 0, continent_id: 0,
+                area_id: 0,
+                region_id: 0,
+                superregion_id: 0,
+                continent_id: 0,
                 anchor_id: 0,
             });
             continue;
@@ -450,20 +491,29 @@ pub fn extract_ocean_graph(ocean_ids: &Grid<u32>) -> ExtractedGraph {
     // ── Find maximum province ID ──────────────────────────────────────────────
     let mut max_id = 0u32;
     for &id in ocean_ids.raw_slice() {
-        if id > max_id { max_id = id; }
+        if id > max_id {
+            max_id = id;
+        }
     }
     let n = max_id as usize;
 
     // ── Accumulators for province centres & pixel counts ─────────────────────
-    let mut accs: Vec<ProvinceAccumulator> = (0..=n).map(|_| ProvinceAccumulator {
-        count: 0, sum_cos_x: 0.0, sum_sin_x: 0.0, sum_y: 0.0,
-    }).collect();
+    let mut accs: Vec<ProvinceAccumulator> = (0..=n)
+        .map(|_| ProvinceAccumulator {
+            count: 0,
+            sum_cos_x: 0.0,
+            sum_sin_x: 0.0,
+            sum_y: 0.0,
+        })
+        .collect();
 
     for y in 0..h {
         let fy = y as f64;
         for x in 0..w {
             let id = ocean_ids.raw_slice()[y * w + x];
-            if id == 0 { continue; }
+            if id == 0 {
+                continue;
+            }
             let angle = (x as f64 / w as f64) * std::f64::consts::TAU;
             let acc = &mut accs[id as usize];
             acc.count += 1;
@@ -476,7 +526,9 @@ pub fn extract_ocean_graph(ocean_ids: &Grid<u32>) -> ExtractedGraph {
     let mut centers = vec![(0.0f32, 0.0f32); n + 1];
     for i in 1..=n {
         let acc = &accs[i];
-        if acc.count == 0 { continue; }
+        if acc.count == 0 {
+            continue;
+        }
         let avg_cos = acc.sum_cos_x / acc.count as f64;
         let avg_sin = acc.sum_sin_x / acc.count as f64;
         let angle = avg_sin.atan2(avg_cos);
@@ -492,7 +544,9 @@ pub fn extract_ocean_graph(ocean_ids: &Grid<u32>) -> ExtractedGraph {
         let dy = y as isize;
         for x in 0..w {
             let id = ocean_ids.raw_slice()[y * w + x];
-            if id == 0 { continue; }
+            if id == 0 {
+                continue;
+            }
 
             // Right neighbour (wrapping in X)
             let rx = ocean_ids.wrap_x(x as isize + 1) as isize;
@@ -506,7 +560,11 @@ pub fn extract_ocean_graph(ocean_ids: &Grid<u32>) -> ExtractedGraph {
             if y + 1 < h {
                 let down_id = *ocean_ids.get(x as isize, dy + 1);
                 if down_id != 0 && down_id != id {
-                    let pair = if id < down_id { (id, down_id) } else { (down_id, id) };
+                    let pair = if id < down_id {
+                        (id, down_id)
+                    } else {
+                        (down_id, id)
+                    };
                     *boundary.entry(pair).or_insert(0) += 1;
                 }
             }
@@ -519,10 +577,11 @@ pub fn extract_ocean_graph(ocean_ids: &Grid<u32>) -> ExtractedGraph {
         edges.insert((a, b), cost);
     }
 
-
     // ── Ensure graph connectivity (defensive: the ocean is one body) ─────────
     let mut full_ds = DisjointSet::new(n + 1);
-    for &(a, b) in edges.keys() { full_ds.union(a as usize, b as usize); }
+    for &(a, b) in edges.keys() {
+        full_ds.union(a as usize, b as usize);
+    }
 
     let mut comp_members: HashMap<usize, Vec<u32>> = HashMap::new();
     for i in 1..=n {
@@ -540,7 +599,9 @@ pub fn extract_ocean_graph(ocean_ids: &Grid<u32>) -> ExtractedGraph {
         let main_members = &sorted_comps[0].1;
 
         for (root, members) in &sorted_comps[1..] {
-            if *root == main_root { continue; }
+            if *root == main_root {
+                continue;
+            }
             let mut best_pair = (members[0], main_members[0]);
             let mut min_d2 = f32::MAX;
 
@@ -577,16 +638,27 @@ pub fn extract_ocean_graph(ocean_ids: &Grid<u32>) -> ExtractedGraph {
     for list in &mut neighbor_map {
         list.sort_by_key(|&(nb, _)| nb);
         list.dedup_by(|a, b| {
-            if a.0 == b.0 { b.1 = b.1.min(a.1); true } else { false }
+            if a.0 == b.0 {
+                b.1 = b.1.min(a.1);
+                true
+            } else {
+                false
+            }
         });
     }
 
     // ── Build ProvinceNode list ───────────────────────────────────────────────
     let mut provinces = Vec::with_capacity(n + 1);
     provinces.push(ProvinceNode {
-        id: 0, center_x: 0.0, center_y: 0.0, pixel_count: 0,
+        id: 0,
+        center_x: 0.0,
+        center_y: 0.0,
+        pixel_count: 0,
         neighbors: vec![],
-        area_id: 0, region_id: 0, superregion_id: 0, continent_id: 0,
+        area_id: 0,
+        region_id: 0,
+        superregion_id: 0,
+        continent_id: 0,
         anchor_id: 0,
     });
 
@@ -609,4 +681,3 @@ pub fn extract_ocean_graph(ocean_ids: &Grid<u32>) -> ExtractedGraph {
 
     ExtractedGraph { provinces, max_id }
 }
-

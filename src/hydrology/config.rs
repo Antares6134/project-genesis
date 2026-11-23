@@ -80,9 +80,9 @@ impl HydrologyConfig {
 impl Default for HydrologyConfig {
     fn default() -> Self {
         Self {
-            min_lake_depth: 0.012,     // Only genuine deep tectonic rift depressions become lakes!
-            min_lake_cells: 12,        // ...and only if the depression is wider than a speck
-            min_river_flow: 100.0,     // only major rivers and their larger branches
+            min_lake_depth: 0.012, // Only genuine deep tectonic rift depressions become lakes!
+            min_lake_cells: 12,    // ...and only if the depression is wider than a speck
+            min_river_flow: 100.0, // only major rivers and their larger branches
             major_river_flow: 3_000.0, // ~ the Nile: a continental trunk at full width
             reference_precip_mm_per_year: 1_200.0,
             runoff_coefficient: 0.35,

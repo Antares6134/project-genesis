@@ -1,7 +1,7 @@
+use crate::core::Grid;
 use crate::core::polar::{self, PolarConfig};
 use crate::core::progress::Progress;
 use crate::core::relief::{self, SEA_LEVEL};
-use crate::core::Grid;
 use crate::export::live;
 use crate::terrain::config::WorldConfig;
 use noise::{NoiseFn, OpenSimplex};
@@ -84,7 +84,15 @@ fn shape_bathymetry(elev_raw: f32) -> f32 {
 }
 
 #[inline(always)]
-fn sample_3d_fbm(noise: &OpenSimplex, x: f64, y: f64, z: f64, octaves: usize, lacunarity: f64, persistence: f64) -> f32 {
+fn sample_3d_fbm(
+    noise: &OpenSimplex,
+    x: f64,
+    y: f64,
+    z: f64,
+    octaves: usize,
+    lacunarity: f64,
+    persistence: f64,
+) -> f32 {
     let mut total = 0.0f64;
     let mut amplitude = 1.0f64;
     let mut frequency = 1.0f64;
@@ -137,117 +145,163 @@ pub fn simulate_tectonics(
     for band in (0..h).step_by(rows_per_band) {
         let end = (band + rows_per_band).min(h);
         let rows = &mut heightmap.raw_slice_mut()[band * w..end * w];
-        rows.par_chunks_exact_mut(w).enumerate().for_each(|(offset, row)| {
-        let y = band + offset;
-        let fy = y as f32;
-        let v = fy / (h - 1) as f32;
-        let lat = (0.5 - v) * std::f32::consts::PI;
-        let cos_lat = lat.cos() as f64;
-        let sin_lat = lat.sin() as f64;
+        rows.par_chunks_exact_mut(w)
+            .enumerate()
+            .for_each(|(offset, row)| {
+                let y = band + offset;
+                let fy = y as f32;
+                let v = fy / (h - 1) as f32;
+                let lat = (0.5 - v) * std::f32::consts::PI;
+                let cos_lat = lat.cos() as f64;
+                let sin_lat = lat.sin() as f64;
 
-        for x in 0..w {
-            let fx = x as f32;
-            let u = fx / w as f32;
-            let lon = (u - 0.5) * std::f32::consts::TAU;
+                for x in 0..w {
+                    let fx = x as f32;
+                    let u = fx / w as f32;
+                    let lon = (u - 0.5) * std::f32::consts::TAU;
 
-            let px = cos_lat * (lon as f64).cos();
-            let py = sin_lat;
-            let pz = cos_lat * (lon as f64).sin();
+                    let px = cos_lat * (lon as f64).cos();
+                    let py = sin_lat;
+                    let pz = cos_lat * (lon as f64).sin();
 
-            // Slightly stronger warp for jagged, realistic coastlines (HD: 6 octaves)
-            let wx = sample_3d_fbm(&warp_x, px * 1.5, py * 1.5, pz * 1.5, 6, 2.0, 0.5) * warp_amp;
-            let wy = sample_3d_fbm(&warp_y, px * 1.5, py * 1.5, pz * 1.5, 6, 2.0, 0.5) * warp_amp;
-            let wz = sample_3d_fbm(&warp_z, px * 1.5, py * 1.5, pz * 1.5, 6, 2.0, 0.5) * warp_amp;
+                    // Slightly stronger warp for jagged, realistic coastlines (HD: 6 octaves)
+                    let wx = sample_3d_fbm(&warp_x, px * 1.5, py * 1.5, pz * 1.5, 6, 2.0, 0.5)
+                        * warp_amp;
+                    let wy = sample_3d_fbm(&warp_y, px * 1.5, py * 1.5, pz * 1.5, 6, 2.0, 0.5)
+                        * warp_amp;
+                    let wz = sample_3d_fbm(&warp_z, px * 1.5, py * 1.5, pz * 1.5, 6, 2.0, 0.5)
+                        * warp_amp;
 
-            let sx = px + wx as f64;
-            let sy = py + wy as f64;
-            let sz = pz + wz as f64;
+                    let sx = px + wx as f64;
+                    let sy = py + wy as f64;
+                    let sz = pz + wz as f64;
 
-            // The continental field: its frequency, its persistence and the sea
-            // level it is read against are the panel's, so a reader can choose
-            // one supercontinent or an archipelago without touching the code.
-            // HD UPGRADE: Raised from 6 to 9 octaves for millimeter-level coastal detail!
-            let continent_val = sample_3d_fbm(
-                &continent_noise,
-                sx * continent_freq,
-                sy * continent_freq,
-                sz * continent_freq,
-                9,
-                2.1,
-                continent_persistence,
-            );
+                    // The continental field: its frequency, its persistence and the sea
+                    // level it is read against are the panel's, so a reader can choose
+                    // one supercontinent or an archipelago without touching the code.
+                    // HD UPGRADE: Raised from 6 to 9 octaves for millimeter-level coastal detail!
+                    let continent_val = sample_3d_fbm(
+                        &continent_noise,
+                        sx * continent_freq,
+                        sy * continent_freq,
+                        sz * continent_freq,
+                        9,
+                        2.1,
+                        continent_persistence,
+                    );
 
-            let mut elev_raw: f32;
+                    let mut elev_raw: f32;
 
-            if continent_val > sea_threshold {
-                let land_t = (continent_val - sea_threshold) / (1.0 - sea_threshold);
-                let base_plain = 0.415 + land_t.powf(1.3) * 0.065;
+                    if continent_val > sea_threshold {
+                        let land_t = (continent_val - sea_threshold) / (1.0 - sea_threshold);
+                        let base_plain = 0.415 + land_t.powf(1.3) * 0.065;
 
-                // CONTINUOUS FAULT LINES (The Andes / Rockies system)
-                let fault_val = sample_3d_fbm(
-                    &fault_noise,
-                    sx * fault_freq,
-                    sy * fault_freq,
-                    sz * fault_freq,
-                    4,
-                    2.0,
-                    0.5,
-                );
-                let fault_dist = fault_val.abs();
-                
-                let mut mountain_lift = 0.0;
-                if fault_dist < fault_band && land_t > 0.05 {
-                    // HD Mountains: Raised to 9 octaves for extreme craggy details
-                    let m_sample = sample_3d_fbm(&mountain_noise, sx * 4.0, sy * 4.0, sz * 4.0, 9, 2.2, 0.48);
-                    let ridge = (1.0 - m_sample.abs()).powf(3.0);
-                    let fault_intensity = (1.0 - (fault_dist / fault_band)).powf(1.5);
-                    mountain_lift = ridge * fault_intensity * mountain_lift_max;
+                        // CONTINUOUS FAULT LINES (The Andes / Rockies system)
+                        let fault_val = sample_3d_fbm(
+                            &fault_noise,
+                            sx * fault_freq,
+                            sy * fault_freq,
+                            sz * fault_freq,
+                            4,
+                            2.0,
+                            0.5,
+                        );
+                        let fault_dist = fault_val.abs();
+
+                        let mut mountain_lift = 0.0;
+                        if fault_dist < fault_band && land_t > 0.05 {
+                            // HD Mountains: Raised to 9 octaves for extreme craggy details
+                            let m_sample = sample_3d_fbm(
+                                &mountain_noise,
+                                sx * 4.0,
+                                sy * 4.0,
+                                sz * 4.0,
+                                9,
+                                2.2,
+                                0.48,
+                            );
+                            let ridge = (1.0 - m_sample.abs()).powf(3.0);
+                            let fault_intensity = (1.0 - (fault_dist / fault_band)).powf(1.5);
+                            mountain_lift = ridge * fault_intensity * mountain_lift_max;
+                        }
+
+                        // Add rolling hills to plains (HD: 6 octaves)
+                        let hills = sample_3d_fbm(
+                            &mountain_noise,
+                            sx * 4.5,
+                            sy * 4.5,
+                            sz * 4.5,
+                            6,
+                            2.0,
+                            0.5,
+                        ) * 0.035;
+
+                        elev_raw = base_plain + mountain_lift + hills;
+                    } else {
+                        let ocean_t = ((sea_threshold - continent_val) / (1.0 + sea_threshold))
+                            .clamp(0.0, 1.0);
+                        elev_raw = 0.395 - ocean_t.powf(0.7) * 0.26;
+                        // Submarine ridges — broad, low-frequency swells that read as
+                        // mid-ocean ridges once the floor is pushed through the
+                        // hypsometric transfer below.
+                        let ocean_ridge = (1.0
+                            - (sample_3d_fbm(
+                                &mountain_noise,
+                                px * 2.5,
+                                py * 2.5,
+                                pz * 2.5,
+                                5,
+                                2.0,
+                                0.5,
+                            ))
+                            .abs())
+                        .powf(5.0);
+                        elev_raw += ocean_ridge * 0.045;
+                    }
+
+                    // THE VERTICAL FIX: the raw field above sea level already spans a
+                    // believable continental range once read through `relief`, but the
+                    // raw ocean floor is a shallow pancake. Push it through the
+                    // hypsometric transfer so the ocean gains real bathymetry — shelf,
+                    // slope, abyssal plain and trenches — while the water line (and
+                    // therefore every coastline on the map) stays exactly where it was.
+                    let base_elev = if elev_raw < SEA_LEVEL {
+                        shape_bathymetry(elev_raw)
+                    } else {
+                        elev_raw
+                    };
+
+                    // POLAR ICE SHEETS: both poles carry a permanent, glaciated *landmass*
+                    // so the atlas reads them as land (with an elevation) rather than as
+                    // open ocean. The cap rises smoothly from a submerged shelf just
+                    // below the water line, through its coastline, up to a solid, high
+                    // ice sheet; its edge is wobbled by an independent noise field so it
+                    // is an organic shore rather than a latitude circle. Only pixels
+                    // inside the cap are touched, so the open ocean keeps its bathymetry.
+                    let cap_wobble =
+                        sample_3d_fbm(&cap_noise, px * 2.6, py * 2.6, pz * 2.6, 5, 2.0, 0.5);
+                    let cap_t = polar.cap_blend(lat.abs() + cap_wobble * 0.10);
+                    let elev = if cap_t > 0.0 {
+                        let cap_relief = sample_3d_fbm(
+                            &mountain_noise,
+                            sx * 3.2,
+                            sy * 3.2,
+                            sz * 3.2,
+                            6,
+                            2.0,
+                            0.5,
+                        ) * 0.045;
+                        let cap_surface = polar::POLAR_CAP_BASE_ELEV
+                            + cap_t * (polar::POLAR_CAP_ELEV - polar::POLAR_CAP_BASE_ELEV)
+                            + cap_relief * cap_t;
+                        base_elev.max(cap_surface)
+                    } else {
+                        base_elev
+                    };
+
+                    row[x] = elev.clamp(0.0, 1.0);
                 }
-
-                // Add rolling hills to plains (HD: 6 octaves)
-                let hills = sample_3d_fbm(&mountain_noise, sx * 4.5, sy * 4.5, sz * 4.5, 6, 2.0, 0.5) * 0.035;
-
-                elev_raw = base_plain + mountain_lift + hills;
-            } else {
-                let ocean_t = ((sea_threshold - continent_val) / (1.0 + sea_threshold)).clamp(0.0, 1.0);
-                elev_raw = 0.395 - ocean_t.powf(0.7) * 0.26;
-                // Submarine ridges — broad, low-frequency swells that read as
-                // mid-ocean ridges once the floor is pushed through the
-                // hypsometric transfer below.
-                let ocean_ridge = (1.0 - (sample_3d_fbm(&mountain_noise, px * 2.5, py * 2.5, pz * 2.5, 5, 2.0, 0.5)).abs()).powf(5.0);
-                elev_raw += ocean_ridge * 0.045;
-            }
-
-            // THE VERTICAL FIX: the raw field above sea level already spans a
-            // believable continental range once read through `relief`, but the
-            // raw ocean floor is a shallow pancake. Push it through the
-            // hypsometric transfer so the ocean gains real bathymetry — shelf,
-            // slope, abyssal plain and trenches — while the water line (and
-            // therefore every coastline on the map) stays exactly where it was.
-            let base_elev = if elev_raw < SEA_LEVEL { shape_bathymetry(elev_raw) } else { elev_raw };
-
-            // POLAR ICE SHEETS: both poles carry a permanent, glaciated *landmass*
-            // so the atlas reads them as land (with an elevation) rather than as
-            // open ocean. The cap rises smoothly from a submerged shelf just
-            // below the water line, through its coastline, up to a solid, high
-            // ice sheet; its edge is wobbled by an independent noise field so it
-            // is an organic shore rather than a latitude circle. Only pixels
-            // inside the cap are touched, so the open ocean keeps its bathymetry.
-            let cap_wobble = sample_3d_fbm(&cap_noise, px * 2.6, py * 2.6, pz * 2.6, 5, 2.0, 0.5);
-            let cap_t = polar.cap_blend(lat.abs() + cap_wobble * 0.10);
-            let elev = if cap_t > 0.0 {
-                let cap_relief = sample_3d_fbm(&mountain_noise, sx * 3.2, sy * 3.2, sz * 3.2, 6, 2.0, 0.5) * 0.045;
-                let cap_surface = polar::POLAR_CAP_BASE_ELEV
-                    + cap_t * (polar::POLAR_CAP_ELEV - polar::POLAR_CAP_BASE_ELEV)
-                    + cap_relief * cap_t;
-                base_elev.max(cap_surface)
-            } else {
-                base_elev
-            };
-
-            row[x] = elev.clamp(0.0, 1.0);
-        }
-    });
+            });
 
         progress.tick(end as u64);
         progress.preview_map("Continents rising", (w, h), |x, y| {

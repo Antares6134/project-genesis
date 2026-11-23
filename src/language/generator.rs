@@ -1,24 +1,26 @@
-//! Stage 8 — Languages & Phonetics: the orchestration of a world's tongues.
+//! History phase — Languages & Phonetics: the orchestration of a world's tongues.
 //!
 //! The passes run in a fixed order so a seed always produces the same languages:
 //!
 //! 1. measure every province (relief, river, climate, population);
 //! 2. choose 10–18 Urheimats, preferring the seats of the civilizations that
 //!    already exist so a language's homeland and a polity's cradle coincide;
-//! 3. build each family's phonology and forty-root lexicon;
+//! 3. build each family's phonology and hundred-root lexicon;
 //! 4. diffuse the families across the province graph;
 //! 5. split dense families into daughter languages and dialects;
 //! 6. assign a primary language to every society;
 //! 7. name realms, capitals and homelands from the roots;
 //! 8. republish a renamed [`CivilizationWorld`] so every existing atlas panel
-//!    reads native names without a special case.
+//!    reads native names without a special case;
+//! 9. name every faith, its deities and domain words, its emblem, its cults and
+//!    its sacred sites through the realm's own lexicon.
 //!
 //! The stage never touches the RNG stream of the dawn of history: it draws from
-//! `seed ^ LANGUAGE_SALT`, and each family from its own sub-stream. Stage 7's
+//! `seed ^ LANGUAGE_SALT`, and each family from its own sub-stream. The society phase's
 //! measurements are therefore identical whether or not this act ever runs; only
 //! the display names change.
 
-use crate::civilization::{Age, Civilization, CivilizationWorld, SocietyTier};
+use crate::civilization::{Age, Civilization, CivilizationWorld, ScaleClass, SocietyTier};
 use crate::core::progress::Progress;
 use crate::core::{relief, sphere};
 use crate::language::config::LanguageConfig;
@@ -31,6 +33,7 @@ use crate::language::naming::{
     NameRegistry, PolityKind, language_name, plain_root, qualified, realm_name, settlement_name,
 };
 use crate::language::phonology::SoundLaw;
+use crate::language::sacred::name_religions;
 use crate::language::{
     Language, LanguageContact, LanguageContactKind, LanguageFamily, LanguagesWorld,
 };
@@ -39,7 +42,7 @@ use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Salt mixed into the world seed for Act 8, deliberately independent of the
+/// Salt mixed into the world seed for the language phase, deliberately independent of the
 /// dawn's own salt so the two stages never share a random stream.
 pub const LANGUAGE_SALT: u64 = 0x1A26_0F1C_0000_0008;
 
@@ -47,11 +50,12 @@ pub const LANGUAGE_SALT: u64 = 0x1A26_0F1C_0000_0008;
 /// names.
 pub fn generate_languages(
     atlas: &AtlasWorld,
+    civilizations: &CivilizationWorld,
     config: &LanguageConfig,
     seed: u64,
     progress: &Progress,
 ) -> (LanguagesWorld, CivilizationWorld) {
-    let world = atlas.civilizations.as_ref();
+    let world = civilizations;
     let renamed = world.clone();
     let Some(provinces) = atlas.provinces.as_ref() else {
         return (LanguagesWorld::empty(seed), renamed);
@@ -381,7 +385,7 @@ pub fn generate_languages(
         // wears its dialect marker, and a realm retried from that string would
         // stutter the marker (`K'lirk'lirmopa`).
         let base = plain_root(&language.lexicon, &language.autonym);
-        let candidate = realm_name(&language.lexicon, &base, polity_kind(civ.tier));
+        let candidate = realm_name(&language.lexicon, &base, polity_kind(civ));
         let chosen = if candidate.is_empty() {
             base.clone()
         } else {
@@ -422,7 +426,7 @@ pub fn generate_languages(
 
     // ─── 9. CONTACT AND BORROWING ────────────────────────────────────────────
     progress.sub_step("Listening across the frontiers", 0);
-    let mut language_pairs: BTreeSet<(u16, u16)> = BTreeSet::new();
+    let mut language_pairs: BTreeMap<(u16, u16), (u32, u32)> = BTreeMap::new();
     for node in &hierarchy.provinces {
         let id = node.id as usize;
         if id == 0 || id >= n {
@@ -441,18 +445,36 @@ pub fn generate_languages(
             if b == 0 || b == a {
                 continue;
             }
-            language_pairs.insert((a.min(b), a.max(b)));
+            language_pairs
+                .entry((a.min(b), a.max(b)))
+                .or_insert((id as u32, nb as u32));
         }
     }
     let mut contacts = Vec::new();
-    for (a, b) in language_pairs {
+    for ((a, b), (province_a, province_b)) in language_pairs {
         if contacts.len() >= 4_000 {
             break;
         }
         let family_a = language_family.get(a as usize - 1).copied().unwrap_or(0);
         let family_b = language_family.get(b as usize - 1).copied().unwrap_or(0);
+        let isolate = |family: u16, province: u32| {
+            family_languages.get(&family).map_or(0, Vec::len) == 1
+                && profiles
+                    .get(province as usize)
+                    .is_some_and(|profile| profile.coastal || profile.mean_elevation_m >= 1_400.0)
+        };
         let kind = if family_a == family_b {
             LanguageContactKind::Frontier
+        } else if isolate(family_a, province_a) || isolate(family_b, province_b) {
+            LanguageContactKind::Isolate
+        } else if profiles
+            .get(province_a as usize)
+            .is_some_and(|profile| profile.coastal)
+            && profiles
+                .get(province_b as usize)
+                .is_some_and(|profile| profile.coastal)
+        {
+            LanguageContactKind::SeaRoute
         } else {
             LanguageContactKind::Trade
         };
@@ -476,7 +498,7 @@ pub fn generate_languages(
 
     // ─── 10. REPUBLISH THE CIVILIZATIONS WITH THEIR OWN NAMES ────────────────
     progress.sub_step("Writing the gazetteer", 0);
-    let languages_world = LanguagesWorld {
+    let mut languages_world = LanguagesWorld {
         seed,
         families,
         languages,
@@ -488,13 +510,23 @@ pub fn generate_languages(
         province_names,
         contacts,
     };
-    let renamed = apply_language_names(world, &languages_world, width, config);
+    let mut renamed = apply_language_names(world, &languages_world, width, config);
+    // Faiths, their deities and domain words, their emblems, cults and sacred
+    // sites are named last: their words need the final, borrowed lexicon the
+    // gazetteer was built from.
+    name_religions(
+        &mut renamed,
+        &mut languages_world,
+        &profiles,
+        seed,
+        &mut registry,
+    );
     (languages_world, renamed)
 }
 
 /// Republish a civilization world with the names its languages gave it.
 ///
-/// Stage 8 never mutates the dawn's published world: it clones it and replaces
+/// The language phase never mutates the dawn's published world: it clones it and replaces
 /// only the display strings and the family label. Every other measurement — seat,
 /// provinces, population, age — is untouched.
 pub fn apply_language_names(
@@ -517,11 +549,14 @@ pub fn apply_language_names(
 }
 
 /// The polity suffix a tier earns.
-fn polity_kind(tier: SocietyTier) -> PolityKind {
-    match tier {
-        SocietyTier::States => PolityKind::State,
-        SocietyTier::ComplexFarmers => PolityKind::Chiefdom,
-        _ => PolityKind::People,
+fn polity_kind(civ: &Civilization) -> PolityKind {
+    match (civ.tier, civ.scale) {
+        (SocietyTier::States, ScaleClass::Large) => PolityKind::Empire,
+        (SocietyTier::States, ScaleClass::Small) => PolityKind::CityState,
+        (SocietyTier::States, ScaleClass::Medium) => PolityKind::State,
+        (SocietyTier::ComplexFarmers, _) => PolityKind::Chiefdom,
+        (SocietyTier::SimpleFarmers, _) => PolityKind::Tribe,
+        (SocietyTier::HunterGatherers | SocietyTier::NomadicPastoralists, _) => PolityKind::Band,
     }
 }
 

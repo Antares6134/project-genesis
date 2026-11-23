@@ -1,16 +1,16 @@
-//! Stage 8 — Languages & Phonetics: the tongues the world's peoples speak.
+//! History phase — Languages & Phonetics: the tongues the world's peoples speak.
 //!
 //! The dawn of history gives a world its societies; this act gives them a voice.
 //! It is deliberately *not* a name generator bolted onto the civilizations. It
 //! builds a small linguistic prehistory first:
 //!
-//! 1. **Urheimats** — ten to eighteen ancestral families are placed in the
+//! 1. **Urheimats** — twenty to thirty ancestral families are placed in the
 //!    provinces that could plausibly cradle a language: river basins, coasts,
 //!    lakeshores, temperate woodlands, isolates in high valleys.
 //! 2. **Phonology DNA** — each family draws a sound archetype from its country
 //!    and a genome from the world seed: consonants, vowels, syllable templates,
 //!    phonotactic rules, and marked articulations such as glottal stops.
-//! 3. **A forty-root proto-lexicon** — every family names the same forty core
+//! 3. **A hundred-root proto-lexicon** — every family names the same hundred core
 //!    meanings (river, sea, mountain, people, great, first…) in its own sounds.
 //! 4. **Diffusion** — the families spread across the province graph under
 //!    friction: cheap along rivers and open plains, expensive over mountain
@@ -19,6 +19,9 @@
 //!    while pastoral and wilderness zones form sweeping macro-family blobs.
 //! 5. **Naming** — languages, families, realms, capitals and Urheimats are
 //!    assembled from the roots with the family's own compounding rules.
+//! 6. **Sacred onomasticon** — faith names, the names of their deities and
+//!    domain words, their emblems, cults and sacred sites are named from the
+//!    same roots through [`sacred`]. The rest of the faith cascade stays English.
 //!
 //! The result is a [`LanguagesWorld`]: every inhabited province has a language,
 //! every society has a primary language and family, and every name on the map is
@@ -42,6 +45,7 @@ pub mod generator;
 pub mod lexicon;
 pub mod naming;
 pub mod phonology;
+pub mod sacred;
 
 use crate::civilization::Age;
 use serde::{Deserialize, Serialize};
@@ -159,7 +163,7 @@ pub struct LanguagesWorld {
 }
 
 impl LanguagesWorld {
-    /// A world with no languages yet — what the atlas holds before Act 8.
+    /// A world with no languages yet — what the atlas holds before history.
     pub fn empty(seed: u64) -> Self {
         Self {
             seed,

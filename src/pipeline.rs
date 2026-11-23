@@ -1,4 +1,4 @@
-//! The eight acts of creation, as a state the atlas can drive.
+//! The seven acts of creation, as a state the atlas can drive.
 //!
 //! The engine used to be a straight line: `main` ran every stage to completion
 //! and only then opened a window. It is now a *pipeline* — a [`Genesis`] value
@@ -12,8 +12,7 @@
 //!   4 Geography & Provinces      the land cut into provinces
 //!   5 Geopolitical Hierarchy     provinces → areas → regions → superregions
 //!   6 Hydro-Political Hierarchy  the world ocean, same five tiers
-//!   7 Dawn of Civilization       realms, societies, populations
-//!   8 Languages & Phonetics      phonologies, lexicons, Urheimats, native names
+//!   7 History & Languages        realms, faiths, phonologies, lexicons, native names
 //! ```
 //!
 //! Three properties make this work, and every change here must preserve them:
@@ -236,7 +235,7 @@ impl WorldGenSettings {
     }
 }
 
-/// The eight acts of creation, in the only order they can be run.
+/// The seven acts of creation, in the only order they can be run.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Stage {
     Geology,
@@ -245,21 +244,19 @@ pub enum Stage {
     Provinces,
     Geopolitics,
     HydroPolitics,
-    Civilization,
-    Languages,
+    History,
 }
 
 impl Stage {
     /// Every act, in order. The atlas lays its buttons out from this.
-    pub const ALL: [Stage; 8] = [
+    pub const ALL: [Stage; 7] = [
         Stage::Geology,
         Stage::Climate,
         Stage::Hydrology,
         Stage::Provinces,
         Stage::Geopolitics,
         Stage::HydroPolitics,
-        Stage::Civilization,
-        Stage::Languages,
+        Stage::History,
     ];
 
     /// Where the act sits in the sequence, counting from one.
@@ -271,8 +268,7 @@ impl Stage {
             Stage::Provinces => 4,
             Stage::Geopolitics => 5,
             Stage::HydroPolitics => 6,
-            Stage::Civilization => 7,
-            Stage::Languages => 8,
+            Stage::History => 7,
         }
     }
 
@@ -285,8 +281,7 @@ impl Stage {
             Stage::Provinces => "Geography & Provinces",
             Stage::Geopolitics => "Geopolitical Hierarchy",
             Stage::HydroPolitics => "Hydro-Political Hierarchy",
-            Stage::Civilization => "Dawn of Civilization",
-            Stage::Languages => "Languages & Phonetics",
+            Stage::History => "History & Languages",
         }
     }
 
@@ -308,11 +303,9 @@ impl Stage {
                 "Provinces gathered into areas, regions, superregions and continents."
             }
             Stage::HydroPolitics => "The world ocean partitioned into its own five matching tiers.",
-            Stage::Civilization => {
-                "Realms rise, spread and are given a history, an age and a people."
-            }
-            Stage::Languages => {
-                "Phonologies, proto-lexicons, Urheimats and the tongues that spread from them."
+            Stage::History => {
+                "Realms rise with a history, an age and a people; faiths, phonologies, \
+                 proto-lexicons and native names follow."
             }
         }
     }
@@ -369,11 +362,11 @@ pub enum LoadError {
 /// Everything the atlas needs to paint the world as it stands.
 ///
 /// Assembled from whichever acts have been run, so a world three acts old and a
-/// world eight acts old are both paintable. The fields whose act has not been
+/// world seven acts old are both paintable. The fields whose act has not been
 /// run yet hold *empty* values — an empty hierarchy, a civilization with nobody
 /// in it — never stale or placeholder data, and `stage` tells the painter which
 /// is which: it must not read the province grids before act four, or the realms
-/// before act seven.
+/// before history.
 #[derive(Clone)]
 pub struct AtlasWorld {
     /// The last act that finished. Everything below is real up to here.
@@ -399,9 +392,9 @@ pub struct AtlasWorld {
     pub ocean: Option<Arc<OceanResult>>,
     /// The ocean hierarchy — act six onward.
     pub ocean_hierarchy: Arc<GeopoliticalHierarchy>,
-    /// The dawn of history — act seven onward.
+    /// The dawn of history — the history act onward.
     pub civilizations: Arc<CivilizationWorld>,
-    /// The world's languages — act eight onward.
+    /// The world's languages — the history act onward.
     pub languages: Arc<LanguagesWorld>,
 }
 
@@ -445,15 +438,12 @@ pub struct Genesis {
     hierarchy: Option<Arc<GeopoliticalHierarchy>>,
     ocean: Option<Arc<OceanResult>>,
     ocean_hierarchy: Option<Arc<GeopoliticalHierarchy>>,
-    /// Act seven's realms, before act eight gives them native names.
+    /// Act seven's realms, already wearing the names their own tongues gave them.
     civilizations: Option<Arc<CivilizationWorld>>,
-    /// Act eight's realms: the same societies, republished under the names their
-    /// own tongues gave them. Kept apart from [`Genesis::civilizations`] so that
-    /// rewinding to act eight restores the unnamed dawn rather than losing it.
-    named_civilizations: Option<Arc<CivilizationWorld>>,
+    /// Act seven's languages: families, lexicons and the tongues the realms speak.
     languages: Option<Arc<LanguagesWorld>>,
     /// How long each act took, so the atlas can show it done.
-    timings: [Option<f32>; 8],
+    timings: [Option<f32>; 7],
     /// Write the world cache (every act grown so far, up to act six) whenever act
     /// three and again when act six land, overwriting the earlier save.
     autosave: bool,
@@ -493,9 +483,8 @@ impl Genesis {
             ocean: None,
             ocean_hierarchy: None,
             civilizations: None,
-            named_civilizations: None,
             languages: None,
-            timings: [None; 8],
+            timings: [None; 7],
             autosave: false,
             settings: WorldGenSettings::default(),
         }
@@ -583,11 +572,10 @@ impl Genesis {
     /// typed *after* a rewind re-points only the acts from the rewind point on —
     /// exactly the rule that governs changing it between acts at any other time.
     ///
-    /// Two artefacts are deliberately kept apart from their act so that a rewind
-    /// can restore them honestly: [`Genesis::temperature`] (act two's climate,
-    /// which act three would otherwise overwrite with its iced copy) and
-    /// [`Genesis::civilizations`] (act seven's unnamed realms, which act eight
-    /// would otherwise overwrite with their named copy).
+    /// One artefact is deliberately kept apart from its act so that a rewind can
+    /// restore it honestly: [`Genesis::temperature`] (act two's climate, which
+    /// act three would otherwise overwrite with its iced copy). History publishes
+    /// its named realms and tongues together, so a rewind drops both.
     pub fn rewind_to(&mut self, stage: Stage) {
         if stage.index() <= 1 {
             // Back to before act one: nothing is left of the world but the
@@ -626,9 +614,8 @@ impl Genesis {
                     self.ocean = None;
                     self.ocean_hierarchy = None;
                 }
-                Stage::Civilization => self.civilizations = None,
-                Stage::Languages => {
-                    self.named_civilizations = None;
+                Stage::History => {
+                    self.civilizations = None;
                     self.languages = None;
                 }
             }
@@ -804,7 +791,7 @@ impl Genesis {
     ///
     /// The save carries acts one through whichever act the world had reached when
     /// it was written, so the pipeline picks up at the act after that one — act
-    /// four for a save made at act three, act seven for one made at act six. On
+    /// four for a save made at act three, history for one made at act six. On
     /// success it holds exactly that much of the world, and no more.
     pub fn load_cache(&mut self) -> Result<(), LoadError> {
         let exact = self.cache_path();
@@ -1028,15 +1015,15 @@ impl Genesis {
             Stage::Provinces => self.run_provinces(&sink),
             Stage::Geopolitics => self.run_geopolitics(&sink),
             Stage::HydroPolitics => self.run_hydro_politics(&sink),
-            Stage::Civilization => self.run_civilization(&sink),
-            Stage::Languages => self.run_languages(&sink),
+            Stage::History => self.run_history(&sink),
         };
         let secs = start.elapsed().as_secs_f32();
         self.timings[stage.index() - 1] = Some(secs);
         self.stage = Some(stage);
         println!(
-            "✓ [{}/8] {} completed: {:.2?}",
+            "✓ [{}/{}] {} completed: {:.2?}",
             stage.index(),
+            Stage::ALL.len(),
             stage.title(),
             start.elapsed()
         );
@@ -1083,8 +1070,7 @@ impl Genesis {
             genesis.is_lake = Some(Arc::new(Grid::filled_with(width, height, false)));
             // Act three's iced copy of the climate, so a test can watch a rewind
             // drop it while act two's honest grid stays.
-            genesis.frozen_temperature =
-                Some(Arc::new(Grid::filled_with(width, height, -30.0f32)));
+            genesis.frozen_temperature = Some(Arc::new(Grid::filled_with(width, height, -30.0f32)));
         }
         if stage.available(Stage::Provinces) {
             genesis.provinces = Some(Arc::new(ProvinceResult {
@@ -1104,11 +1090,8 @@ impl Genesis {
             }));
             genesis.ocean_hierarchy = Some(Arc::new(GeopoliticalHierarchy::empty()));
         }
-        if stage.available(Stage::Civilization) {
+        if stage.available(Stage::History) {
             genesis.civilizations = Some(Arc::new(CivilizationWorld::empty(seed)));
-        }
-        if stage.available(Stage::Languages) {
-            genesis.named_civilizations = Some(Arc::new(CivilizationWorld::empty(seed)));
             genesis.languages = Some(Arc::new(LanguagesWorld::empty(seed)));
         }
         for act in Stage::ALL {
@@ -1151,12 +1134,11 @@ impl Genesis {
                 .ocean_hierarchy
                 .clone()
                 .unwrap_or_else(|| Arc::new(GeopoliticalHierarchy::empty())),
-            // Once act eight has run, the named realms are the ones to paint; a
-            // world that has only reached act seven shows them unnamed.
+            // History publishes the named realms; a world younger than history
+            // has no realms to paint at all.
             civilizations: self
-                .named_civilizations
+                .civilizations
                 .clone()
-                .or_else(|| self.civilizations.clone())
                 .unwrap_or_else(|| Arc::new(CivilizationWorld::empty(self.seed))),
             languages: self
                 .languages
@@ -1565,38 +1547,43 @@ impl Genesis {
         summary
     }
 
-    // ─── 7. DAWN OF CIVILIZATION ─────────────────────────────────────────────
+    // ─── 7. HISTORY & LANGUAGES ──────────────────────────────────────────────
 
-    fn run_civilization(&mut self, sink: &Option<Arc<Sink>>) -> Vec<String> {
+    /// The history act: societies, faiths, languages and the names they give
+    /// one another. The two models share one act because the naming pass needs
+    /// both worlds at once; the dependency is one-way — societies first, tongues
+    /// second, names last.
+    fn run_history(&mut self, sink: &Option<Arc<Sink>>) -> Vec<String> {
         let hydro_config = self.hydro_config();
         let climate_config = self.climate_config();
         let civ_config = self.civilization_config();
-        let atlas = self.atlas().expect("act six runs before act seven");
+        let lang_config = self.language_config();
+        let atlas = self.atlas().expect("act six runs before history");
         let provinces = atlas
             .provinces
             .clone()
-            .expect("act four runs before act seven");
+            .expect("act four runs before history");
         let hierarchy = atlas.hierarchy.clone();
         let is_lake = atlas
             .is_lake
             .clone()
-            .expect("act three runs before act seven");
+            .expect("act three runs before history");
         let temperature = atlas
             .temperature
             .clone()
-            .expect("act two runs before act seven");
+            .expect("act two runs before history");
         let precipitation = atlas
             .precipitation
             .clone()
-            .expect("act two runs before act seven");
-        let flow = atlas.flow.clone().expect("act three runs before act seven");
+            .expect("act two runs before history");
+        let flow = atlas.flow.clone().expect("act three runs before history");
 
         let progress = watching(sink).with_map(MapRefs {
             heightmap: &atlas.heightmap,
             province_ids: &provinces.province_ids,
             ocean_ids: None,
         });
-        let world = generate_civilizations(
+        let societies = generate_civilizations(
             &atlas.heightmap,
             &temperature,
             &precipitation,
@@ -1613,51 +1600,30 @@ impl Genesis {
             &progress,
         );
 
+        let (languages, civilizations) =
+            generate_languages(&atlas, &societies, &lang_config, self.seed, &progress);
+
         let summary = vec![
-            format!("{} realms", world.civilizations.len()),
+            format!("{} realms", civilizations.civilizations.len()),
             format!(
                 "{} civilized provinces",
-                thousands_u64(world.civilized_provinces as u64)
+                thousands_u64(civilizations.civilized_provinces as u64)
             ),
-            format!("world population {}", thousands_u64(world.total_population)),
-            format!("atlas date {}", world.map_year_label()),
-        ];
-        self.civilizations = Some(Arc::new(world));
-        summary
-    }
-
-    // ─── 8. LANGUAGES & PHONETICS ────────────────────────────────────────────
-
-    fn run_languages(&mut self, sink: &Option<Arc<Sink>>) -> Vec<String> {
-        let config = self.language_config();
-        let atlas = self.atlas().expect("act seven runs before act eight");
-        let provinces = atlas
-            .provinces
-            .clone()
-            .expect("act four runs before act eight");
-
-        let progress = watching(sink).with_map(MapRefs {
-            heightmap: &atlas.heightmap,
-            province_ids: &provinces.province_ids,
-            ocean_ids: None,
-        });
-        let (world, named_civilizations) =
-            generate_languages(&atlas, &config, self.seed, &progress);
-
-        let summary = vec![
-            format!("{} language families", world.families.len()),
+            format!(
+                "world population {}",
+                thousands_u64(civilizations.total_population)
+            ),
+            format!("atlas date {}", civilizations.map_year_label()),
+            format!("{} language families", languages.families.len()),
             format!(
                 "{} languages across {} provinces",
-                world.languages.len(),
-                world.total_provinces()
+                languages.languages.len(),
+                languages.total_provinces()
             ),
-            format!("{} realms named", named_civilizations.civilizations.len()),
+            format!("{} realms named", civilizations.civilizations.len()),
         ];
-        // The named realms are act eight's own artefact, kept beside act seven's
-        // unnamed ones so that a rewind to act eight restores the dawn rather
-        // than a world that is already wearing its names.
-        self.named_civilizations = Some(Arc::new(named_civilizations));
-        self.languages = Some(Arc::new(world));
+        self.civilizations = Some(Arc::new(civilizations));
+        self.languages = Some(Arc::new(languages));
         summary
     }
 }
@@ -1823,7 +1789,12 @@ mod tests {
         assert_eq!(world.thermal_iterations, 4);
 
         let climate = genesis.climate_config();
-        assert_eq!(climate.mode, PlanetaryMode::RotatingStandard { axial_tilt_deg: 23.5 });
+        assert_eq!(
+            climate.mode,
+            PlanetaryMode::RotatingStandard {
+                axial_tilt_deg: 23.5
+            }
+        );
         assert_eq!(climate.equator_temp, 32.0);
         assert_eq!(climate.pole_temp, -28.0);
         assert_eq!(climate.base_rainfall, 0.45);
@@ -1842,7 +1813,10 @@ mod tests {
 
         assert_eq!(genesis.ocean_config().num_provinces, 2_500);
         assert_eq!(genesis.geopolitics_config().max_continents, 7);
-        assert_eq!(genesis.polar_config(), crate::core::polar::PolarConfig::default());
+        assert_eq!(
+            genesis.polar_config(),
+            crate::core::polar::PolarConfig::default()
+        );
     }
 
     /// A constant a reader moves reaches the act that reads it — and only that
@@ -1960,7 +1934,7 @@ mod tests {
     }
 
     /// A full world written to disk is the same world when it is read back, and
-    /// the pipeline picks up at act seven rather than re-running acts one to six.
+    /// the pipeline picks up at history rather than re-running acts one to six.
     #[test]
     fn a_full_world_round_trips_through_its_cache() {
         let seed = 0x0BAD_C0DE;
@@ -1973,7 +1947,7 @@ mod tests {
         adopted.load_cache().expect("read the world back");
         let _ = std::fs::remove_file(&path);
 
-        assert_eq!(adopted.ready(), Some(Stage::Civilization));
+        assert_eq!(adopted.ready(), Some(Stage::History));
         assert_eq!(
             adopted.state(Stage::HydroPolitics),
             StageState::Done { secs: 0.0 },
@@ -2148,17 +2122,16 @@ mod tests {
     }
 
     /// A world adopted from the full cache is a world of six acts, and the act it
-    /// offers next is the dawn of history.
+    /// offers next is history.
     #[test]
     fn a_world_of_six_acts_offers_the_seventh() {
         let genesis = Genesis::for_test(5, Stage::HydroPolitics);
-        assert_eq!(genesis.ready(), Some(Stage::Civilization));
+        assert_eq!(genesis.ready(), Some(Stage::History));
         assert_eq!(
             genesis.state(Stage::HydroPolitics),
             StageState::Done { secs: 0.0 }
         );
-        assert_eq!(genesis.state(Stage::Civilization), StageState::Ready);
-        assert_eq!(genesis.state(Stage::Languages), StageState::Locked);
+        assert_eq!(genesis.state(Stage::History), StageState::Ready);
         assert_eq!(
             genesis.state(Stage::Geology),
             StageState::Done { secs: 0.0 },
@@ -2171,7 +2144,7 @@ mod tests {
     #[test]
     fn rewinding_drops_the_acts_at_and_after_the_one_named() {
         let mut genesis = Genesis::for_test(5, Stage::HydroPolitics);
-        assert_eq!(genesis.ready(), Some(Stage::Civilization));
+        assert_eq!(genesis.ready(), Some(Stage::History));
 
         genesis.rewind_to(Stage::Hydrology);
 
@@ -2218,23 +2191,27 @@ mod tests {
         assert!(genesis.atlas().is_none(), "there is no world left to paint");
     }
 
-    /// Rewinding to act eight drops the tongues and the names it gave the realms,
-    /// but leaves the dawn act seven grew.
+    /// Rewinding to history drops its realms and tongues, but leaves every
+    /// physical act before it untouched.
     #[test]
-    fn rewinding_to_languages_keeps_the_dawn_but_drops_the_tongues() {
-        let mut genesis = Genesis::for_test(1_980, Stage::Languages);
-        assert_eq!(genesis.ready(), None, "a world of eight acts is finished");
+    fn rewinding_to_history_drops_the_realms_and_the_tongues() {
+        let mut genesis = Genesis::for_test(1_980, Stage::History);
+        assert_eq!(genesis.ready(), None, "a world of seven acts is finished");
 
-        genesis.rewind_to(Stage::Languages);
+        genesis.rewind_to(Stage::History);
 
-        assert_eq!(genesis.ready(), Some(Stage::Languages));
+        assert_eq!(genesis.ready(), Some(Stage::History));
         assert_eq!(
-            genesis.state(Stage::Civilization),
+            genesis.state(Stage::HydroPolitics),
             StageState::Done { secs: 0.0 },
-            "act seven stands"
+            "act six stands"
         );
-        let world = genesis.atlas().expect("seven acts are still a world");
-        assert!(world.languages.is_empty(), "act eight's tongues are gone");
+        let world = genesis.atlas().expect("six acts are still a world");
+        assert!(world.languages.is_empty(), "history's tongues are gone");
+        assert!(
+            world.civilizations.is_empty(),
+            "history's realms are gone too"
+        );
     }
 
     /// A seed is read by each act as it runs, so changing it keeps every act
@@ -2413,15 +2390,22 @@ mod tests {
         }
 
         let worlds = cached_worlds_in(&dir);
-        let forty_two: Vec<&CachedWorld> =
-            worlds.iter().filter(|world| world.seed == 42).collect();
-        assert_eq!(forty_two.len(), 2, "one legacy file folds into its 16K twin");
+        let forty_two: Vec<&CachedWorld> = worlds.iter().filter(|world| world.seed == 42).collect();
+        assert_eq!(
+            forty_two.len(),
+            2,
+            "one legacy file folds into its 16K twin"
+        );
         assert!(
             forty_two
                 .iter()
                 .any(|world| (world.width, world.height) == (8_192, 4_096))
         );
-        assert!(forty_two.iter().any(|world| !world.legacy && world.width == 16_384));
+        assert!(
+            forty_two
+                .iter()
+                .any(|world| !world.legacy && world.width == 16_384)
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

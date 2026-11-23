@@ -49,11 +49,12 @@ around them.
 
 ## What is inside the picture face
 
-41 codepoints: every character in `src/viewer.rs` and `src/viewer/*.rs` that
+42 codepoints: every character in `src/viewer.rs` and `src/viewer/*.rs` that
 falls in the emoji/symbol blocks (`U+1F000–1FAFF`, `U+2600–27BF`, `U+2B00–2BFF`,
-`U+2300–23FF`, `U+25A0–25FF`), minus the three marks above. 40 are COLR base
-glyphs; the 41st is `U+FE0F`, the emoji presentation selector used by `🏔️` and
-`⛰️` (zero advance, included so those sequences lay out cleanly).
+`U+2300–23FF`, `U+25A0–25FF`), minus the three marks above. 41 are COLR base
+glyphs; the 42nd is `U+FE0F`, the emoji presentation selector used by `🏔️` and
+`⛰️` (zero advance, included so those sequences lay out cleanly). The wheel of
+the Religions scope, `🛐` (`U+1F6D0`), is one of the COLR glyphs.
 
 The test `every_icon_comes_from_a_bundled_face` in `src/viewer.rs` reads those
 sources and fails if a pictogram is not resolved by the picture face, or one of

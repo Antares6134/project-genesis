@@ -1,6 +1,6 @@
+use crate::core::Grid;
 use crate::core::progress::Progress;
 use crate::core::sphere;
-use crate::core::Grid;
 use crate::export::live;
 use crate::hydrology::config::{HydrologyConfig, SECONDS_PER_YEAR};
 
@@ -66,9 +66,14 @@ pub fn calculate_flow(
     let mut flow = Grid::filled_with(w, h, 0.0f32);
 
     let neighbors: [(isize, isize, f32); 8] = [
-        (-1, 0, 1.0), (1, 0, 1.0), (0, -1, 1.0), (0, 1, 1.0),
-        (-1, -1, std::f32::consts::SQRT_2), (1, -1, std::f32::consts::SQRT_2),
-        (-1, 1, std::f32::consts::SQRT_2), (1, 1, std::f32::consts::SQRT_2),
+        (-1, 0, 1.0),
+        (1, 0, 1.0),
+        (0, -1, 1.0),
+        (0, 1, 1.0),
+        (-1, -1, std::f32::consts::SQRT_2),
+        (1, -1, std::f32::consts::SQRT_2),
+        (-1, 1, std::f32::consts::SQRT_2),
+        (1, 1, std::f32::consts::SQRT_2),
     ];
 
     // 1. Initial surface discharge from precipitation, in m³/s.
@@ -157,7 +162,14 @@ pub fn calculate_flow(
         if head % CELLS_PER_CHECKPOINT == 0 {
             progress.tick(head as u64);
             progress.preview_map("Rivers reaching the sea", (w, h), |x, y| {
-                live::water_at(routing_heights, None, Some(&flow), config.min_river_flow, x, y)
+                live::water_at(
+                    routing_heights,
+                    None,
+                    Some(&flow),
+                    config.min_river_flow,
+                    x,
+                    y,
+                )
             });
         }
 
@@ -228,8 +240,14 @@ mod tests {
         let config = HydrologyConfig::default();
         let progress = Progress::silent();
         let pit = fill_depressions_and_find_lakes(&heightmap, sea_level, &config, &progress);
-        let flow =
-            calculate_flow(&pit.routing_heightmap, &precip, &temp, sea_level, &config, &progress);
+        let flow = calculate_flow(
+            &pit.routing_heightmap,
+            &precip,
+            &temp,
+            sea_level,
+            &config,
+            &progress,
+        );
 
         let rain_m_per_year = 0.5 * config.reference_precip_mm_per_year / 1_000.0;
         let cell_area_m2 = sphere::pixel_area_km2(sy as usize, h, w) * 1.0e6;
@@ -237,7 +255,10 @@ mod tests {
             rain_m_per_year * cell_area_m2 / SECONDS_PER_YEAR * config.runoff_coefficient;
 
         let got = peak(&flow);
-        assert!(expected > 0.0, "the conversion must yield positive discharge");
+        assert!(
+            expected > 0.0,
+            "the conversion must yield positive discharge"
+        );
         assert!(
             (got - expected).abs() < expected * 1e-3,
             "peak discharge {got} m³/s should equal one cell's {expected} m³/s"
@@ -257,9 +278,20 @@ mod tests {
         let config = HydrologyConfig::default();
         let progress = Progress::silent();
         let pit = fill_depressions_and_find_lakes(&heightmap, 0.40, &config, &progress);
-        let flow = calculate_flow(&pit.routing_heightmap, &precip, &temp, 0.40, &config, &progress);
+        let flow = calculate_flow(
+            &pit.routing_heightmap,
+            &precip,
+            &temp,
+            0.40,
+            &config,
+            &progress,
+        );
 
-        assert_eq!(peak(&flow), 0.0, "a frozen world must route no water at all");
+        assert_eq!(
+            peak(&flow),
+            0.0,
+            "a frozen world must route no water at all"
+        );
     }
 
     /// The Nile rule: a river born on wet ground keeps its water even where it
@@ -277,8 +309,14 @@ mod tests {
         // A wet headwater in the top column, a desert course everywhere below it.
         let mut precip = Grid::filled_with(w, h, 0.02f32);
         precip.set((w - 1) as isize, 2, 0.5);
-        let nile =
-            calculate_flow(&pit.routing_heightmap, &precip, &warm, 0.40, &config, &progress);
+        let nile = calculate_flow(
+            &pit.routing_heightmap,
+            &precip,
+            &warm,
+            0.40,
+            &config,
+            &progress,
+        );
         assert!(
             peak(&nile) > 0.0,
             "a river born on wet ground must survive its desert course"
@@ -286,8 +324,14 @@ mod tests {
 
         // The same channel, but the headwater is desert too: nothing to carry.
         let desert = Grid::filled_with(w, h, 0.02f32);
-        let dry =
-            calculate_flow(&pit.routing_heightmap, &desert, &warm, 0.40, &config, &progress);
+        let dry = calculate_flow(
+            &pit.routing_heightmap,
+            &desert,
+            &warm,
+            0.40,
+            &config,
+            &progress,
+        );
         assert_eq!(
             peak(&dry),
             0.0,

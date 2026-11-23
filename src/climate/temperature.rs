@@ -1,6 +1,6 @@
-use crate::core::progress::Progress;
-use crate::core::{relief, Grid};
 use crate::climate::config::{ClimateConfig, PlanetaryMode};
+use crate::core::progress::Progress;
+use crate::core::{Grid, relief};
 use crate::export::live;
 use noise::{NoiseFn, OpenSimplex};
 
@@ -57,7 +57,8 @@ pub fn simulate_temperature(
             // tiny negative, and `powf` of a negative is NaN — which would leave
             // two rows of the world with no temperature at all.
             let polar_taper = (insolation * 1.15).clamp(0.0, 1.0).powf(0.65);
-            let mut base_temp = config.pole_temp + polar_taper * (config.equator_temp - config.pole_temp);
+            let mut base_temp =
+                config.pole_temp + polar_taper * (config.equator_temp - config.pole_temp);
 
             // Organic Atmospheric Waves (bends horizontal climate bands organically!)
             let angle = u * std::f32::consts::TAU;

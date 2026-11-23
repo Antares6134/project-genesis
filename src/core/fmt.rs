@@ -13,7 +13,11 @@
 pub fn thousands(v: f32) -> String {
     let rounded = v.round();
     let body = thousands_u64(rounded.abs() as u64);
-    if rounded < 0.0 { format!("-{body}") } else { body }
+    if rounded < 0.0 {
+        format!("-{body}")
+    } else {
+        body
+    }
 }
 
 /// An integer count rendered with space-grouped thousands: `4918220` becomes

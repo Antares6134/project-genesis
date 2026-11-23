@@ -22,8 +22,8 @@ reproduces the same planet.
   trade winds, orographic rain shadows, then flow accumulation into dendritic rivers.
 - **Two matching hierarchies** — land and ocean each cut into *Provinces → Areas → Regions →
   Superregions → Continents/Basins*.
-- **A dawn of history** — a cradle, a rise story, an economy, a government, a faith, ancestry,
-  contacts and real populations for every realm, dated in the world's own era.
+- **A dawn of history** — a cradle, a rise story, an economy, a government, a social hierarchy, a seven-level faith, ancestry
+  and real populations for every realm, dated from the founding of its first city.
 - **One painter for both outputs** — the headless exporter and the interactive viewer share
   their cartography, so the printed maps can never disagree with the window.
 
@@ -41,7 +41,7 @@ cargo run --release -- 3286592765982 --load --civs             # print the dossi
 cargo run --release -- 3286592765982 --load --plates           # re-render every README plate
 ```
 
-The atlas opens **before** any world exists. Give it a seed (or draw one), and the eight acts of
+The atlas opens **before** any world exists. Give it a seed (or draw one), and the seven acts of
 creation are buttons in its genesis panel — each one runs on a worker thread, in order, with a
 live low-resolution plate of the world appearing on the canvas as it is made.
 
@@ -53,9 +53,9 @@ live low-resolution plate of the world appearing on the canvas as it is made.
 | `--viewer` | Launch the interactive desktop atlas. The atlas starts on the **8K** preset. |
 | `--headless` | Run without a window — the default when `--viewer` is absent. Headless starts on the tuned 16K plate. |
 | `--width <px>` / `--height <px>` | Choose the canvas for either mode; the interactive viewer's presets are 2K–16K. |
-| `--civs` | Run the history stage, print the dossier, export its 16K plate. |
+| `--civs` | Run the history act, print the dossier, export its 16K plate. |
 | `--civs-all` | The same, with a full dossier for every society — hundreds of them. |
-| `--langs` | Run Act 8, print the language families and their lexicons, and export the Languages map. |
+| `--langs` | Run the history act, print the language families and their lexicons, and export the Languages map. |
 | `--plates` | Export the 17 `./exports/atlas_*.png` scope and tier plates used below. |
 | `--lang <code>` | The atlas's interface language — `en`, `es`, `fr`, `de`, `pt` or `tr` (default: the last choice, else the desktop's locale). |
 
@@ -72,8 +72,9 @@ bit-for-bit the world that was saved, and a cache written by an older build (`PG
 with no magic) still loads.
 
 Every headless run also exports `world_physical_map.png`, `world_topographic_map.png` (a
-contoured elevation survey) and `world_political_map.png` (the land hierarchy). `--civs` and
-`--plates` run the history stage too, since a world plate wants a dawn on it.
+contoured elevation survey) and `world_political_map.png` (the land hierarchy); a history run
+adds `world_civilizations_map.png`, `world_languages_map.png` and `world_religions_map.png`.
+`--civs` and `--plates` run the history stage too, since a world plate wants a dawn on it.
 
 ### Growing a world in the atlas
 
@@ -91,8 +92,8 @@ lines of plain figures under the canvas:
 | :--- | :--- |
 | **Seed** | Type a whole number, or press 🎲 to draw one. A seed is read by each act as it runs, so changing it between acts keeps the acts already grown and re-points only the acts still to come; before act 1 it simply starts a fresh world. |
 | **Map resolution** | The canvas the next world grows on: **2K · 2048 × 1024**, **4K · 4096 × 2048**, **8K · 8192 × 4096** (the startup default), **12K · 12288 × 6144**, or **16K · 16384 × 8192**. Before act 1 the choice applies at once. Once a world exists its canvas is part of its identity: choosing another preset shows a reset prompt, and **↺ Reset world** applies it. Province counts, erosion droplets, strait widths and lake thresholds scale with the canvas; the values in Advanced configuration are quoted at the 16K reference. |
-| **World data** | 📂 **Load** and 💾 **Save** are the two commands for the seed above. **Save** writes the world as it stands to `saved_seeds/world_<seed>_<width>x<height>.bin`, from act 1 up to act 6 — the land, the climate, the water and as far up the hierarchies as the world has climbed; acts 7 and 8 are never written. Every save overwrites the last, so the file always holds the deepest checkpoint. **Load** adopts it in one press and picks the panel up at the act after the one it holds. 💾 **Save automatically when act 3 and act 6 land** is the setting behind them: while it is ticked, act 3 writes the cache and act 6 writes it again, overwriting the earlier save. The expandable **📂 Saved worlds** list under it shows every cache on disk, newest first, with its age and size, and each row names the acts that save holds — `acts 1–6` — read from the file's one-byte header (a save from an older build, which has no header, says only that a world is there); click a world to load it. A seed with no cache says so plainly, in one line. |
-| **The eight acts** | A fold-out of its own, counting how many are grown. Only the next act is pressable; the ones behind it are ✔ and the ones ahead are greyed out. Every ✔ act also carries a small **↺** button that un-does that act and everything after it, so the whole tail may be grown again — optionally from a new seed or new constants. |
+| **World data** | 📂 **Load** and 💾 **Save** are the two commands for the seed above. **Save** writes the world as it stands to `saved_seeds/world_<seed>_<width>x<height>.bin`, from act 1 up to act 6 — the land, the climate, the water and as far up the hierarchies as the world has climbed; the history act is never written. Every save overwrites the last, so the file always holds the deepest checkpoint. **Load** adopts it in one press and picks the panel up at the act after the one it holds. 💾 **Save automatically when act 3 and act 6 land** is the setting behind them: while it is ticked, act 3 writes the cache and act 6 writes it again, overwriting the earlier save. The expandable **📂 Saved worlds** list under it shows every cache on disk, newest first, with its age and size, and each row names the acts that save holds — `acts 1–6` — read from the file's one-byte header (a save from an older build, which has no header, says only that a world is there); click a world to load it. A seed with no cache says so plainly, in one line. |
+| **The seven acts** | A fold-out of its own, counting how many are grown. Only the next act is pressable; the ones behind it are ✔ and the ones ahead are greyed out. Every ✔ act also carries a small **↺** button that un-does that act and everything after it, so the whole tail may be grown again — optionally from a new seed or new constants. |
 | **▶▶ Run all remaining** | Grows the rest of the world without stopping (⏹ stops it after the act in flight). |
 | **↺ Reset world** | Throws the world away and starts over on the same seed — with the constants you chose. |
 | **⚙ Advanced configuration** | A fold-out of every constant the engine reads: twenty-five of them in nine groups — the planet's spin and its sea-level temperatures, the polar ice, the continental field and its coastlines, the orogeny that folds them, weathering and erosion, the moist atmosphere, the rivers, the provinces and wastelands, and the ceiling on continents. Every slider carries the specification's sentence as a hover card and a **↺** back to the engine's default; a group whose values have been moved says `edited`, and each group has a reset of its own. Constants are read by an act **when it runs**, so a change applies to the acts not yet grown — press ↺ on an act to grow it again — and the world already on the canvas is never rewritten. While an act is in flight the constants are greyed: the pipeline is on a worker thread and could not hear the drag. |
@@ -122,13 +123,12 @@ in the top bar when it lands.
 | 4. Geography & Provinces | The land cut into provinces, its wilderness mapped |
 | 5. Geopolitical Hierarchy | Provinces → areas → regions → superregions → continents |
 | 6. Hydro-Political Hierarchy | The world ocean, same five tiers — **the full pre-history checkpoint (acts 1–6) is writable from here** |
-| 7. Dawn of Civilization | Realms, societies, populations, an era |
-| 8. Languages & Phonetics | Phonologies, proto-lexicons, Urheimats, native names |
+| 7. History & Languages | Realms, societies, economies, governments, seven-level faiths, phonologies, proto-lexicons, native names |
 
 Each act runs on a worker thread, so the window stays alive while the world is grown, and the
 map scopes are offered exactly when their subject exists: the survey sheet from act 1, the
 physical atlas and both climate scopes from act 2, the political map from act 4, the ocean and
-the dawn from acts 6 and 7. While an act runs, the canvas shows a **live plate** — a
+the history act from acts 6 and 7. While an act runs, the canvas shows a **live plate** — a
 low-resolution picture painted from the very grid the act is working on, a few frames a second:
 continents assembling, valleys carving, lakes filling, rivers reaching the sea, provinces
 spreading outward, realms claiming their hinterlands. When the act lands, its full 16K plate
@@ -140,8 +140,8 @@ from a cache is identical to one grown from scratch.
 
 ## Atlas gallery
 
-Ten map scopes, each with its own legend; the **Civilizations overlay** checkbox tints the
-provinces each society holds on top of *any* scope.
+Eleven map scopes, each with its own legend; the **Civilizations overlay** checkbox tints the
+provinces each society holds on top of any scope whose subject is not already a people.
 
 | Scope | What it portrays |
 | :--- | :--- |
@@ -151,6 +151,7 @@ provinces each society holds on top of *any* scope.
 | **🌡 Temperature** | Thermal belts, from deep violet cold to red-hot tropics, with a thin line on every 5 °C isotherm. |
 | **🪨 Terrain** | Landform and bathymetry classes: abyssal plain, shelf, coastal lowland, hill country, upland, mountain and high mountain. |
 | **🏺 Civilizations** | The dawn of history: the physical world with the realms that rose on it, each in its own colour, with a dot on the cradle province where it began. |
+| **🛐 Religions** | The world's faiths: one colour family per metaphysical root, one shade per religion, with the full creed, powers, cosmos, ethos, rites and holy places on hover. |
 | **🗣 Languages** | The world's language families: one colour per family, one shade per language, with an Urheimat and a native autonym for every tongue. |
 | **🏛 Land** | Political subdivision of the landmasses only; the ocean stays plain water. |
 | **🌊 Water** | The hydro-political subdivision of the world ocean only; the continents are muted. |
@@ -168,21 +169,58 @@ provinces each society holds on top of *any* scope.
 | :---: | :---: | :---: |
 | [![Land](./exports/atlas_land_regions.png)](./exports/atlas_land_regions.png) | [![Water](./exports/atlas_water_regions.png)](./exports/atlas_water_regions.png) | [![Everywhere](./exports/atlas_everywhere_regions.png)](./exports/atlas_everywhere_regions.png) |
 
+### The seven-level faith
+
+The history act gives every realm a religion that is read as a cascade rather than a single
+cult label. The **metaphysical root** (monotheism, dualism, henotheism,
+polytheism, animism, pantheism, panentheism, deism, nontheism) sets the shape of
+the creed; the **cardinality** says whether it is singular, dyadic, hegemonic,
+polycentric or abstract; the **object of reverence** says whether it holds gods,
+goddesses, spirits, totems, ancestors, souls, a principle or a teacher, and the
+**domains** name the powers it holds. Cosmology then
+fixes the world's origin, the shape of time, its end and the fate of the dead;
+ethos fixes its virtues, taboo, soteriology and stance to outsiders; praxis fixes
+its rites, its transmission and its calendar. Polity decides who speaks for it
+and how it stands to the state, and manifestation gives it a sacred place, an
+orientation, an emblem and one or more holy sites. Once the realm's language
+exists, only the named parts are drawn from its roots: the faith's own name, the
+native word for each domain, the name of each deity or principle, the core of an
+abstract faith and the emblem. Creed, cosmology, ethos, path, rites, temple and
+manifestation stay English. A faith may hold a primary holy place and one site for
+each power, so a pantheon grows a temple for every god and a state monotheism
+grows a set of sees.
+
+The country and the society are read at every step: a river floodplain looks to
+water, fertility and sovereignty; a desert to the sun, stars and moon; a forest
+to flora, fauna and earth; a coast to the sea, wind and trade; a martial frontier
+to war and death while praising honor and valor. Hard constraints keep the
+impossible out — an animist people never grows an ecclesiarchy, a nontheist creed
+never keeps a living oracle, a polycentric pantheon never sends missionaries.
+Daughter realms inherit their ancestor's root and cosmology, shift their
+secondary domains towards their own biome, and occasionally schism; neighbouring
+faiths convert, merge or plant minority mystery cults across a shared frontier.
+The **Civilizations** map mode keeps a religion to its name and creed on hover;
+the **Religions** map mode carries the whole cascade, paints every province by the
+faith its society keeps, gives each metaphysical root a colour family and each
+religion a shade within it, and marks every faith's holiest place on the map.
+
 ### Languages & Phonetics
 
-Act 8 gives the world a voice. Ten to eighteen ancestral families are placed at
+The same act gives the world a voice. Twenty to thirty ancestral families are placed at
 *Urheimats* — river basins, coasts, lakeshores, temperate woodlands and isolated
 high valleys — and each draws a **phonology DNA** from its country: a consonant
 and vowel inventory, syllable templates (`CV`, `CVC`, `CCVC`…), sonority-based
-phonotactic rules, and marked articulations such as glottal stops (`'`). Every
-family then names the same forty core meanings in its own sounds, and compounds
-those roots into language names, autonyms, realms, capitals and homelands.
+phonotactic rules, and marked articulations such as glottal stops (`'`), tone,
+aspiration and long vowels. Every family then names the same hundred core
+meanings in its own sounds, and compounds those roots into language names,
+autonyms, realms, capitals, homelands, faith names, the names of their deities
+and domain words, emblems, and sacred sites.
 
 The families spread across the province graph by a friction-weighted flood fill:
 rivers and open plains are cheap, hills cost more, mountain spines and deep
 wilderness cost most, and open ocean is a wall until the world can sail. Dense
 urban cradles split into local daughter languages and isolates, while pastoral and
-wilderness zones form sweeping macro-family blobs. Stage 8 republishes the
+wilderness zones form sweeping macro-family blobs. The history act republishes the
 civilizations with native names, so the Civilizations legend and hover cards pick
 them up without a special case.
 
@@ -227,7 +265,7 @@ scaled up because it is one connected, far larger domain.
 | Median land elevation | **+750 m** (90 % of land below +2 050 m) |
 | Median ocean depth | **−3 950 m** |
 | Continental shelf (≤ −200 m) | **9.3 % of the ocean** |
-| Civilizations at 1 922 BCE | **26 states · 24 765 124 world population · 0.28 people/km²** |
+| Civilizations at Year 1 922 | **26 states · 24 765 124 world population · 0.28 people/km²** |
 
 ## How it works
 
@@ -252,8 +290,8 @@ scaled up because it is one connected, far larger domain.
 6. **Hierarchies** — each domain clustered upward: Areas → Regions → Superregions →
    Continents (land) and Areas → Regions → Superregions → Basins (ocean)
    ([`src/geopolitics/`](src/geopolitics/)).
-7. **History** — census, cradle scoring, expansion, deep-time development, populations,
-   contact and inheritance ([`src/civilization/`](src/civilization/)).
+7. **History** — census, cradle scoring, expansion, deep-time development, populations
+   and inheritance ([`src/civilization/`](src/civilization/)).
 
 Terrain maths runs in a normalized heightmap coordinate, but everything the atlas *reports* is
 in metres from one piecewise datum ([`src/core/relief.rs`](src/core/relief.rs)) — `1.0` =
@@ -286,17 +324,17 @@ rise on its own account, as the Amazon and New Guinea did. The result is a mosai
 *Hunter-gatherers → Nomadic pastoralists → Simple farming societies → Complex farming societies
 → State societies*
 
-roughly 67 / 8 / 16 / 5 / 2 per cent of the inhabited world, close to what a real map of 2000 BCE
-shows. Each tier decides a society's colour, how many people each province feeds, and what the
-atlas calls it ([`src/civilization/mod.rs`](src/civilization/mod.rs)).
+roughly 67 / 8 / 16 / 5 / 2 per cent of the inhabited world, close to what a real map of the
+early Bronze Age shows. Each tier decides a society's colour, how many people each province
+feeds, and what the atlas calls it ([`src/civilization/mod.rs`](src/civilization/mod.rs)).
 
 **Government and people.** Every society has one government, from band to tribe to chiefdom, and —
 once it is a state — a regime chosen from its economy and ethos (a divine monarch or temple
 republic for a river people, merchants or a landed elite for a boat people, a tyrant or a clique
 for a herd people). Only states climb the development axis toward the atlas date; a band of
 foragers is not a less-developed state but a different kind of society, and its place on the axis
-is set by its tier. Societies in contact share a land frontier, a sea route or a distant rumour;
-those grown from the same country share an ancestral stock, a tongue family and often a creed.
+is set by its tier. Those grown from the same country share an ancestral stock, a tongue family and
+often a creed.
 
 **The world's age.** The age belongs to the world and its date, never to a society:
 *Cultivation → Irrigation → Copper & Alloys → Refinement → Architecture → Automated Mills →
@@ -304,14 +342,14 @@ Oceanic Currents → Industrial → Information → Molecular → Planetary*. Th
 **Copper & Alloys**, so the later ages complete the ladder rather than being reached
 ([`src/civilization/age.rs`](src/civilization/age.rs)).
 
-**The calendar.** Years of the **Common Era**, counted from a single deliberately undefined
-event. The epoch is a seeded *place* and *year*: a province chosen for the shape a founding
-story takes — a crossroads, a lone peak, a shore, a lake, an island, never a cradle and never
-a throne — and a year placed a few centuries to a couple of millennia *after* the atlas date.
-Because the map portrays the world in its dawn, every date it shows is therefore counted back
-as BCE, and the depth of prehistory before the first
-city is a separate, far larger quantity biased by how kind the planet turned out to be
-([`src/civilization/epoch.rs`](src/civilization/epoch.rs)).
+**The calendar.** The calendar begins where the first civilization does: the founding of the
+first city is **Year 0**, and every later date is a plain count of years from it — `Year 1 111`,
+never a BCE/CE pair. The epoch is therefore the first cradle itself, not a separately chosen
+place and year. The map portrays the world a few centuries to a couple of millennia into that
+count, so its realms and the atlas share one continuous history. The depth of prehistory before
+the first city is a separate, far larger quantity biased by how kind the planet turned out to be
+([`src/civilization/epoch.rs`](src/civilization/epoch.rs)). Later builds may adopt a new epoch
+when history reaches a new age; for now Year 0 is the first city.
 
 ## Determinism and caching
 
@@ -323,9 +361,9 @@ There is one cache per seed and canvas, `world_<seed>_<width>x<height>.bin`, hol
 heightmap, temperature, precipitation, flow and lakes, then the land provinces, the ocean provinces
 and both hierarchies as far as the world has climbed. It is written automatically the moment act 3
 lands and again the moment act 6 lands, each overwriting the last, and it can be written by hand at
-any time from the atlas's **💾 Save** button. Acts 7 and 8 are never written, so a save always
-resumes at the dawn or before it. `--load` adopts the file and never re-runs the acts it covers — a
-save made at act 3 resumes at act 4, one made at act 6 at act 7. Languages are cheap enough to
+any time from the atlas's **💾 Save** button. The history act is never written, so a save always
+resumes at history or before it. `--load` adopts the file and never re-runs the acts it covers — a
+save made at act 3 resumes at act 4, one made at act 6 at history. Languages are cheap enough to
 regenerate every time, so they have no cache.
 
 Each save also carries a one-byte header naming the deepest act it holds, so the atlas's **📂 Saved

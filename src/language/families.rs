@@ -171,6 +171,12 @@ pub fn archetype_for(profile: &ProvinceProfile) -> SoundArchetype {
     if profile.coastal || profile.lakeshore {
         return SoundArchetype::MelodicMaritime;
     }
+    if (16.0..=30.0).contains(&profile.mean_temp_c) && profile.mean_precip >= 0.18 {
+        return SoundArchetype::TonalSavanna;
+    }
+    if profile.mean_precip < 0.22 && profile.mean_temp_c < 16.0 {
+        return SoundArchetype::AspiratedSteppe;
+    }
     SoundArchetype::SonorousWoodland
 }
 
@@ -327,6 +333,67 @@ mod tests {
     use super::*;
     use crate::geopolitics::{GeopoliticalHierarchy, ProvinceNode};
 
+    fn profile(
+        elevation: f32,
+        flow: f32,
+        coastal: bool,
+        temp: f32,
+        precip: f32,
+    ) -> ProvinceProfile {
+        ProvinceProfile {
+            present: true,
+            center_x: 0.0,
+            center_y: 0.0,
+            continent: 1,
+            area_km2: 1_000.0,
+            mean_elevation_m: elevation,
+            max_flow: flow,
+            coastal,
+            lakeshore: false,
+            mean_temp_c: temp,
+            mean_precip: precip,
+            population: 1_000,
+            density_per_km2: 1.0,
+            owner: 0,
+        }
+    }
+
+    #[test]
+    fn every_archetype_follows_its_country() {
+        assert_eq!(
+            archetype_for(&profile(1_600.0, 0.0, false, 10.0, 0.2)),
+            SoundArchetype::GlottalHighland
+        );
+        assert_eq!(
+            archetype_for(&profile(200.0, 2_000.0, false, 20.0, 0.2)),
+            SoundArchetype::NasalRiverine
+        );
+        assert_eq!(
+            archetype_for(&profile(200.0, 0.0, false, 5.0, 0.25)),
+            SoundArchetype::SibilantTaiga
+        );
+        assert_eq!(
+            archetype_for(&profile(200.0, 0.0, false, 10.0, 0.10)),
+            SoundArchetype::GutturalArid
+        );
+        assert_eq!(
+            archetype_for(&profile(200.0, 0.0, true, 20.0, 0.30)),
+            SoundArchetype::MelodicMaritime
+        );
+        assert_eq!(
+            archetype_for(&profile(200.0, 0.0, false, 22.0, 0.25)),
+            SoundArchetype::TonalSavanna
+        );
+        assert_eq!(
+            archetype_for(&profile(200.0, 0.0, false, 10.0, 0.20)),
+            SoundArchetype::AspiratedSteppe
+        );
+        assert_eq!(
+            archetype_for(&profile(200.0, 0.0, false, 10.0, 0.30)),
+            SoundArchetype::SonorousWoodland
+        );
+    }
+
     /// Hue in degrees, for the wheel-coverage test. The palette is a categorical
     /// one, so what matters is that it visits every sector, not that the numbers
     /// are evenly spaced.
@@ -426,8 +493,7 @@ mod tests {
             }
             for (neighbor, _) in &node.neighbors {
                 assert_ne!(
-                    colors[node.id as usize],
-                    colors[*neighbor as usize],
+                    colors[node.id as usize], colors[*neighbor as usize],
                     "province {} and its neighbour {neighbor} share a hue",
                     node.id
                 );

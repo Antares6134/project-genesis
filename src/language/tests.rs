@@ -8,7 +8,7 @@ use crate::language::naming::{
     language_name, realm_name, syllable_count,
 };
 
-/// The canon of Act 8, checked through its real entry points: a world's families,
+/// The canon of the language phase, checked through its real entry points: a world's families,
 /// their tongues and a full gazetteer of realms all read like words — two to four
 /// syllables, at most fourteen characters, strictly title-cased, never two
 /// modifiers deep.
@@ -24,7 +24,12 @@ fn every_generated_name_is_a_short_readable_word() {
             score: 1.0,
             archetype: *archetype,
         };
-        let family = build_family(index as u16 + 1, &seed, 7_000 + index as u64, Age::LADDER[6]);
+        let family = build_family(
+            index as u16 + 1,
+            &seed,
+            7_000 + index as u64,
+            Age::LADDER[6],
+        );
         assert_well_shaped(&family.name);
         assert_well_shaped(&family.autonym);
         assert_well_shaped(&family.urheimat.name);
@@ -39,7 +44,11 @@ fn every_generated_name_is_a_short_readable_word() {
             Concept::New,
             Concept::Old,
         ] {
-            tongues.push(language_name(&family.lexicon, &family.name, Some(qualifier)));
+            tongues.push(language_name(
+                &family.lexicon,
+                &family.name,
+                Some(qualifier),
+            ));
         }
         for tongue in &tongues {
             assert_well_shaped(tongue);
@@ -59,7 +68,6 @@ fn every_generated_name_is_a_short_readable_word() {
         }
     }
 }
-
 
 /// A shape a name must have to be legible as a word on a map.
 fn assert_well_shaped(name: &str) {

@@ -1,4 +1,4 @@
-//! Stage 7 — the dawn of history: the civilizations that rise on a finished planet.
+//! History phase — societies & faiths: the civilizations that rise on a finished planet.
 //!
 //! The physical pipeline decides where there is land, water, rain and soil; the
 //! geopolitical pipeline cuts that land into provinces. This module asks the next
@@ -15,25 +15,19 @@
 //!
 //! ## The calendar
 //!
-//! There is no calendar to inherit on a planet nobody has inhabited yet, so this
-//! world fixes a convention of its own — the plainest one there is: years of the
-//! **Common Era**, counted from a single important event in its history. The event
-//! is deliberately undefined, and it is never a civilization's founding — a calendar
-//! cannot take its epoch from a polity that only exists because somebody later
-//! decided to count years. Instead the epoch is a *place* and a *year*, both drawn
-//! from the seed: a province chosen for the shape a founding story takes (a
-//! crossroads, a lone peak, a lake, an island — never a cradle, never a throne), and
-//! a year placed a few centuries to a couple of millennia *after* the atlas date.
-//!
-//! The timeline has no beginning. Years before the epoch are counted backwards as
-//! BCE — and because the atlas portrays a world in its dawn, that is every date the
-//! map shows, exactly as a map of our own 2000 BCE is dated in the years before the
-//! Common Era. The depth of prehistory before the first city is a separate, much
+//! The calendar begins where the first civilization does: the founding of the first
+//! city is **Year 0**, and every later date is a plain count of years from it —
+//! `Year 1 111`, never a BCE/CE pair. There is no separate epoch place to choose and
+//! no era before the count: what precedes Year 0 is prehistory, a separate, much
 //! larger quantity drawn per world and biased by how kind the planet turned out to
-//! be — there is no fixed span between the first people and the first hearth. The
-//! atlas then portrays the world at a single date (see [`CivilizationWorld::map_year`]),
-//! at which the world stands in an age and every realm has a government, a culture,
-//! a faith and a population. See [`epoch`] for the whole model.
+//! be. There is no fixed span between the first people and the first city.
+//!
+//! The atlas then portrays the world at a single date (see
+//! [`CivilizationWorld::map_year`]), at which the world stands in an age and every
+//! realm has a government, a culture, a faith and a population. The faith is a
+//! seven-level cascade — metaphysical root, domain architecture, cosmology,
+//! ethos, praxis, polity and manifestation — grown from the realm's own country
+//! and society; see [`faith`] for the whole model.
 //!
 //! ## Determinism
 //!
@@ -46,13 +40,15 @@
 pub mod age;
 pub mod config;
 pub mod epoch;
+pub mod faith;
 pub mod generator;
 pub mod report;
 
 pub use age::Age;
 pub use config::CivilizationConfig;
 #[allow(unused_imports)]
-pub use epoch::{Epoch, Timeline};
+pub use epoch::Timeline;
+pub use faith::{Faith, MetaphysicalRoot};
 pub use generator::generate_civilizations;
 pub use report::{report_civilizations, report_civilizations_all, report_languages};
 
@@ -543,6 +539,66 @@ impl Government {
     }
 }
 
+/// How a civilization ranks its people — the shape of its social hierarchy.
+///
+/// Where [`Government`] answers "who holds power, and how is that power
+/// legitimated?", `Hierarchy` answers "how is the society itself stratified?".
+/// The two are cousins but not the same: a temple state can be governed by a
+/// theocratic council while its people are ranked by a hereditary caste order,
+/// and a chiefdom is both a government and a hierarchy at once.
+///
+/// The forms are listed from the flattest society to the broadest and most
+/// stratified one; the first three belong to kinship societies, the rest can only
+/// be carried by a state.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Hierarchy {
+    /// No formal ranks: decisions by consent and no office above the household.
+    Egalitarian,
+    /// Many overlapping authorities — lineages, councils, age grades — and no
+    /// single apex.
+    Heterarchical,
+    /// Ranked lineages bound by kinship, the social order under a chief.
+    RankedKinship,
+    /// A military elite holds the ranks and the land behind them.
+    WarriorElite,
+    /// A narrow, self-renewing circle of families or wealth holds the offices.
+    Oligarchic,
+    /// Office and examination rather than blood order the society.
+    Bureaucratic,
+    /// The ruler is sacred, and the priesthood ranks the realm beneath him.
+    SacredKingship,
+    /// Hereditary, endogamous groups fixed in ritual rank.
+    Caste,
+    /// A vast, many-peopled realm whose apex is an emperor over subject elites.
+    Imperial,
+}
+
+impl Hierarchy {
+    /// The name the dossier and the atlas write for this hierarchy.
+    pub fn label(self) -> &'static str {
+        match self {
+            Hierarchy::Egalitarian => "Egalitarian",
+            Hierarchy::Heterarchical => "Heterarchical",
+            Hierarchy::RankedKinship => "Ranked Kinship",
+            Hierarchy::WarriorElite => "Warrior-Elite",
+            Hierarchy::Oligarchic => "Oligarchic",
+            Hierarchy::Bureaucratic => "Bureaucratic",
+            Hierarchy::SacredKingship => "Sacred Kingship",
+            Hierarchy::Caste => "Caste",
+            Hierarchy::Imperial => "Imperial",
+        }
+    }
+
+    /// True for the hierarchies only a centralised state can carry; false for
+    /// the kinship forms that come before the state.
+    pub fn is_state(self) -> bool {
+        !matches!(
+            self,
+            Hierarchy::Egalitarian | Hierarchy::Heterarchical | Hierarchy::RankedKinship
+        )
+    }
+}
+
 /// What a civilization values — its public character.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Outlook {
@@ -595,34 +651,6 @@ impl Outlook {
     }
 }
 
-// ─── WHAT A CIVILIZATION BELIEVES ────────────────────────────────────────────
-
-/// What a civilization believes, and who speaks for its gods.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum FaithKind {
-    RiverFertility,
-    Solar,
-    SkyAndStorm,
-    Ancestral,
-    SeaAndTide,
-    EarthMother,
-    StarAndOmen,
-}
-
-impl FaithKind {
-    pub fn label(self) -> &'static str {
-        match self {
-            FaithKind::RiverFertility => "River and Fertility Cult",
-            FaithKind::Solar => "Sun Cult",
-            FaithKind::SkyAndStorm => "Sky and Storm Cult",
-            FaithKind::Ancestral => "Ancestor Veneration",
-            FaithKind::SeaAndTide => "Sea and Tide Cult",
-            FaithKind::EarthMother => "Earth-Mother Cult",
-            FaithKind::StarAndOmen => "Star and Omen Lore",
-        }
-    }
-}
-
 // ─── HOW BIG A REALM IS ──────────────────────────────────────────────────────
 
 /// The scale of a civilization, measured against our own history.
@@ -661,24 +689,14 @@ impl ScaleClass {
 pub struct Culture {
     pub subsistence: Subsistence,
     pub government: Government,
+    /// How the society itself is ranked, as distinct from how it is governed.
+    pub hierarchy: Hierarchy,
     pub outlook: Outlook,
     /// The form its monumental building takes.
     pub architecture: &'static str,
     /// Two or three arts the realm is known for.
     #[allow(dead_code)]
     pub arts: Vec<&'static str>,
-}
-
-/// The faith of a civilization.
-#[derive(Clone, Debug)]
-pub struct Faith {
-    pub kind: FaithKind,
-    /// Who performs the rites.
-    #[allow(dead_code)]
-    pub clergy: &'static str,
-    /// Three observances a visitor would notice.
-    #[allow(dead_code)]
-    pub practices: Vec<&'static str>,
 }
 
 /// One civilization, from its founding year to the date the atlas portrays.
@@ -694,6 +712,10 @@ pub struct Civilization {
     pub name: String,
     /// The realm's colour on the Civilizations map mode.
     pub color: [u8; 3],
+    /// The realm's colour on the Religions map mode: a shade of the hue family
+    /// its faith's [`MetaphysicalRoot`] carries. Assigned once, after the faiths
+    /// settle, so the painter, the legend and a hover card always agree.
+    pub religion_color: [u8; 3],
 
     /// How organised this people is — the five-way scheme the atlas paints.
     pub tier: SocietyTier,
@@ -726,9 +748,9 @@ pub struct Civilization {
     /// Total population at the map date.
     pub population: u64,
 
-    /// The year the realm was founded, written in the world's own era — negative
-    /// for BCE, so a realm older than the epoch carries a BCE date. See
-    /// [`epoch::ce_label`](crate::civilization::epoch::ce_label).
+    /// The year the realm was founded, in the world's calendar: the count of years
+    /// since the first city, which stands at Year 0. See
+    /// [`epoch::year_label`](crate::civilization::epoch::year_label).
     ///
     /// `None` for a people rather than a polity: a band of foragers and a herd
     /// people have no founding year, because nobody founded them — they were
@@ -752,7 +774,7 @@ impl Civilization {
     /// people. The dossier supplies the `Founded:` label.
     pub fn origin_label(&self) -> String {
         match self.founding_year {
-            Some(year) => epoch::ce_label(year),
+            Some(year) => epoch::year_label(year),
             None => "Prehistoric".to_string(),
         }
     }
@@ -770,9 +792,10 @@ impl Civilization {
 pub struct CivilizationWorld {
     /// The seed the whole world was grown from.
     pub seed: u64,
-    /// The date the atlas portrays, in the world's own era (negative = BCE). It is
-    /// set a few centuries after the youngest realm began, so every realm on the
-    /// map exists and none has to be extrapolated. See [`Timeline`].
+    /// The date the atlas portrays, in the world's calendar: the count of years
+    /// since the first city, which stands at Year 0. It is set a few centuries after
+    /// the youngest realm began, so every realm on the map exists and none has to be
+    /// extrapolated. See [`Timeline`].
     pub map_year: i32,
     /// The world's calendar: what its years are reckoned from, and how deep its
     /// prehistory runs.
@@ -883,6 +906,26 @@ impl CivilizationWorld {
         counts
     }
 
+    /// How many religions stand under each metaphysical root, in
+    /// [`MetaphysicalRoot::ALL`] order.
+    pub fn counts_by_root(&self) -> [usize; MetaphysicalRoot::ALL.len()] {
+        let mut counts = [0usize; MetaphysicalRoot::ALL.len()];
+        for civ in &self.civilizations {
+            counts[civ.faith.root.index()] += 1;
+        }
+        counts
+    }
+
+    /// How much land each metaphysical root holds, in [`MetaphysicalRoot::ALL`]
+    /// order.
+    pub fn area_by_root(&self) -> [f32; MetaphysicalRoot::ALL.len()] {
+        let mut areas = [0.0f32; MetaphysicalRoot::ALL.len()];
+        for civ in &self.civilizations {
+            areas[civ.faith.root.index()] += civ.area_km2;
+        }
+        areas
+    }
+
     /// A civilization by id (1-based), if it exists.
     pub fn civilization(&self, id: u32) -> Option<&Civilization> {
         if id == 0 {
@@ -906,18 +949,19 @@ impl CivilizationWorld {
         }
     }
 
-    /// `The Common Era — reckoned from an important event at the Green Crossing`.
-    ///
-    /// The world's own calendar, in one line: the epoch is a convention counted
-    /// from a single important event, never from a civilization's founding. See
-    /// [`crate::civilization::epoch`].
-    pub fn epoch_label(&self) -> String {
-        self.timeline.epoch_label()
+    /// The religion colour of a civilization id; wilderness falls back to
+    /// neutral grey, exactly as [`color_of`](Self::color_of) does.
+    #[inline(always)]
+    pub fn religion_color_of(&self, id: u32) -> [u8; 3] {
+        match self.civilization(id) {
+            Some(civ) => civ.religion_color,
+            None => [128, 128, 128],
+        }
     }
 
-    /// `300 CE` — the date the atlas portrays, in the world's own era.
+    /// `Year 1 200` — the date the atlas portrays, in the world's calendar.
     pub fn map_year_label(&self) -> String {
-        epoch::ce_label(self.map_year)
+        self.timeline.year(self.map_year)
     }
 
     /// The age the world stands in at the atlas date.
@@ -1077,6 +1121,106 @@ mod tests {
                 SocietyTier::SHADES,
                 "{} repeated a shade",
                 tier.label()
+            );
+        }
+    }
+
+    /// Nine metaphysical roots, nine clearly different hue families — a reader
+    /// must be able to tell a monotheism from a nontheism without consulting the
+    /// key.
+    #[test]
+    fn the_metaphysical_roots_are_pairwise_distinguishable() {
+        for a in 0..MetaphysicalRoot::ALL.len() {
+            for b in a + 1..MetaphysicalRoot::ALL.len() {
+                let one = MetaphysicalRoot::ALL[a];
+                let other = MetaphysicalRoot::ALL[b];
+                let distance = delta_e(one.legend_color(), other.legend_color());
+                assert!(
+                    distance > 24.0,
+                    "{} and {} are only {distance:.1} apart",
+                    one.label(),
+                    other.label()
+                );
+            }
+        }
+    }
+
+    /// No shade of any root can be mistaken for the sea, a shelf, a lake or ice:
+    /// a religion that vanishes into the water is a religion the map lost.
+    #[test]
+    fn no_religion_is_confusable_with_water() {
+        for root in MetaphysicalRoot::ALL {
+            for shade in 0..MetaphysicalRoot::SHADES {
+                let colour = root.shade(shade);
+                for (name, water) in [("sea", SEA), ("shelf", SHELF), ("lake", LAKE)] {
+                    let distance = delta_e(colour, water);
+                    assert!(
+                        distance > 25.0,
+                        "{} shade {shade} is {distance:.1} from the {name}",
+                        root.label()
+                    );
+                }
+                let distance = delta_e(colour, ICE);
+                assert!(
+                    distance > 15.0,
+                    "{} shade {shade} is {distance:.1} from polar ice",
+                    root.label()
+                );
+            }
+        }
+    }
+
+    /// The greedy colouring hands neighbouring religions consecutive shade
+    /// indices, so the family is walked contrast-first: the first two shades a
+    /// pair of neighbours can receive must be visibly different, not two adjacent
+    /// steps of a ramp.
+    #[test]
+    fn consecutive_root_shades_are_far_apart() {
+        for root in MetaphysicalRoot::ALL {
+            let first = root.shade(0);
+            let second = root.shade(1);
+            let distance = delta_e(first, second);
+            assert!(
+                distance > 9.0,
+                "{}'s first two shades are only {distance:.1} apart",
+                root.label()
+            );
+        }
+    }
+
+    /// Every religion stays inside its root's colour family: nine roots read as
+    /// nine kinds, and the shades inside one kind read as its religions.
+    #[test]
+    fn religion_shades_stay_in_their_root_family() {
+        for root in MetaphysicalRoot::ALL {
+            let base = root.legend_color();
+            let (hue, _, value) = rgb_to_hsv(base);
+            let mut distinct = Vec::new();
+            for shade in 0..MetaphysicalRoot::SHADES {
+                let colour = root.shade(shade);
+                let (shade_hue, _, shade_value) = rgb_to_hsv(colour);
+                let drift = (shade_hue - hue).abs();
+                let drift = drift.min(360.0 - drift);
+                assert!(
+                    drift <= 12.0,
+                    "{} shade {shade} left its hue family by {drift:.1}°",
+                    root.label()
+                );
+                let value_drift = (shade_value - value).abs();
+                assert!(
+                    value_drift <= 0.27,
+                    "{} shade {shade} left its value family by {value_drift:.3}",
+                    root.label()
+                );
+                if !distinct.contains(&colour) {
+                    distinct.push(colour);
+                }
+            }
+            assert_eq!(
+                distinct.len(),
+                MetaphysicalRoot::SHADES,
+                "{} repeated a shade",
+                root.label()
             );
         }
     }

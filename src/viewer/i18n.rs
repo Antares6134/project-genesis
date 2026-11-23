@@ -284,6 +284,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "🗣 Línguas",
             "🗣 Diller",
         ],
+        "🛐 Religions" => [
+            "🛐 Religiones",
+            "🛐 Religions",
+            "🛐 Religionen",
+            "🛐 Religiões",
+            "🛐 Dinler",
+        ],
         "🏛 Land" => ["🏛 Tierra", "🏛 Terre", "🏛 Land", "🏛 Terra", "🏛 Kara"],
         "🌊 Water" => ["🌊 Agua", "🌊 Eau", "🌊 Wasser", "🌊 Água", "🌊 Su"],
         "🌍 Everywhere" => [
@@ -489,12 +496,12 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "💾 Dados do mundo",
             "💾 Dünya verileri",
         ],
-        "🪜 The acts  ·  {} of 8 grown" => [
-            "🪜 Los actos  ·  {} de 8 completados",
-            "🪜 Les actes  ·  {} sur 8 accomplis",
-            "🪜 Die Akte  ·  {} von 8 gewachsen",
-            "🪜 Os atos  ·  {} de 8 concluídos",
-            "🪜 Perdeler  ·  8 perdeden {} tamam",
+        "🪜 The acts  ·  {} of {} grown" => [
+            "🪜 Los actos  ·  {} de {} completados",
+            "🪜 Les actes  ·  {} sur {} accomplis",
+            "🪜 Die Akte  ·  {} von {} gewachsen",
+            "🪜 Os atos  ·  {} de {} concluídos",
+            "🪜 Perdeler  ·  {} perdeden {} tamam",
         ],
         "Seed" => ["Semilla", "Graine", "Startwert", "Semente", "Tohum"],
         "Draw a seed the world has never seen" => [
@@ -975,13 +982,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
                 "🌊 OKYANUS — Havzalar: {} · Üst yöreler: {} · Yöreler: {} · Bölgeler: {} · İller: {}",
             ]
         }
-        "🏺 CIVILIZATIONS — {} · Atlas date: {} · {} · {} realms · {} civilized provinces · population {} · {} people/km²" => {
+        "🏺 CIVILIZATIONS — Atlas date: {} · {} · {} realms · {} civilized provinces · population {} · {} people/km²" => {
             [
-                "🏺 CIVILIZACIONES — {} · Fecha del atlas: {} · {} · {} reinos · {} provincias civilizadas · población {} · {} hab./km²",
-                "🏺 CIVILISATIONS — {} · Date de l'atlas : {} · {} · {} royaumes · {} provinces civilisées · population {} · {} hab./km²",
-                "🏺 ZIVILISATIONEN — {} · Atlas-Datum: {} · {} · {} Reiche · {} zivilisierte Provinzen · Bevölkerung {} · {} Einw./km²",
-                "🏺 CIVILIZAÇÕES — {} · Data do atlas: {} · {} · {} reinos · {} províncias civilizadas · população {} · {} hab./km²",
-                "🏺 UYGARLIKLAR — {} · Atlas tarihi: {} · {} · {} krallık · {} uygar il · nüfus {} · {} kişi/km²",
+                "🏺 CIVILIZACIONES — Fecha del atlas: {} · {} · {} reinos · {} provincias civilizadas · población {} · {} hab./km²",
+                "🏺 CIVILISATIONS — Date de l'atlas : {} · {} · {} royaumes · {} provinces civilisées · population {} · {} hab./km²",
+                "🏺 ZIVILISATIONEN — Atlas-Datum: {} · {} · {} Reiche · {} zivilisierte Provinzen · Bevölkerung {} · {} Einw./km²",
+                "🏺 CIVILIZAÇÕES — Data do atlas: {} · {} · {} reinos · {} províncias civilizadas · população {} · {} hab./km²",
+                "🏺 UYGARLIKLAR — Atlas tarihi: {} · {} · {} krallık · {} uygar il · nüfus {} · {} kişi/km²",
             ]
         }
         // ── The legends ──────────────────────────────────────────────────────
@@ -1104,20 +1111,6 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Data do atlas: {} · {}",
             "Atlas tarihi: {} · {}",
         ],
-        "🏛 Fly to the Common Era site" => [
-            "🏛 Volar al lugar de la Era Común",
-            "🏛 Voler vers le site de l'ère commune",
-            "🏛 Zum Ort der Common Era fliegen",
-            "🏛 Voar até ao local da Era Comum",
-            "🏛 Ortak Çağ alanına uç",
-        ],
-        "The province the world's calendar is reckoned from" => [
-            "La provincia desde la que se cuenta el calendario del mundo",
-            "La province à partir de laquelle le calendrier du monde est compté",
-            "Die Provinz, von der aus der Kalender der Welt gerechnet wird",
-            "A província a partir da qual o calendário do mundo é contado",
-            "Dünyanın takviminin hesaplandığı il",
-        ],
         "{} societies on {} inhabited provinces" => [
             "{} sociedades en {} provincias habitadas",
             "{} sociétés sur {} provinces habitées",
@@ -1195,6 +1188,104 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "{} Provinzen",
             "{} províncias",
             "{} il",
+        ],
+        "🛐 Religions of the World" => [
+            "🛐 Religiones del mundo",
+            "🛐 Religions du monde",
+            "🛐 Religionen der Welt",
+            "🛐 Religiões do mundo",
+            "🛐 Dünya Dinleri",
+        ],
+        "No religion has taken root on this world." => [
+            "Ninguna religión ha echado raíces en este mundo.",
+            "Aucune religion n'a pris racine sur ce monde.",
+            "Auf dieser Welt hat keine Religion Wurzeln geschlagen.",
+            "Nenhuma religião criou raízes neste mundo.",
+            "Bu dünyada hiçbir din kök salmadı.",
+        ],
+        "{} religions on {} inhabited provinces" => [
+            "{} religiones en {} provincias habitadas",
+            "{} religions sur {} provinces habitées",
+            "{} Religionen auf {} bewohnten Provinzen",
+            "{} religiões em {} províncias habitadas",
+            "{} ilde {} din",
+        ],
+        "{} religions · {} followers" => [
+            "{} religiones · {} fieles",
+            "{} religions · {} fidèles",
+            "{} Religionen · {} Gläubige",
+            "{} religiões · {} fiéis",
+            "{} din · {} inançlı",
+        ],
+        "{} — {} religions · {}% of the land" => [
+            "{} — {} religiones · {}% de la tierra",
+            "{} — {} religions · {} % des terres",
+            "{} — {} Religionen · {} % des Landes",
+            "{} — {} religiões · {}% da terra",
+            "{} — {} din · arazinin %{} kadarı",
+        ],
+        "{} · {} provinces · {} people" => [
+            "{} · {} provincias · {} personas",
+            "{} · {} provinces · {} habitants",
+            "{} · {} Provinzen · {} Menschen",
+            "{} · {} províncias · {} pessoas",
+            "{} · {} il · {} kişi",
+        ],
+        "Click to fly to this faith's holiest site" => [
+            "Haz clic para volar al lugar más sagrado de esta fe",
+            "Cliquez pour voler vers le lieu le plus sacré de cette foi",
+            "Klicken Sie, um zum heiligsten Ort dieses Glaubens zu fliegen",
+            "Clique para voar até ao lugar mais sagrado desta fé",
+            "Bu inancın en kutsal yerine uçmak için tıklayın",
+        ],
+        "Metaphysical root" => [
+            "Raíz metafísica",
+            "Racine métaphysique",
+            "Metaphysische Wurzel",
+            "Raiz metafísica",
+            "Metafizik kök",
+        ],
+        "Liturgy, powers, cosmos, ethos, rites and holy places are on the Religions map." => [
+            "La liturgia, las potencias, el cosmos, el ethos, los ritos y los lugares sagrados están en el mapa de Religiones.",
+            "La liturgie, les puissances, le cosmos, l'éthos, les rites et les lieux saints sont sur la carte des Religions.",
+            "Liturgie, Mächte, Kosmos, Ethos, Riten und heilige Orte stehen auf der Religionskarte.",
+            "A liturgia, os poderes, o cosmos, o ethos, os ritos e os lugares sagrados estão no mapa de Religiões.",
+            "Litürji, güçler, kozmos, ahlak, ayinler ve kutsal yerler Dinler haritasındadır.",
+        ],
+        "No faith is kept on the open sea." => [
+            "Ninguna fe se guarda en alta mar.",
+            "Aucune foi n'est gardée en haute mer.",
+            "Auf offener See wird kein Glaube gepflegt.",
+            "Nenhuma fé é guardada em alto mar.",
+            "Açık denizde hiçbir inanç yaşatılmaz.",
+        ],
+        "The water itself keeps no faith." => [
+            "El agua misma no profesa ninguna fe.",
+            "L'eau elle-même ne professe aucune foi.",
+            "Das Wasser selbst bekennt keinen Glauben.",
+            "A própria água não professa nenhuma fé.",
+            "Suyun kendisi hiçbir inanca sahip değildir.",
+        ],
+        "🏔️ Beyond the Faiths" => [
+            "🏔️ Más allá de las fes",
+            "🏔️ Au-delà des fois",
+            "🏔️ Jenseits der Glaubensrichtungen",
+            "🏔️ Além das fés",
+            "🏔️ İnançların Ötesinde",
+        ],
+        "No religion has settled this ground" => [
+            "Ninguna religión ha poblado esta tierra",
+            "Aucune religion n'a peuplé cette terre",
+            "Keine Religion hat diesen Boden besiedelt",
+            "Nenhuma religião povoou esta terra",
+            "Bu topraklara hiçbir din yerleşmedi",
+        ],
+        "No faith is kept here" => [
+            "Aquí no se profesa ninguna fe",
+            "Aucune foi n'est professée ici",
+            "Hier wird kein Glaube gepflegt",
+            "Aqui não se professa nenhuma fé",
+            "Burada hiçbir inanç yaşatılmaz",
         ],
         // ── The hover cards ──────────────────────────────────────────────────
         "💧 Inland Freshwater Lake" => [
@@ -2633,7 +2724,7 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
         "S" => ["S", "S", "S", "S", "G"],
         "E" => ["E", "E", "O", "L", "D"],
         "W" => ["O", "O", "W", "O", "B"],
-        // ── The eight acts of creation ───────────────────────────────────────
+        // ── The seven acts of creation ───────────────────────────────────────
         "Geology & Erosion" => [
             "Geología y erosión",
             "Géologie et érosion",
@@ -2676,19 +2767,12 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Hierarquia hidropolítica",
             "Hidro-Politik Hiyerarşi",
         ],
-        "Dawn of Civilization" => [
-            "Amanecer de la civilización",
-            "Aube de la civilisation",
-            "Morgenröte der Zivilisation",
-            "Alvor da civilização",
-            "Uygarlığın Şafağı",
-        ],
-        "Languages & Phonetics" => [
-            "Idiomas y fonética",
-            "Langues et phonétique",
-            "Sprachen und Phonetik",
-            "Línguas e fonética",
-            "Diller ve Sesbilim",
+        "History & Languages" => [
+            "Historia e idiomas",
+            "Histoire et langues",
+            "Geschichte und Sprachen",
+            "História e línguas",
+            "Tarih ve Diller",
         ],
         "Tectonic plates, fractal detail and hydraulic + thermal erosion: the raw land." => [
             "Placas tectónicas, detalle fractal y erosión hídrica y térmica: la tierra en bruto.",
@@ -2734,20 +2818,15 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "O oceano mundial dividido nos seus próprios cinco níveis correspondentes.",
             "Dünya okyanusu kendi beş eşleşen düzeyine bölünür.",
         ],
-        "Realms rise, spread and are given a history, an age and a people." => [
-            "Los reinos surgen, se expanden y reciben una historia, una era y un pueblo.",
-            "Des royaumes naissent, s'étendent et reçoivent une histoire, un âge et un peuple.",
-            "Reiche entstehen, breiten sich aus und erhalten eine Geschichte, ein Zeitalter und ein Volk.",
-            "Reinos surgem, expandem-se e recebem uma história, uma era e um povo.",
-            "Krallıklar doğar, yayılır ve bir tarih, bir çağ ve bir halk alır.",
-        ],
-        "Phonologies, proto-lexicons, Urheimats and the tongues that spread from them." => [
-            "Fonologías, protolexicones, Urheimats y las lenguas que se extienden desde ellos.",
-            "Phonologies, protolexiques, Urheimats et les langues qui en rayonnent.",
-            "Phonologien, Protowortschätze, Urheimaten und die Sprachen, die von ihnen ausstrahlen.",
-            "Fonologias, proto-léxicos, Urheimats e as línguas que deles se espalham.",
-            "Sesbilimler, ön sözlükler, Urheimat'lar ve onlardan yayılan diller.",
-        ],
+        "Realms rise with a history, an age and a people; faiths, phonologies, proto-lexicons and native names follow." => {
+            [
+                "Los reinos surgen con una historia, una era y un pueblo; siguen las fes, las fonologías, los protolexicones y los nombres nativos.",
+                "Des royaumes naissent avec une histoire, un âge et un peuple ; viennent ensuite les foi, les phonologies, les protolexiques et les noms natifs.",
+                "Reiche entstehen mit einer Geschichte, einem Zeitalter und einem Volk; es folgen Glauben, Phonologien, Protowortschätze und einheimische Namen.",
+                "Reinos surgem com uma história, uma era e um povo; seguem-se as fés, as fonologias, os proto-léxicos e os nomes nativos.",
+                "Krallıklar bir tarih, bir çağ ve bir halkla doğar; ardından inançlar, sesbilimler, ön sözlükler ve yerel adlar gelir.",
+            ]
+        }
         "Hunter-Gatherers" => [
             "Cazadores-recolectores",
             "Chasseurs-cueilleurs",
@@ -2782,6 +2861,51 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Staatsgesellschaften",
             "Sociedades estatais",
             "Devlet toplumları",
+        ],
+        "Monotheism" => [
+            "Monoteísmo",
+            "Monothéisme",
+            "Monotheismus",
+            "Monoteísmo",
+            "Monoteizm",
+        ],
+        "Dualism" => ["Dualismo", "Dualisme", "Dualismus", "Dualismo", "Düalizm"],
+        "Henotheism" => [
+            "Henoteísmo",
+            "Hénothéisme",
+            "Henotheismus",
+            "Henoteísmo",
+            "Henoteizm",
+        ],
+        "Polytheism" => [
+            "Politeísmo",
+            "Polythéisme",
+            "Polytheismus",
+            "Politeísmo",
+            "Politeizm",
+        ],
+        "Animism" => ["Animismo", "Animisme", "Animismus", "Animismo", "Animizm"],
+        "Pantheism" => [
+            "Panteísmo",
+            "Panthéisme",
+            "Pantheismus",
+            "Panteísmo",
+            "Panteizm",
+        ],
+        "Panentheism" => [
+            "Panenteísmo",
+            "Panenthéisme",
+            "Panentheismus",
+            "Panenteísmo",
+            "Panenteizm",
+        ],
+        "Deism" => ["Deísmo", "Déisme", "Deismus", "Deísmo", "Deizm"],
+        "Nontheism" => [
+            "No teísmo",
+            "Non-théisme",
+            "Nichttheismus",
+            "Não-teísmo",
+            "Teizm dışılık",
         ],
         _ => return None,
     };

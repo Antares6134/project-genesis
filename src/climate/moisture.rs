@@ -1,7 +1,7 @@
-use crate::core::progress::Progress;
-use crate::core::Grid;
 use crate::climate::config::ClimateConfig;
 use crate::climate::wind::WindVector;
+use crate::core::Grid;
+use crate::core::progress::Progress;
 use crate::export::live;
 use noise::{NoiseFn, OpenSimplex};
 
@@ -97,13 +97,14 @@ pub fn simulate_moisture(
             let temperate = (-temperate_dist.powf(2.0)).exp() * 0.55;
             let polar_dry = ((organic_lat - 65.0).max(0.0) / 25.0).clamp(0.0, 0.7);
 
-            let mut base_rain =
-                config.base_rainfall + itcz + temperate - hadley_dry * config.hadley_dry_depth - polar_dry;
+            let mut base_rain = config.base_rainfall + itcz + temperate
+                - hadley_dry * config.hadley_dry_depth
+                - polar_dry;
             base_rain = base_rain.clamp(0.02, 1.2);
 
             // B. Continentality (Distance to Ocean)
             let dist = *ocean_dist.get(x as isize, y as isize);
-            let continentality = (-dist / 14.0).exp(); 
+            let continentality = (-dist / 14.0).exp();
             let inland_floor = config.inland_factor_floor;
             let inland_factor = inland_floor + (1.0 - inland_floor) * continentality;
 
@@ -111,17 +112,18 @@ pub fn simulate_moisture(
             let wind = *winds.get(x as isize, y as isize);
             let (gx, gy) = heightmap.gradient(fx, y as f32);
             let slope_upwind = -(wind.dx * gx + wind.dy * gy);
-            let orographic =
-                (slope_upwind * config.orographic_strength).clamp(-0.35, 0.60);
+            let orographic = (slope_upwind * config.orographic_strength).clamp(-0.35, 0.60);
 
             // D. Local High-Frequency Detail Noise
             let local_noise = detail_noise.get([
                 angle.cos() as f64 * 4.0,
                 angle.sin() as f64 * 4.0,
                 v as f64 * 6.0,
-            ]) as f32 * 0.12;
+            ]) as f32
+                * 0.12;
 
-            let final_precip = (base_rain * inland_factor + orographic + local_noise).clamp(0.01, 1.0);
+            let final_precip =
+                (base_rain * inland_factor + orographic + local_noise).clamp(0.01, 1.0);
             precip_grid.set(x as isize, y as isize, final_precip);
         }
     }
@@ -138,13 +140,19 @@ pub fn simulate_moisture(
         }
         for x in 0..(w as isize) {
             let mut sum = *precip_grid.get(x, y) * 4.0;
-            sum += *precip_grid.get(x - 1, y) * 2.0; sum += *precip_grid.get(x + 1, y) * 2.0;
-            sum += *precip_grid.get(x, y - 1) * 2.0; sum += *precip_grid.get(x, y + 1) * 2.0;
-            sum += *precip_grid.get(x - 1, y - 1);   sum += *precip_grid.get(x + 1, y - 1);
-            sum += *precip_grid.get(x - 1, y + 1);   sum += *precip_grid.get(x + 1, y + 1);
+            sum += *precip_grid.get(x - 1, y) * 2.0;
+            sum += *precip_grid.get(x + 1, y) * 2.0;
+            sum += *precip_grid.get(x, y - 1) * 2.0;
+            sum += *precip_grid.get(x, y + 1) * 2.0;
+            sum += *precip_grid.get(x - 1, y - 1);
+            sum += *precip_grid.get(x + 1, y - 1);
+            sum += *precip_grid.get(x - 1, y + 1);
+            sum += *precip_grid.get(x + 1, y + 1);
             *smoothed.get_mut(x, y) = sum / 16.0;
         }
     }
 
-    MoistureResult { precipitation: smoothed }
+    MoistureResult {
+        precipitation: smoothed,
+    }
 }
