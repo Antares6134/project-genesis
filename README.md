@@ -211,6 +211,16 @@ cosmology, shift their secondary domains towards their own country, and
 occasionally schism; neighbouring faiths convert, merge or plant minority mystery
 cults across a shared frontier.
 
+The roster is then **consolidated** to the scale a people can actually carry. A
+hunter-gatherer society keeps two or three faiths across a whole continent, a
+herd people four, a simple farming people six, a chiefdom a regional mosaic, and
+a state as many local cults as its ground grows. The same logic runs one scale
+wider for the two mobile tiers: a forager superregion keeps at most four broad
+traditions and a herder superregion five, so many neighbouring peoples can share
+one family of creeds — a Tengrism of the steppe — while each region inside it
+keeps a local recension. The leading tradition stays dominant; consolidation
+never forces a great society to one faith.
+
 There is deliberately **no state religion yet**: the census records what each
 realm's people keep, not what a throne patronises, so a faith can live in one or
 several realms without ever being an official creed. The **Civilizations** map

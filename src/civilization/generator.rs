@@ -42,10 +42,12 @@
 //!    tongue family, and an older realm's temple form and rites can pass to a
 //!    younger one.
 //! 10. **Province religion** — the creeds grown above are hearth seeds. Small
-//!    societies adopt a nearby tradition, a continent-sized faith grows regional
-//!    daughters, towns and ports keep diasporas, and a frontier walk decides which
-//!    province keeps which creed. A faith belongs to the world: it can live in
-//!    several realms, and one realm can keep several faiths.
+//!    societies adopt a nearby tradition, a faith grows regional daughters,
+//!    towns and ports keep diasporas, and a frontier walk decides which
+//!    province keeps which creed. Two consolidation passes then fold each
+//!    society, and each mobile superregion, into the handful of traditions it
+//!    can really carry. A faith belongs to the world: it can live in several
+//!    realms, and one realm can keep several faiths.
 
 use crate::civilization::config::CivilizationConfig;
 use crate::civilization::epoch::{DevelopmentPace, Timeline};
@@ -1187,6 +1189,7 @@ pub fn generate_civilizations(
         .collect();
     let seats: Vec<u32> = skeletons.iter().map(|sk| sk.cradle.prov).collect();
     let realm_provinces: Vec<Vec<u32>> = skeletons.iter().map(|sk| sk.provinces.clone()).collect();
+    let realm_tiers: Vec<SocietyTier> = skeletons.iter().map(|sk| sk.tier).collect();
     let mut religion_rng = ChaCha8Rng::seed_from_u64(seed ^ RELIGION_SALT);
     let religion_world = distribute_religions(
         religions,
@@ -1196,6 +1199,7 @@ pub fn generate_civilizations(
         &seats,
         &realm_provinces,
         &owner,
+        &realm_tiers,
         &province_population,
         &landscapes,
         hierarchy,
@@ -1204,7 +1208,7 @@ pub fn generate_civilizations(
         &config.religion,
         &mut religion_rng,
     );
-    report_religion_census(&religion_world, &owner);
+    report_religion_census(&religion_world, &owner, &realm_tiers, hierarchy);
 
     // ─── 9. THE DEPTH OF PREHISTORY ───────────────────────────────────────────
     // The calendar begins at the first city — Year 0 — and everything before it is
@@ -1305,7 +1309,12 @@ pub fn generate_civilizations(
 }
 /// Print the religion layer's shape: what the province assignment actually
 /// produced, so a run can be judged before the map is even opened.
-fn report_religion_census(world: &ReligionWorld, owner: &[u16]) {
+fn report_religion_census(
+    world: &ReligionWorld,
+    owner: &[u16],
+    realm_tiers: &[SocietyTier],
+    hierarchy: &GeopoliticalHierarchy,
+) {
     if world.religions.is_empty() {
         return;
     }
@@ -1351,6 +1360,89 @@ fn report_religion_census(world: &ReligionWorld, owner: &[u16]) {
         "✓ Faiths: {} religions · {} kept in more than one realm | realms keeping 1/2/3+ faiths: {one}/{two}/{many}",
         world.religions.len(),
         multi_realm,
+    );
+    // The consolidation ceilings, as they actually came out. A hunter-gatherer
+    // society should never exceed three, and a forager superregion should stay
+    // a small family rather than one creed per people.
+    let mean = |sum: usize, count: usize| {
+        if count == 0 {
+            0.0
+        } else {
+            sum as f32 / count as f32
+        }
+    };
+    let mut society_max = [0usize; 5];
+    let mut society_sum = [0usize; 5];
+    let mut society_count = [0usize; 5];
+    for (index, census) in world.religion_of_realm.iter().enumerate() {
+        let tier = realm_tiers
+            .get(index)
+            .copied()
+            .unwrap_or(SocietyTier::States)
+            .index() as usize;
+        society_max[tier] = society_max[tier].max(census.faiths.len());
+        society_sum[tier] += census.faiths.len();
+        society_count[tier] += 1;
+    }
+    let society_parts: Vec<String> = SocietyTier::LADDER
+        .iter()
+        .enumerate()
+        .map(|(index, _tier)| {
+            let short = ["hunters", "herders", "simple", "chiefdoms", "states"][index];
+            format!(
+                "{short} {}/{}",
+                society_max[index],
+                format_args!("{:.1}", mean(society_sum[index], society_count[index]))
+            )
+        })
+        .collect();
+    println!(
+        "  Faiths per society (max/mean): {}",
+        society_parts.join(" · ")
+    );
+
+    let mut superregion_faiths: BTreeMap<(u32, usize), BTreeSet<u16>> = BTreeMap::new();
+    for (index, &realm) in owner.iter().enumerate() {
+        if realm == 0 {
+            continue;
+        }
+        let faith = world.province_religion.get(index).copied().unwrap_or(0);
+        if faith == 0 {
+            continue;
+        }
+        let tier = realm_tiers
+            .get(realm as usize - 1)
+            .copied()
+            .unwrap_or(SocietyTier::States);
+        let tier_index = tier.index() as usize;
+        if tier_index > SocietyTier::NomadicPastoralists.index() as usize {
+            continue;
+        }
+        let Some(node) = hierarchy.provinces.get(index) else {
+            continue;
+        };
+        superregion_faiths
+            .entry((node.superregion_id, tier_index))
+            .or_default()
+            .insert(faith);
+    }
+    let mut superregion_max = [0usize; 2];
+    let mut superregion_sum = [0usize; 2];
+    let mut superregion_cells = [0usize; 2];
+    for ((_, tier), faiths) in &superregion_faiths {
+        if *tier > 1 {
+            continue;
+        }
+        superregion_max[*tier] = superregion_max[*tier].max(faiths.len());
+        superregion_sum[*tier] += faiths.len();
+        superregion_cells[*tier] += 1;
+    }
+    println!(
+        "  Faiths per superregion (max/mean): hunters {}/{} · herders {}/{}",
+        superregion_max[0],
+        format_args!("{:.1}", mean(superregion_sum[0], superregion_cells[0])),
+        superregion_max[1],
+        format_args!("{:.1}", mean(superregion_sum[1], superregion_cells[1])),
     );
     if inhabited > 0 {
         println!(

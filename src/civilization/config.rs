@@ -245,6 +245,30 @@ pub struct ReligionConfig {
     /// one-province cult on a remote island or in a high valley: rare, but real.
     pub endemic_faith_chance: f32,
 
+    // ── Consolidation ───────────────────────────────────────────────────────
+    // A province-level map is not a census of every local recension. The same
+    // map that draws a forager people across a continent must not draw forty
+    // near-identical faiths across it; a state, by contrast, really is a mosaic
+    // of local cults. These two ceilings are read in `SocietyTier::LADDER`
+    // order — hunters, herders, simple farmers, chiefdoms, states — and
+    // `usize::MAX` means "no ceiling".
+    /// Most faiths one society may keep.
+    ///
+    /// A hunter-gatherer people is one tradition across a whole country, so a
+    /// continent-sized band keeps two or three local recensions, not forty.
+    /// The ceiling rises with organisation: a simple farming people keeps a
+    /// handful, a chiefdom a regional mosaic, and a state as many local cults
+    /// as its ground grows.
+    pub faiths_per_tier: [usize; 5],
+    /// Most broad traditions a superregion may keep.
+    ///
+    /// A tradition does not stop at a realm frontier. The two mobile tiers get
+    /// a second, coarser consolidation over each superregion: a forager
+    /// superregion is a family of traditions, not one per people, and a herd
+    /// people's is a slightly wider family. Settled tiers are left alone —
+    /// their regions really do keep their own faiths.
+    pub faiths_per_superregion: [usize; 5],
+
     // ── Regional schisms ────────────────────────────────────────────────────
     /// A faith this large is a family of regional traditions, not one parish.
     pub schism_min_provinces: usize,
@@ -293,6 +317,9 @@ impl Default for ReligionConfig {
             mountain_friction: 3.30,
 
             residual_share: 0.65,
+
+            faiths_per_tier: [3, 4, 6, 12, usize::MAX],
+            faiths_per_superregion: [4, 5, usize::MAX, usize::MAX, usize::MAX],
 
             hearth_min_provinces: 6,
             endemic_faith_chance: 0.12,

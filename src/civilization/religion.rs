@@ -15,18 +15,48 @@
 //! urban, coastal and displaced communities alone — a faith may live in a single
 //! province, if that province is a town, a port or a community the map can
 //! believe in.
+//!
+//! ## Consolidation
+//!
+//! A province-level map is not a census of every local recension. Two ceilings
+//! keep the roster honest, and both are read from [`SocietyTier`]:
+//!
+//! * [`ReligionConfig::faiths_per_tier`] caps the faiths one **society** keeps.
+//!   A forager people that spans a continent is one tradition with two or three
+//!   local recensions, not forty near-identical creeds; a state is left alone,
+//!   because a state really is a mosaic of local cults.
+//! * [`ReligionConfig::faiths_per_superregion`] caps the broad traditions of the
+//!   two **mobile** tiers across a superregion. This is the Tengrism of the
+//!   steppe: many peoples, one family of creeds, with a local recension still
+//!   surviving for each region inside the family.
+//!
+//! The planner groups faiths by *tradition kind* — the metaphysical root and,
+//! where it matters, the object of reverence — so a totem cult and an ancestor
+//! cult are different traditions even when both are animist. The leading kind's
+//! largest faith becomes the umbrella; one keeper is kept for every other kind
+//! that holds a real share of the ground, then one for each geographic group,
+//! and every other faith falls to the keeper of its own kind. Only when a cell
+//! has more kinds than its ceiling does a faith cross to another kind. The same
+//! ceiling also caps how many daughters one schism may grow, so the map never
+//! has to undo an explosion it could have prevented.
+//!
+//! [`SocietyTier`]: crate::civilization::SocietyTier
+//! [`ReligionConfig::faiths_per_tier`]: crate::civilization::config::ReligionConfig::faiths_per_tier
+//! [`ReligionConfig::faiths_per_superregion`]: crate::civilization::config::ReligionConfig::faiths_per_superregion
 
 use crate::civilization::config::ReligionConfig;
 use crate::civilization::faith::{
-    Faith, FaithContext, MetaphysicalRoot, OutgroupStance, SacredLocus, Transmission,
-    generate_faith, inherit_faith,
+    Divinity, Faith, FaithContext, MetaphysicalRoot, NontheistFocus, OutgroupStance, SacredLocus,
+    SpiritKind, Transmission, generate_faith, inherit_faith,
 };
 use crate::core::sphere;
-use crate::geopolitics::GeopoliticalHierarchy;
+use crate::geopolitics::{GeopoliticalHierarchy, ProvinceNode};
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
+
+use super::SocietyTier;
 
 /// Salt mixed into the world seed for the province religion pass. It is distinct
 /// from the creed stream ([`FAITH_SALT`](crate::civilization::faith::FAITH_SALT))
@@ -144,6 +174,9 @@ impl ReligionWorld {
 /// converted keeps the displaced faith in a share of its rural provinces, which
 /// is how a faith can survive without a throne. The frontier passes then let
 /// neighbours argue; the cleanup leaves believable one-province communities alone.
+/// Two consolidation passes — one before the frontier and one after it — keep
+/// each society and each mobile superregion at the handful of traditions it can
+/// really carry.
 #[allow(clippy::too_many_arguments)]
 pub fn distribute_religions(
     mut faiths: Vec<Faith>,
@@ -153,6 +186,7 @@ pub fn distribute_religions(
     seats: &[u32],
     realm_provinces: &[Vec<u32>],
     owner: &[u16],
+    realm_tiers: &[SocietyTier],
     population: &[u64],
     landscapes: &[ProvinceLandscape],
     hierarchy: &GeopoliticalHierarchy,
@@ -220,6 +254,7 @@ pub fn distribute_religions(
     schism_large_faiths(
         &mut faiths,
         origins,
+        realm_tiers,
         &mut assignment,
         owner,
         population,
@@ -246,7 +281,32 @@ pub fn distribute_religions(
         rng,
     ));
 
-    // ── 5. Frontier passes ──────────────────────────────────────────────────
+    // ── 5. Consolidation before the frontier ────────────────────────────────
+    // A province-level map is not a census of every local recension. These two
+    // passes first give every society its tier's handful of faiths, then let
+    // the mobile tiers share a small family of traditions across a superregion.
+    // Running them here means the frontier argues between traditions rather
+    // than between forty near-identical daughters.
+    consolidate_realms(
+        &mut assignment,
+        &faiths,
+        owner,
+        realm_tiers,
+        population,
+        hierarchy,
+        config,
+    );
+    consolidate_superregions(
+        &mut assignment,
+        &faiths,
+        owner,
+        realm_tiers,
+        population,
+        hierarchy,
+        config,
+    );
+
+    // ── 6. Frontier passes ──────────────────────────────────────────────────
     for _ in 0..config.rounds {
         let snapshot = assignment.clone();
         let mut next = snapshot.clone();
@@ -318,7 +378,30 @@ pub fn distribute_religions(
         assignment = next;
     }
 
-    // ── 3. One-province communities ─────────────────────────────────────────
+    // ── 7. Consolidation after the frontier ─────────────────────────────────
+    // A faith may have crossed a border or been planted as a diaspora since the
+    // first pass. The same two ceilings are applied again, so the final map
+    // never keeps more traditions than its society or its superregion allows.
+    consolidate_realms(
+        &mut assignment,
+        &faiths,
+        owner,
+        realm_tiers,
+        population,
+        hierarchy,
+        config,
+    );
+    consolidate_superregions(
+        &mut assignment,
+        &faiths,
+        owner,
+        realm_tiers,
+        population,
+        hierarchy,
+        config,
+    );
+
+    // ── 8. One-province communities ─────────────────────────────────────────
     // A faith may live in a single province — a city congregation, a port
     // quarter, a displaced people — but a lone rural patch that no history
     // explains is speckle. Only the latter is swept into its neighbours.
@@ -494,10 +577,18 @@ fn fill_step_cost(
 /// primary powers while its secondaries, ethos and calendar lean toward its own
 /// ground. This is how a world gets regional churches inside one country and one
 /// creed inside several countries at the same time.
+///
+/// The scale is read from the faith's origin tier. A forager or herd people's
+/// tradition is a country-wide thing, so its daughters are grouped by
+/// `superregion_id`; a settled people's faith is grouped by the finer
+/// `region_id`, because a state or a chiefdom really does keep regional
+/// churches. The tier's own ceiling also caps the daughters: a people that may
+/// keep three faiths cannot grow ten from one schism.
 #[allow(clippy::too_many_arguments)]
 fn schism_large_faiths(
     faiths: &mut Vec<Faith>,
     origins: &mut Vec<(u16, u32)>,
+    realm_tiers: &[SocietyTier],
     assignment: &mut [u16],
     owner: &[u16],
     population: &[u64],
@@ -522,16 +613,25 @@ fn schism_large_faiths(
         let origin = origins
             .get(faith_id as usize - 1)
             .map_or(0, |(_, province)| *province);
+        // A faith's origin tier decides the scale of its family: a forager
+        // tradition varies across superregions, a state's across regions.
+        let tier = origins
+            .get(faith_id as usize - 1)
+            .and_then(|(realm, _)| realm_tiers.get(*realm as usize - 1))
+            .copied()
+            .unwrap_or(SocietyTier::States);
+        let max_daughters = config.faiths_per_tier[tier.index() as usize].saturating_sub(1);
+        if max_daughters == 0 {
+            continue;
+        }
 
-        // A region is the natural unit: a continent-sized creed becomes the
-        // churches of its regions, not one parish stretched over a world.
         let mut groups: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
         for &province in &provinces {
-            let region = hierarchy
+            let group = hierarchy
                 .provinces
                 .get(province as usize)
-                .map_or(0, |node| node.region_id);
-            groups.entry(region).or_default().push(province);
+                .map_or(0, |node| tradition_group(tier, node));
+            groups.entry(group).or_default().push(province);
         }
         if groups.len() < 2 {
             continue;
@@ -539,13 +639,26 @@ fn schism_large_faiths(
         let parent_group = groups
             .iter()
             .find(|(_, members)| members.contains(&origin))
-            .map(|(region, _)| *region);
+            .map(|(group, _)| *group);
         let parent = faiths[faith_id as usize - 1].clone();
 
-        for (region, members) in groups {
-            if Some(region) == parent_group || members.len() < config.schism_min_group {
-                continue;
-            }
+        // Largest groups first, so the ceiling spends its daughters on the
+        // regions that really carry the faith. Groups beyond the ceiling stay
+        // with the parent, which is the whole point of consolidation.
+        let mut candidates: Vec<(u32, Vec<u32>)> = groups
+            .into_iter()
+            .filter(|(group, members)| {
+                Some(*group) != parent_group && members.len() >= config.schism_min_group
+            })
+            .collect();
+        candidates.sort_by(|(group_a, members_a), (group_b, members_b)| {
+            members_b
+                .len()
+                .cmp(&members_a.len())
+                .then_with(|| group_a.cmp(group_b))
+        });
+
+        for (_group, members) in candidates.into_iter().take(max_daughters) {
             // The daughter speaks for the realm that feeds most of its ground.
             let realm = members
                 .iter()
@@ -579,6 +692,389 @@ fn schism_large_faiths(
         }
     }
 }
+// ─── CONSOLIDATION ──────────────────────────────────────────────────────────
+
+/// The kind of tradition consolidation reads: the metaphysical root and, where
+/// it matters, the object of reverence.
+///
+/// A god-pantheon and a totem cult are not the same tradition even when both
+/// answer to a root of animism; a sun god and a moon goddess are. That is the
+/// granularity the map needs: Tengrism and Totemism are different families, but
+/// two local forms of either are the same family.
+type TraditionKind = (MetaphysicalRoot, u8);
+
+/// The tradition kind of one faith.
+fn tradition_kind(faith: &Faith) -> TraditionKind {
+    let object = match faith.divinity() {
+        Divinity::Theistic(_) => 0,
+        Divinity::Animistic(SpiritKind::Spirits) => 1,
+        Divinity::Animistic(SpiritKind::Totems) => 2,
+        Divinity::Animistic(SpiritKind::Ancestors) => 3,
+        Divinity::Animistic(SpiritKind::Souls) => 4,
+        Divinity::Nontheist(NontheistFocus::Concept(_)) => 5,
+        Divinity::Nontheist(NontheistFocus::Person(_)) => 6,
+    };
+    (faith.root, object)
+}
+
+/// The geographic cell in which a faith may vary for a tier.
+///
+/// A forager or herd people's tradition is a country-wide thing, so its local
+/// recensions are read across superregions. A settled people keeps the finer
+/// political region, because a state or a chiefdom really does grow regional
+/// churches.
+fn tradition_group(tier: SocietyTier, node: &ProvinceNode) -> u32 {
+    match tier {
+        SocietyTier::HunterGatherers | SocietyTier::NomadicPastoralists => node.superregion_id,
+        _ => node.region_id,
+    }
+}
+
+/// What one faith holds inside one consolidation cell.
+#[derive(Clone, Debug, Default)]
+struct FaithCellStats {
+    provinces: u32,
+    population: u64,
+    /// Geographic group → provinces in it.
+    groups: BTreeMap<u32, u32>,
+}
+
+impl FaithCellStats {
+    /// The geographic group in which this faith is strongest.
+    fn dominant_group(&self) -> u32 {
+        self.groups
+            .iter()
+            .max_by(|(group_a, count_a), (group_b, count_b)| {
+                count_a.cmp(count_b).then_with(|| group_b.cmp(group_a))
+            })
+            .map_or(0, |(group, _)| *group)
+    }
+}
+
+/// Fold every society's faiths into the handful its tier allows.
+///
+/// The ceiling is the whole point: a hunter-gatherer people that spans a
+/// continent is one tradition with two or three local recensions, not forty
+/// near-identical creeds. A state is left alone, because its local cults are
+/// what a state really looks like.
+fn consolidate_realms(
+    assignment: &mut [u16],
+    faiths: &[Faith],
+    owner: &[u16],
+    realm_tiers: &[SocietyTier],
+    population: &[u64],
+    hierarchy: &GeopoliticalHierarchy,
+    config: &ReligionConfig,
+) {
+    let n = assignment.len();
+    let realm_count = owner.iter().copied().max().unwrap_or(0) as usize;
+    if faiths.is_empty() || realm_count == 0 || n == 0 {
+        return;
+    }
+    let kinds: Vec<TraditionKind> = faiths.iter().map(tradition_kind).collect();
+
+    // What each faith holds inside each realm, and which of its geographic
+    // groups (superregion for the mobile tiers, region for the settled ones)
+    // carries it.
+    let mut realms: Vec<BTreeMap<u16, FaithCellStats>> = vec![BTreeMap::new(); realm_count];
+    for index in 1..n {
+        let realm = owner[index];
+        let faith = assignment[index];
+        if realm == 0 || faith == 0 || faith as usize > faiths.len() {
+            continue;
+        }
+        let tier = realm_tiers
+            .get(realm as usize - 1)
+            .copied()
+            .unwrap_or(SocietyTier::States);
+        let group = hierarchy
+            .provinces
+            .get(index)
+            .map_or(0, |node| tradition_group(tier, node));
+        let stats = realms[realm as usize - 1].entry(faith).or_default();
+        stats.provinces += 1;
+        stats.population += population[index];
+        *stats.groups.entry(group).or_insert(0) += 1;
+    }
+
+    let mut plans: Vec<Option<BTreeMap<u16, u16>>> = vec![None; realm_count];
+    for (realm, stats) in realms.iter().enumerate() {
+        let tier = realm_tiers
+            .get(realm)
+            .copied()
+            .unwrap_or(SocietyTier::States);
+        let cap = config.faiths_per_tier[tier.index() as usize];
+        if cap == usize::MAX || stats.len() <= cap {
+            continue;
+        }
+        let plan = plan_consolidation(stats, &kinds, cap);
+        if !plan.is_empty() {
+            plans[realm] = Some(plan);
+        }
+    }
+    if plans.iter().all(Option::is_none) {
+        return;
+    }
+
+    for index in 1..n {
+        let realm = owner[index];
+        if realm == 0 {
+            continue;
+        }
+        let Some(realm_plan) = plans.get(realm as usize - 1).and_then(Option::as_ref) else {
+            continue;
+        };
+        if let Some(&keeper) = realm_plan.get(&assignment[index]) {
+            assignment[index] = keeper;
+        }
+    }
+}
+
+/// Fold a superregion's mobile peoples into a small family of traditions.
+///
+/// This is the Tengrism of the steppe: many peoples, one family of creeds. The
+/// same planner runs on the whole superregion, but only for the two mobile
+/// tiers; a settled region's mosaic is left alone. A local recension still
+/// survives because the planner keeps one faith per region inside the family.
+fn consolidate_superregions(
+    assignment: &mut [u16],
+    faiths: &[Faith],
+    owner: &[u16],
+    realm_tiers: &[SocietyTier],
+    population: &[u64],
+    hierarchy: &GeopoliticalHierarchy,
+    config: &ReligionConfig,
+) {
+    let n = assignment.len();
+    if faiths.is_empty() || n == 0 {
+        return;
+    }
+    let kinds: Vec<TraditionKind> = faiths.iter().map(tradition_kind).collect();
+
+    // A cell is one superregion's ground held by one mobile tier. Only the
+    // provinces in that cell are reassigned, so a faith that also lives in a
+    // settled realm is untouched there.
+    let mut cells: BTreeMap<(u32, usize), BTreeMap<u16, FaithCellStats>> = BTreeMap::new();
+    let mut cell_of: Vec<Option<(u32, usize)>> = vec![None; n];
+    for index in 1..n {
+        let realm = owner[index];
+        let faith = assignment[index];
+        if realm == 0 || faith == 0 || faith as usize > faiths.len() {
+            continue;
+        }
+        let tier = realm_tiers
+            .get(realm as usize - 1)
+            .copied()
+            .unwrap_or(SocietyTier::States);
+        let tier_index = tier.index() as usize;
+        if config.faiths_per_superregion[tier_index] == usize::MAX {
+            continue;
+        }
+        let Some(node) = hierarchy.provinces.get(index) else {
+            continue;
+        };
+        let key = (node.superregion_id, tier_index);
+        let stats = cells.entry(key).or_default().entry(faith).or_default();
+        stats.provinces += 1;
+        stats.population += population[index];
+        // Inside a superregion the local recension is a region.
+        *stats.groups.entry(node.region_id).or_insert(0) += 1;
+        cell_of[index] = Some(key);
+    }
+
+    let mut plans: BTreeMap<(u32, usize), BTreeMap<u16, u16>> = BTreeMap::new();
+    for (key, stats) in &cells {
+        let cap = config.faiths_per_superregion[key.1];
+        if cap == usize::MAX || stats.len() <= cap {
+            continue;
+        }
+        let plan = plan_consolidation(stats, &kinds, cap);
+        if !plan.is_empty() {
+            plans.insert(*key, plan);
+        }
+    }
+    if plans.is_empty() {
+        return;
+    }
+
+    for index in 1..n {
+        let Some(key) = cell_of[index] else {
+            continue;
+        };
+        let Some(cell_plan) = plans.get(&key) else {
+            continue;
+        };
+        if let Some(&keeper) = cell_plan.get(&assignment[index]) {
+            assignment[index] = keeper;
+        }
+    }
+}
+
+/// Choose the keepers of one consolidation cell and fold every other faith into
+/// one of them.
+///
+/// The leading tradition is the kind that holds the most ground. Its largest
+/// faith becomes the umbrella; one keeper is kept for every other kind with a
+/// real share of the ground, then one for each geographic group, then the
+/// largest of what remains. Every non-keeper falls to the keeper of its own kind
+/// (and within that kind to the largest, which keeps one tradition dominant),
+/// or — only when a cell has more kinds than its ceiling — to the keeper sharing
+/// its ground.
+///
+/// Deterministic throughout: every walk is over a sorted `BTreeMap` or a list
+/// with a total order.
+fn plan_consolidation(
+    stats: &BTreeMap<u16, FaithCellStats>,
+    kinds: &[TraditionKind],
+    cap: usize,
+) -> BTreeMap<u16, u16> {
+    let cap = cap.max(1);
+    if stats.len() <= cap {
+        return BTreeMap::new();
+    }
+
+    let mut ranked: Vec<u16> = stats.keys().copied().collect();
+    ranked.sort_by(|&a, &b| {
+        let a_stats = &stats[&a];
+        let b_stats = &stats[&b];
+        b_stats
+            .provinces
+            .cmp(&a_stats.provinces)
+            .then_with(|| b_stats.population.cmp(&a_stats.population))
+            .then_with(|| a.cmp(&b))
+    });
+    let Some(&first) = ranked.first() else {
+        return BTreeMap::new();
+    };
+
+    // Which tradition kind holds the most ground? That is the umbrella family,
+    // not whichever single faith happens to be largest.
+    let mut kind_totals: BTreeMap<TraditionKind, (u32, u64)> = BTreeMap::new();
+    for &id in &ranked {
+        let Some(kind) = kinds.get(id as usize - 1).copied() else {
+            continue;
+        };
+        let faith = &stats[&id];
+        let entry = kind_totals.entry(kind).or_insert((0, 0));
+        entry.0 += faith.provinces;
+        entry.1 += faith.population;
+    }
+    let mut kind_order: Vec<(TraditionKind, (u32, u64))> = kind_totals.into_iter().collect();
+    kind_order.sort_by(
+        |(kind_a, (provinces_a, population_a)), (kind_b, (provinces_b, population_b))| {
+            provinces_b
+                .cmp(provinces_a)
+                .then_with(|| population_b.cmp(population_a))
+                .then_with(|| kind_a.cmp(kind_b))
+        },
+    );
+    let Some(&(primary_kind, _)) = kind_order.first() else {
+        return BTreeMap::new();
+    };
+    let primary_faith = ranked
+        .iter()
+        .copied()
+        .find(|id| kinds.get(*id as usize - 1) == Some(&primary_kind))
+        .unwrap_or(first);
+
+    let mut keepers = vec![primary_faith];
+    let mut kept: BTreeSet<u16> = BTreeSet::new();
+    kept.insert(primary_faith);
+
+    // One keeper for every other kind, largest kind first. Genuine differences
+    // are more important than another recension of the leading family — but
+    // only while the difference is more than a speck. A one-province exotic
+    // cult does not deserve a keeper slot that a region-sized recension could
+    // use; it is folded into the leading tradition like any other minor faith.
+    const MIN_TRADITION_KIND_SHARE: f32 = 0.05;
+    let total_provinces: u32 = kind_order
+        .iter()
+        .map(|(_, (provinces, _))| *provinces)
+        .sum();
+    for &(kind, (provinces, _)) in kind_order.iter().skip(1) {
+        if keepers.len() >= cap {
+            break;
+        }
+        if (provinces as f32) < total_provinces as f32 * MIN_TRADITION_KIND_SHARE {
+            continue;
+        }
+        if let Some(id) = ranked
+            .iter()
+            .copied()
+            .find(|id| !kept.contains(id) && kinds.get(*id as usize - 1) == Some(&kind))
+        {
+            keepers.push(id);
+            kept.insert(id);
+        }
+    }
+
+    // One regional representative per geographic group, largest group first.
+    // This is where the local recensions that survive are chosen.
+    let mut group_totals: BTreeMap<u32, u32> = BTreeMap::new();
+    for &id in &ranked {
+        for (&group, &count) in &stats[&id].groups {
+            *group_totals.entry(group).or_insert(0) += count;
+        }
+    }
+    let mut group_order: Vec<(u32, u32)> = group_totals.into_iter().collect();
+    group_order.sort_by(|(group_a, count_a), (group_b, count_b)| {
+        count_b.cmp(count_a).then_with(|| group_a.cmp(group_b))
+    });
+    for (group, _) in group_order {
+        if keepers.len() >= cap {
+            break;
+        }
+        if let Some(id) = ranked.iter().copied().find(|id| {
+            !kept.contains(id)
+                && stats
+                    .get(id)
+                    .is_some_and(|faith| faith.groups.contains_key(&group))
+        }) {
+            keepers.push(id);
+            kept.insert(id);
+        }
+    }
+
+    // Any room left goes to the largest remaining faiths. A cell with fewer
+    // kinds and groups than its ceiling still gets its full handful.
+    for &id in &ranked {
+        if keepers.len() >= cap {
+            break;
+        }
+        if kept.insert(id) {
+            keepers.push(id);
+        }
+    }
+
+    let mut plan = BTreeMap::new();
+    for &id in &ranked {
+        if kept.contains(&id) {
+            continue;
+        }
+        let kind = kinds.get(id as usize - 1).copied();
+        let group = stats[&id].dominant_group();
+        let target = keepers
+            .iter()
+            .copied()
+            .max_by(|&a, &b| {
+                let score = |keeper: u16| {
+                    let same_kind = kind
+                        .is_some_and(|kind| kinds.get(keeper as usize - 1).copied() == Some(kind));
+                    let same_group = stats
+                        .get(&keeper)
+                        .is_some_and(|faith| faith.groups.contains_key(&group));
+                    (same_kind, same_group, stats[&keeper].provinces, keeper)
+                };
+                score(a).cmp(&score(b))
+            })
+            .unwrap_or(primary_faith);
+        if target != id {
+            plan.insert(id, target);
+        }
+    }
+    plan
+}
+
 // ─── DIASPORAS ──────────────────────────────────────────────────────────────
 
 /// Plant minority communities in towns, ports and lake shores.
@@ -1137,7 +1633,7 @@ pub fn assign_religion_colors(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::civilization::faith::generate_faith;
+    use crate::civilization::faith::{Cardinality, Domain, generate_faith};
     use crate::civilization::{
         CradleKind, Environment, Government, Hierarchy, Outlook, SocietyTier, Subsistence,
     };
@@ -1229,6 +1725,76 @@ mod tests {
             provinces,
         }
     }
+    /// A chain of provinces `1..=nodes`, each touching its neighbours, with
+    /// region and superregion ids assigned in blocks.
+    fn chain_grouped(
+        nodes: usize,
+        region_size: usize,
+        superregion_size: usize,
+    ) -> GeopoliticalHierarchy {
+        let mut hierarchy = chain(nodes);
+        for id in 1..=nodes {
+            let node = &mut hierarchy.provinces[id];
+            node.region_id = ((id - 1) / region_size + 1) as u32;
+            node.superregion_id = ((id - 1) / superregion_size + 1) as u32;
+        }
+        hierarchy.total_regions = nodes.div_ceil(region_size);
+        hierarchy.total_superregions = nodes.div_ceil(superregion_size);
+        hierarchy
+    }
+
+    /// Faiths forced into one tradition kind: animist totemists, all alike.
+    fn same_kind_faiths(count: usize) -> Vec<Faith> {
+        let mut roster = faiths(count);
+        for faith in &mut roster {
+            faith.root = MetaphysicalRoot::Animism;
+            faith.cardinality = Cardinality::Polycentric;
+            faith.domains = vec![Domain::Fauna, Domain::Hunt];
+        }
+        roster
+    }
+
+    /// One realm of `sizes.len()` faiths on a chain, consolidated once.
+    fn consolidated_world(tier: SocietyTier, sizes: &[u32]) -> Vec<u16> {
+        let nodes: usize = sizes.iter().map(|&size| size as usize).sum();
+        let hierarchy = chain(nodes);
+        let mut owner = vec![0u16; nodes + 1];
+        let mut population = vec![0u64; nodes + 1];
+        for index in 1..=nodes {
+            owner[index] = 1;
+            population[index] = 100;
+        }
+        let roster = same_kind_faiths(sizes.len());
+        let mut assignment = vec![0u16; nodes + 1];
+        let mut next = 1usize;
+        for (index, &size) in sizes.iter().enumerate() {
+            for _ in 0..size {
+                assignment[next] = index as u16 + 1;
+                next += 1;
+            }
+        }
+        consolidate_realms(
+            &mut assignment,
+            &roster,
+            &owner,
+            &[tier],
+            &population,
+            &hierarchy,
+            &ReligionConfig::default(),
+        );
+        assignment
+    }
+
+    fn faith_counts(assignment: &[u16]) -> BTreeMap<u16, u32> {
+        let mut counts = BTreeMap::new();
+        for &faith in assignment.iter().skip(1) {
+            if faith != 0 {
+                *counts.entry(faith).or_insert(0) += 1;
+            }
+        }
+        counts
+    }
+
     /// A world of two realms on a four-province chain, both seeded.
     fn two_realm_world(config: ReligionConfig) -> ReligionWorld {
         let hierarchy = chain(4);
@@ -1249,6 +1815,7 @@ mod tests {
             &seats,
             &realm_provinces,
             &owner,
+            &[SocietyTier::States, SocietyTier::States],
             &population,
             &landscapes,
             &hierarchy,
@@ -1280,6 +1847,7 @@ mod tests {
             &seats,
             &realm_provinces,
             &owner,
+            &[SocietyTier::States, SocietyTier::States],
             &population,
             &landscapes,
             &hierarchy,
@@ -1360,6 +1928,7 @@ mod tests {
             &seats,
             &realm_provinces,
             &owner,
+            &[SocietyTier::States, SocietyTier::States],
             &population,
             &landscapes,
             &hierarchy,
@@ -1369,6 +1938,224 @@ mod tests {
             &mut rng,
         );
         assert_eq!(world.religions.len(), 2);
+    }
+
+    #[test]
+    fn consolidation_caps_a_forager_people() {
+        // Sizes deliberately sum to 40 and leave one clear primary: after the
+        // ceiling the three keepers are 20, 5 and 5, and every other same-kind
+        // faith folds into the primary.
+        let sizes = [20u32, 5, 5, 5, 2, 1, 1, 1];
+        let assignment = consolidated_world(SocietyTier::HunterGatherers, &sizes);
+        let counts = faith_counts(&assignment);
+        assert_eq!(
+            counts.len(),
+            3,
+            "a forager people should keep three faiths, not {}",
+            counts.len()
+        );
+        assert_eq!(counts.get(&1).copied().unwrap_or(0), 30);
+        assert_eq!(counts.get(&2).copied().unwrap_or(0), 5);
+        assert_eq!(counts.get(&3).copied().unwrap_or(0), 5);
+    }
+
+    #[test]
+    fn consolidation_keeps_a_dominant_faith() {
+        let sizes = [20u32, 5, 5, 5, 2, 1, 1, 1];
+        let assignment = consolidated_world(SocietyTier::HunterGatherers, &sizes);
+        let counts = faith_counts(&assignment);
+        let total: u32 = counts.values().sum();
+        let dominant = counts.get(&1).copied().unwrap_or(0);
+        assert_eq!(total, 40);
+        assert!(
+            dominant * 4 >= total * 3,
+            "the leading tradition held {dominant}/{total}, not at least 75%"
+        );
+    }
+
+    #[test]
+    fn consolidation_leaves_a_state_mosaic_alone() {
+        let sizes = [20u32, 5, 5, 5, 2, 1, 1, 1];
+        let assignment = consolidated_world(SocietyTier::States, &sizes);
+        assert_eq!(
+            faith_counts(&assignment).len(),
+            8,
+            "a state should keep its local faiths"
+        );
+    }
+
+    #[test]
+    fn consolidation_preserves_distinct_tradition_kinds() {
+        // Five totemists and three ancestor cults: the two kinds must survive
+        // the cap, even though the totemists are larger.
+        let mut roster = faiths(8);
+        for faith in roster.iter_mut().take(5) {
+            faith.root = MetaphysicalRoot::Animism;
+            faith.cardinality = Cardinality::Polycentric;
+            faith.domains = vec![Domain::Fauna, Domain::Hunt];
+        }
+        for faith in roster.iter_mut().skip(5) {
+            faith.root = MetaphysicalRoot::Animism;
+            faith.cardinality = Cardinality::Polycentric;
+            faith.domains = vec![Domain::Ancestor];
+        }
+        let sizes = [20u32, 5, 5, 2, 1, 5, 1, 1];
+        let nodes: usize = sizes.iter().map(|&size| size as usize).sum();
+        let hierarchy = chain(nodes);
+        let mut owner = vec![0u16; nodes + 1];
+        let mut population = vec![0u64; nodes + 1];
+        for index in 1..=nodes {
+            owner[index] = 1;
+            population[index] = 100;
+        }
+        let mut assignment = vec![0u16; nodes + 1];
+        let mut next = 1usize;
+        for (index, &size) in sizes.iter().enumerate() {
+            for _ in 0..size {
+                assignment[next] = index as u16 + 1;
+                next += 1;
+            }
+        }
+        consolidate_realms(
+            &mut assignment,
+            &roster,
+            &owner,
+            &[SocietyTier::HunterGatherers],
+            &population,
+            &hierarchy,
+            &ReligionConfig::default(),
+        );
+        let counts = faith_counts(&assignment);
+        assert_eq!(counts.len(), 3);
+        assert!(counts.contains_key(&1), "the totemist primary was lost");
+        assert!(
+            counts.contains_key(&6),
+            "the ancestor keeper was folded into the totemists"
+        );
+    }
+
+    #[test]
+    fn consolidation_is_deterministic() {
+        let sizes = [20u32, 5, 5, 5, 2, 1, 1, 1];
+        let first = consolidated_world(SocietyTier::HunterGatherers, &sizes);
+        let second = consolidated_world(SocietyTier::HunterGatherers, &sizes);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn neighbouring_forager_societies_share_a_few_traditions() {
+        let nodes = 40;
+        let hierarchy = chain_grouped(nodes, 10, 40);
+        let mut owner = vec![0u16; nodes + 1];
+        let mut assignment = vec![0u16; nodes + 1];
+        let mut population = vec![0u64; nodes + 1];
+        for index in 1..=nodes {
+            let realm = ((index - 1) / 10 + 1) as u16;
+            owner[index] = realm;
+            assignment[index] = realm;
+            population[index] = 100;
+        }
+        let roster = same_kind_faiths(4);
+        let mut config = ReligionConfig::default();
+        config.faiths_per_superregion[SocietyTier::HunterGatherers.index() as usize] = 2;
+        consolidate_superregions(
+            &mut assignment,
+            &roster,
+            &owner,
+            &[SocietyTier::HunterGatherers; 4],
+            &population,
+            &hierarchy,
+            &config,
+        );
+        let counts = faith_counts(&assignment);
+        assert_eq!(
+            counts.len(),
+            2,
+            "four neighbouring forager peoples should share two traditions, not {}",
+            counts.len()
+        );
+    }
+
+    #[test]
+    fn superregion_consolidation_skips_settled_tiers() {
+        let nodes = 40;
+        let hierarchy = chain_grouped(nodes, 10, 40);
+        let mut owner = vec![0u16; nodes + 1];
+        let mut assignment = vec![0u16; nodes + 1];
+        let mut population = vec![0u64; nodes + 1];
+        for index in 1..=nodes {
+            let realm = ((index - 1) / 10 + 1) as u16;
+            owner[index] = realm;
+            assignment[index] = realm;
+            population[index] = 100;
+        }
+        let roster = same_kind_faiths(4);
+        consolidate_superregions(
+            &mut assignment,
+            &roster,
+            &owner,
+            &[SocietyTier::States; 4],
+            &population,
+            &hierarchy,
+            &ReligionConfig::default(),
+        );
+        assert_eq!(
+            faith_counts(&assignment).len(),
+            4,
+            "a settled superregion should keep its regional faiths"
+        );
+    }
+
+    /// Run the schism pass on one forager faith and report how many faiths the
+    /// roster holds afterwards.
+    fn schism_forager(hierarchy: GeopoliticalHierarchy, cap: usize) -> usize {
+        let nodes = hierarchy.provinces.len() - 1;
+        let mut assignment = vec![0u16; nodes + 1];
+        let mut owner = vec![0u16; nodes + 1];
+        let mut population = vec![0u64; nodes + 1];
+        for index in 1..=nodes {
+            owner[index] = 1;
+            assignment[index] = 1;
+            population[index] = 100;
+        }
+        let landscapes = vec![landscape(); nodes + 1];
+        let contexts = vec![context()];
+        let mut roster = faiths(1);
+        let mut origins = vec![(1u16, 1u32)];
+        let mut config = ReligionConfig::default();
+        config.schism_min_provinces = 10;
+        config.schism_min_group = 5;
+        config.faiths_per_tier[SocietyTier::HunterGatherers.index() as usize] = cap;
+        let mut rng = ChaCha8Rng::seed_from_u64(41);
+        schism_large_faiths(
+            &mut roster,
+            &mut origins,
+            &[SocietyTier::HunterGatherers],
+            &mut assignment,
+            &owner,
+            &population,
+            &landscapes,
+            &hierarchy,
+            &contexts,
+            &config,
+            &mut rng,
+        );
+        roster.len()
+    }
+
+    #[test]
+    fn schism_keeps_a_forager_faith_at_superregion_scale() {
+        // Six regions inside three superregions: the family should follow the
+        // superregions, so the parent and two daughters — not six faiths.
+        let hierarchy = chain_grouped(60, 10, 20);
+        assert_eq!(schism_forager(hierarchy, usize::MAX), 3);
+    }
+
+    #[test]
+    fn schism_caps_daughters_to_the_tier_ceiling() {
+        // Six superregions, but a forager people may keep only three faiths.
+        let hierarchy = chain_grouped(60, 5, 10);
+        assert_eq!(schism_forager(hierarchy, 3), 3);
     }
 
     fn ring(n: u16) -> BTreeMap<u16, Vec<u16>> {
