@@ -67,6 +67,14 @@ pub fn generate_provinces(
     let w = heightmap.width;
     let h = heightmap.height;
 
+    // The narrowest gap the seeder ever leaves between two province centres is a
+    // distance, so it follows the plate: 18 px on the 16K reference, 9 on 8K,
+    // 4.5 on 4K and 2.25 on 2K. Without this the fixed 18-px floor would cap a
+    // small canvas at a few hundred provinces however many the reader asked for,
+    // making the count depend on the resolution again.
+    let canvas_scale = CanvasScale::new(w, h);
+    let min_span = (MIN_PROVINCE_SPAN * canvas_scale.linear()).max(1.0);
+
     let mut hab_grid = Grid::filled_with(w, h, 0.0f32);
     let mut is_wasteland = Grid::filled_with(w, h, false);
     let mut province_ids = Grid::filled_with(w, h, 0u32);
@@ -404,6 +412,7 @@ pub fn generate_provinces(
     let corridor_span = province_span(
         hab_grid.raw_slice().iter().filter(|&&v| v > 0.0).count() as f32,
         config.num_provinces,
+        min_span,
     );
     carve_habitable_corridors(
         heightmap,
@@ -500,7 +509,7 @@ pub fn generate_provinces(
 
     let base_min_dist: f32 = {
         let land_px = hab_grid.raw_slice().iter().filter(|&&v| v > 0.0).count() as f32;
-        province_span(land_px, config.num_provinces)
+        province_span(land_px, config.num_provinces, min_span)
     };
 
     let mut seeds: Vec<(isize, isize)> = Vec::with_capacity(config.num_provinces);
@@ -909,9 +918,11 @@ fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
 }
 
 /// Narrowest spacing the province seeder ever leaves between two centres, in map
-/// pixels. Wilderness, coastlines and rugged ground stretch the real spacing well
-/// beyond it, but it is the floor every "is this gap one province wide?" question
-/// is measured against.
+/// pixels **on the 16K reference plate** — 18 px there, and half that on an 8K
+/// plate, a quarter on 4K and an eighth on 2K. Wilderness, coastlines and rugged
+/// ground stretch the real spacing well beyond it, but it is the floor every
+/// "is this gap one province wide?" question is measured against — and, because
+/// it follows the canvas, it never caps the province count on a small plate.
 const MIN_PROVINCE_SPAN: f32 = 18.0;
 
 /// Largest a province may be, as a multiple of the mean settled area per
@@ -935,11 +946,14 @@ const MAX_CORRIDOR_SPANS: f32 = 2.5;
 /// seeder aims for when `land_px` pixels of land have to carry `num_provinces`
 /// provinces. Used both to space the seeds and to keep carved corridors to the
 /// scale of the provinces they join.
-fn province_span(land_px: f32, num_provinces: usize) -> f32 {
+///
+/// `min_span` is the canvas-scaled floor from [`MIN_PROVINCE_SPAN`], so the same
+/// province count means the same number of provinces on every plate.
+fn province_span(land_px: f32, num_provinces: usize, min_span: f32) -> f32 {
     let area_per_province = land_px / num_provinces.max(1) as f32;
     (area_per_province / std::f32::consts::PI)
         .sqrt()
-        .max(MIN_PROVINCE_SPAN)
+        .max(min_span)
 }
 
 /// One centre moved out of an undersized province and into an oversized one.
@@ -2345,8 +2359,36 @@ mod tests {
 
     #[test]
     fn province_span_never_falls_below_one_province() {
-        assert_eq!(province_span(0.0, 30_000), MIN_PROVINCE_SPAN);
-        assert_eq!(province_span(1.0, 1_000_000), MIN_PROVINCE_SPAN);
-        assert!(province_span(30_000.0 * 1_000_000.0, 30_000) > MIN_PROVINCE_SPAN);
+        assert_eq!(
+            province_span(0.0, 30_000, MIN_PROVINCE_SPAN),
+            MIN_PROVINCE_SPAN
+        );
+        assert_eq!(
+            province_span(1.0, 1_000_000, MIN_PROVINCE_SPAN),
+            MIN_PROVINCE_SPAN
+        );
+        assert!(
+            province_span(30_000.0 * 1_000_000.0, 30_000, MIN_PROVINCE_SPAN) > MIN_PROVINCE_SPAN
+        );
+    }
+
+    /// The floor follows the plate, so an absolute province count is not capped
+    /// by a 16K pixel distance on a smaller canvas.
+    #[test]
+    fn the_span_floor_follows_the_canvas() {
+        for (width, height, expected) in [
+            (2_048usize, 1_024usize, 2.25f32),
+            (4_096, 2_048, 4.5),
+            (8_192, 4_096, 9.0),
+            (16_384, 8_192, 18.0),
+        ] {
+            let scale = CanvasScale::new(width, height);
+            let floor = (MIN_PROVINCE_SPAN * scale.linear()).max(1.0);
+            assert!(
+                (floor - expected).abs() < 1e-3,
+                "{width}×{height} floor was {floor}, expected {expected}"
+            );
+            assert_eq!(province_span(0.0, 4_000, floor), floor);
+        }
     }
 }

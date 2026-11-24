@@ -27,6 +27,7 @@ fn main() {
     let mut load_cache = false;
     let mut width: Option<usize> = None;
     let mut height: Option<usize> = None;
+    let mut provinces: Option<usize> = None;
     let mut force_headless = false;
 
     let mut run_viewer = false;
@@ -53,6 +54,8 @@ fn main() {
             width = args.next().and_then(|value| value.parse::<usize>().ok());
         } else if arg == "--height" {
             height = args.next().and_then(|value| value.parse::<usize>().ok());
+        } else if arg == "--provinces" {
+            provinces = args.next().and_then(|value| value.parse::<usize>().ok());
         } else if arg == "--plates" {
             run_plates = true;
         } else if arg == "--civs" {
@@ -106,6 +109,7 @@ fn main() {
         );
         let mut genesis = Genesis::new_sized(seed, start_width, start_height);
         genesis.set_autosave(save_cache);
+        apply_province_override(&mut genesis, provinces);
         if load_cache {
             // `--load --viewer` adopts the saved world for the seed in one read:
             // the acts the file carries are taken as done, and the act after them
@@ -165,6 +169,7 @@ fn main() {
         height.unwrap_or(pipeline::WORLD_HEIGHT),
     );
     genesis.set_autosave(save_cache);
+    apply_province_override(&mut genesis, provinces);
     if load_cache {
         if let Err(why) = genesis.load_cache() {
             report_load_failure(&why);
@@ -462,6 +467,21 @@ fn main() {
     }
 
     println!("=======================================================");
+}
+
+/// `--provinces <n>`: the mean land-province count for this run.
+///
+/// The panel is the usual way to choose it; a headless plate has no panel, so a
+/// script can ask for a particular density directly. Each seed draws its own
+/// exact target within 7.5 % of it — 4 000 means 3 700–4 300 provinces on any
+/// canvas.
+fn apply_province_override(genesis: &mut Genesis, provinces: Option<usize>) {
+    let Some(count) = provinces else {
+        return;
+    };
+    let mut settings = genesis.settings().clone();
+    settings.num_provinces = count.max(1);
+    genesis.set_settings(settings);
 }
 
 /// Say why a world could not be adopted from disk, in one sentence a reader can

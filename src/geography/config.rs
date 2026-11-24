@@ -1,7 +1,11 @@
-use crate::core::sphere::CanvasScale;
-
 #[derive(Clone, Debug)]
 pub struct GeographyConfig {
+    /// Total land provinces across the planet — the **mean** the seed draws from.
+    ///
+    /// Each world draws its own exact target within ±7.5 % of this number (see
+    /// `pipeline::drawn_count`), so a typed 4 000 grows 3 700–4 300 provinces,
+    /// depending on the seed. The canvas changes how many pixels each province
+    /// covers, never the draw.
     pub num_provinces: usize,
     /// Most of the ice-free land that may be handed to impassable wilderness.
     ///
@@ -22,22 +26,6 @@ pub struct GeographyConfig {
     pub waste_cutoff: f32,
 }
 
-impl GeographyConfig {
-    /// The engine's tuned province partition, moved to a runtime canvas.
-    ///
-    /// `num_provinces` is an absolute head count, and thirty thousand provinces
-    /// simply do not fit on a 2K plate: the seeder's eighteen-pixel minimum
-    /// spacing caps that world at a few hundred. Scaling the count with the
-    /// canvas's *area* keeps the province's pixel mass — and therefore its
-    /// eighteen-pixel spacing, the Act 4 pixel budgets and the whole Act 5
-    /// hierarchy — exactly where the engine was tuned.
-    pub fn for_canvas(width: usize, height: usize) -> Self {
-        let mut config = Self::default();
-        config.num_provinces = CanvasScale::new(width, height).count(config.num_provinces);
-        config
-    }
-}
-
 impl Default for GeographyConfig {
     fn default() -> Self {
         Self {
@@ -55,10 +43,14 @@ impl Default for GeographyConfig {
 /// by far the larger domain every tier is scaled up: one ocean province is many
 /// times the area of a land province, and each parent tier is correspondingly
 /// larger. The `*_target` values are the number of ocean provinces a single
-/// cluster of that tier should aim to hold.
+/// cluster of that tier should aim for, so the number of clusters follows the
+/// marine province count at every resolution.
 #[derive(Clone, Debug)]
 pub struct OceanConfig {
     /// Total number of ocean provinces to scatter across the world ocean.
+    ///
+    /// The **mean** marine count: each seed draws its own exact target within
+    /// ±7.5 % of it, on any canvas.
     pub num_provinces: usize,
     /// Target number of ocean provinces per Continental Basin.
     pub continent_target: usize,
@@ -68,26 +60,6 @@ pub struct OceanConfig {
     pub region_target: usize,
     /// Target number of ocean provinces per Oceanic Area.
     pub area_target: usize,
-}
-
-impl OceanConfig {
-    /// The engine's tuned ocean partition, moved to a runtime canvas.
-    ///
-    /// The marine province count is scaled by area, and the tier targets with
-    /// it: a four-hundred-province basin at 16K covers the same share of the
-    /// world as a six-province basin at 2K. The floors keep all five tiers
-    /// present even on the smallest plate.
-    pub fn for_canvas(width: usize, height: usize) -> Self {
-        let scale = CanvasScale::new(width, height);
-        let defaults = Self::default();
-        Self {
-            num_provinces: scale.count(defaults.num_provinces),
-            continent_target: scale.count_at_least(defaults.continent_target, 8),
-            superregion_target: scale.count_at_least(defaults.superregion_target, 6),
-            region_target: scale.count_at_least(defaults.region_target, 4),
-            area_target: scale.count_at_least(defaults.area_target, 2),
-        }
-    }
 }
 
 impl Default for OceanConfig {

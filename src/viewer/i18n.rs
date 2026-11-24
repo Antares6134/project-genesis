@@ -567,13 +567,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Tela {} × {} — a resolução fixa-se quando o ato 1 corre.",
             "Tuval {} × {} — çözünürlük 1. perdeyle sabitlenir.",
         ],
-        "Province, erosion and lake budgets scale with the canvas; advanced values are quoted at 16K." => {
+        "Erosion and lake budgets scale with the canvas; province counts are absolute, and the ↺ defaults follow the plate." => {
             [
-                "Los presupuestos de provincias, erosión y lagos se ajustan al lienzo; los valores avanzados se citan a 16K.",
-                "Les budgets de provinces, d'érosion et de lacs suivent le canevas ; les valeurs avancées sont citées à 16K.",
-                "Provinz-, Erosions- und Seebudgets skalieren mit der Leinwand; die Werte unter „Erweitert“ gelten für 16K.",
-                "Os orçamentos de províncias, erosão e lagos acompanham a tela; os valores avançados são indicados a 16K.",
-                "İl, erozyon ve göl bütçeleri tuvale göre ölçeklenir; gelişmiş değerler 16K için verilmiştir.",
+                "Los presupuestos de erosión y lagos se ajustan al lienzo; las provincias son un recuento absoluto y los valores de ↺ siguen al lienzo.",
+                "Les budgets d'érosion et de lacs suivent le canevas ; les provinces sont un nombre absolu et les valeurs de ↺ suivent la toile.",
+                "Erosions- und Seebudgets skalieren mit der Leinwand; Provinzzahlen sind absolut, und die ↺-Werte folgen der Karte.",
+                "Os orçamentos de erosão e lagos acompanham a tela; as províncias são uma contagem absoluta e os valores de ↺ seguem a tela.",
+                "Erozyon ve göl bütçeleri tuvale göre ölçeklenir; il sayıları mutlaktır ve ↺ değerleri tuvale göre belirlenir.",
             ]
         }
         "🌱 Canvas {} × {} — press “{}” to grow it." => [
@@ -2691,22 +2691,24 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
                 "Nehir olarak çizilmeye değer en küçük debi (m³/s). Düşük değerler ince kılcal kolları; yüksek değerler yalnızca büyük ana nehirleri gösterir.",
             ]
         }
-        "Land provinces across the planet. Drives cell spacing, polygon detail and the fineness of the political boundaries." => {
+        "Land provinces across the planet. Each world draws its own exact count from this mean (within 7.5 %); the area, region and superregion tiers follow the drawn count (about one area per five provinces, one region per fifty and one superregion per two hundred)." => {
             [
-                "Provincias terrestres del planeta. Determinan el espaciado de celdas, el detalle de los polígonos y la finura de las fronteras políticas.",
-                "Provinces terrestres de la planète. Détermine l'espacement des cellules, le détail des polygones et la finesse des frontières politiques.",
-                "Landprovinzen auf dem Planeten. Bestimmt Zellabstand, Polygondetail und die Feinheit der politischen Grenzen.",
-                "Províncias terrestres do planeta. Determinam o espaçamento das células, o detalhe dos polígonos e a finura das fronteiras políticas.",
-                "Gezegendeki kara illeri. Hücre aralığını, poligon ayrıntısını ve siyasi sınırların inceliğini belirler.",
+                "Provincias terrestres del planeta. Cada mundo sortea su recuento exacto a partir de esta media (con un margen del 7,5 %); los niveles de área, región y superregión siguen el recuento sorteado (aproximadamente un área por cada cinco provincias, una región por cada cincuenta y una superregión por cada doscientas).",
+                "Provinces terrestres de la planète. Chaque monde tire son nombre exact à partir de cette moyenne (±7,5 %) ; les niveaux aire, région et super-région suivent ce nombre (environ une aire pour cinq provinces, une région pour cinquante et une super-région pour deux cents).",
+                "Landprovinzen auf dem Planeten. Jede Welt zieht ihre genaue Zahl aus diesem Mittelwert (±7,5 %); die Ebenen Gebiet, Region und Superregion folgen der gezogenen Zahl (etwa ein Gebiet je fünf Provinzen, eine Region je fünfzig und eine Superregion je zweihundert).",
+                "Províncias terrestres do planeta. Cada mundo sorteia o seu número exato a partir desta média (±7,5 %); os níveis de área, região e super-região seguem o número sorteado (cerca de uma área por cada cinco províncias, uma região por cada cinquenta e uma super-região por cada duzentas).",
+                "Gezegendeki kara illeri. Her dünya bu ortalamadan kendi tam sayısını çeker (±%7,5); alan, bölge ve üst bölge katmanları çekilen sayıyı izler (yaklaşık her beş ilde bir alan, her elli ilde bir bölge ve her iki yüz ilde bir üst bölge).",
             ]
         }
-        "Sea zones partitioned across oceans and gulfs for naval and trade routing." => [
-            "Zonas marinas repartidas entre océanos y golfos para el trazado naval y comercial.",
-            "Zones marines réparties entre océans et golfes pour le routage naval et commercial.",
-            "Seezonen, aufgeteilt auf Ozeane und Golfen für See- und Handelsrouten.",
-            "Zonas marinhas repartidas entre oceanos e golfos para o traçado naval e comercial.",
-            "Deniz ve ticaret güzergâhları için okyanuslara ve körfezlere bölünmüş deniz bölgeleri.",
-        ],
+        "Marine provinces across the world ocean. Each world draws its own exact count from this mean (within 7.5 %); the ocean's basins, superregions, regions and areas follow it." => {
+            [
+                "Provincias marinas del océano mundial. Cada mundo sortea su recuento exacto a partir de esta media (con un margen del 7,5 %); las cuencas, superregiones, regiones y áreas oceánicas lo siguen.",
+                "Provinces marines de l'océan mondial. Chaque monde tire son nombre exact à partir de cette moyenne (±7,5 %) ; les bassins, super-régions, régions et aires océaniques le suivent.",
+                "Marineprovinzen des Weltmeeres. Jede Welt zieht ihre genaue Zahl aus diesem Mittelwert (±7,5 %); die Becken, Superregionen, Regionen und Gebiete der Ozeane folgen ihr.",
+                "Províncias marinhas do oceano mundial. Cada mundo sorteia o seu número exato a partir desta média (±7,5 %); as bacias, super-regiões, regiões e áreas oceânicas seguem-no.",
+                "Dünya okyanusunun deniz illeri. Her dünya bu ortalamadan kendi tam sayısını çeker (±%7,5); okyanus havzaları, üst bölgeleri, bölgeleri ve alanları bunu izler.",
+            ]
+        }
         "Most of the ice-free land that may become impassable wasteland — the deep desert hearts, the glaciated crags, the interior jungle. Set it to 0% for a completely settled planet. Polar ice is not counted: it is geography, not a choice." => {
             [
                 "La mayor parte de la tierra libre de hielo que puede volverse yermo intransitable: los corazones de los desiertos profundos, las cumbres glaciares, la selva interior. Ponlo al 0% para un planeta totalmente poblado. El hielo polar no cuenta: es geografía, no una elección.",

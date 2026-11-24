@@ -54,6 +54,7 @@ live low-resolution plate of the world appearing on the canvas as it is made.
 | `--viewer` | Launch the interactive desktop atlas. The atlas starts on the **8K** preset. |
 | `--headless` | Run without a window — the default when `--viewer` is absent. Headless starts on the tuned 16K plate. |
 | `--width <px>` / `--height <px>` | Choose the canvas for either mode; the interactive viewer's presets are 2K–16K. |
+| `--provinces <n>` | The **mean** land-province count for the acts not yet grown. Each seed draws its own target within 7.5 % of it (`--width 8192 --provinces 4000` grows 3 700–4 300), on any canvas. The panel is the usual way; this is for scripts and headless plates. |
 | `--civs` | Run the history act, print the dossier, export its 16K plate. |
 | `--civs-all` | The same, with a full dossier for every society — hundreds of them. |
 | `--langs` | Run the history act, print the language families and their lexicons, and export the Languages map. |
@@ -92,7 +93,7 @@ lines of plain figures under the canvas:
 | Step | What it does |
 | :--- | :--- |
 | **Seed** | Type a whole number, or press 🎲 to draw one. A seed is read by each act as it runs, so changing it between acts keeps the acts already grown and re-points only the acts still to come; before act 1 it simply starts a fresh world. |
-| **Map resolution** | The canvas the next world grows on: **2K · 2048 × 1024**, **4K · 4096 × 2048**, **8K · 8192 × 4096** (the startup default), **12K · 12288 × 6144**, or **16K · 16384 × 8192**. Before act 1 the choice applies at once. Once a world exists its canvas is part of its identity: choosing another preset shows a reset prompt, and **↺ Reset world** applies it. Province counts, erosion droplets, strait widths and lake thresholds scale with the canvas; the values in Advanced configuration are quoted at the 16K reference. |
+| **Map resolution** | The canvas the next world grows on: **2K · 2048 × 1024**, **4K · 4096 × 2048**, **8K · 8192 × 4096** (the startup default), **12K · 12288 × 6144**, or **16K · 16384 × 8192**. Before act 1 the choice applies at once. Once a world exists its canvas is part of its identity: choosing another preset shows a reset prompt, and **↺ Reset world** applies it. Erosion droplets, strait widths and lake thresholds scale with the canvas; **Land provinces and Marine provinces are means** — each seed draws its own exact count within 7.5 % of the typed value, on any canvas — and a fresh world begins at its plate's tuned mean (`469` land provinces at 2K, `7 500` at 8K, `30 000` at 16K). |
 | **World data** | 📂 **Load** and 💾 **Save** are the two commands for the seed above. **Save** writes the world as it stands to `saved_seeds/world_<seed>_<width>x<height>.bin`, from act 1 up to act 6 — the land, the climate, the water and as far up the hierarchies as the world has climbed; the history act is never written. Every save overwrites the last, so the file always holds the deepest checkpoint. **Load** adopts it in one press and picks the panel up at the act after the one it holds. 💾 **Save automatically when act 3 and act 6 land** is the setting behind them: while it is ticked, act 3 writes the cache and act 6 writes it again, overwriting the earlier save. The expandable **📂 Saved worlds** list under it shows every cache on disk, newest first, with its age and size, and each row names the acts that save holds — `acts 1–6` — read from the file's one-byte header (a save from an older build, which has no header, says only that a world is there); click a world to load it. A seed with no cache says so plainly, in one line. |
 | **The seven acts** | A fold-out of its own, counting how many are grown. Only the next act is pressable; the ones behind it are ✔ and the ones ahead are greyed out. Every ✔ act also carries a small **↺** button that un-does that act and everything after it, so the whole tail may be grown again — optionally from a new seed or new constants. |
 | **▶▶ Run all remaining** | Grows the rest of the world without stopping (⏹ stops it after the act in flight). |
@@ -259,10 +260,14 @@ world grows its tongues afresh rather than reading them back.
 ### Land tiers
 
 **Province → Area → Region → Superregion → Continent.** Each tier is a pure reaggregation of
-the one below it, so switching tiers never moves a border. Areas are budgeted by *drawn land*
-rather than by province count — a desert province and a coastal speck do not buy the same
-amount of map — then a small island is kept whole in one area and the remaining borders are
-relaxed towards compact shapes. The palette nests: an Area wears a shade of its Region's
+the one below it, so switching tiers never moves a border. The tiers are built **bottom-up**:
+an Area holds about five provinces of *drawn mass* (so a desert province and a coastal speck do
+not buy the same amount of map), a Region groups about ten whole Areas, and a Superregion about
+four whole Regions. Because each tier groups the one below, the province count's own draw carries
+all the way up — a 3 700-province world gets roughly 740 areas, 74 regions and 18 superregions,
+and a 4 300-province one roughly 860 / 86 / 21. A small island is kept whole in one Area, and the
+remaining area borders are relaxed towards compact shapes. The palette nests: an Area wears a
+shade of its Region's
 colour and a Region a shade of its Superregion's, no two neighbours sharing one. A plate inks
 the tier above it as its frontier and its own subdivisions faintly, so the atlas reads as
 nested structure rather than a mosaic.
@@ -308,7 +313,10 @@ scaled up because it is one connected, far larger domain.
 4. **Land provinces** — habitability-weighted seeding snapped to mountain crests, rivers and
    coasts. Geography-driven wastelands (desert hearts, high massifs, rainforest interiors,
    polar **and glacial** ice) are impassable, but corridors and the sea leave every settled
-   province a path to water. No province may exceed four times the mean settled area: the
+   province a path to water. The seeder draws each seed's own count within 7.5 % of the typed
+   mean, and the hierarchy is built bottom-up: ~5 provinces per Area by drawn mass, ~10 Areas
+   per Region, ~4 Regions per Superregion, so the draw cascades all the way up. No province may
+   exceed four times the mean settled area: the
    largest are split by moving centres out of the smallest, so one shape can never swallow a
    continent ([`src/geography/provinces.rs`](src/geography/provinces.rs)).
 5. **Ocean provinces** — Poisson-disc seeding plus a bathymetry-aware Dijkstra flood fill,

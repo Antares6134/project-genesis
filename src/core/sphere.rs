@@ -45,15 +45,6 @@ pub struct CanvasScale {
 }
 
 impl CanvasScale {
-    /// The tuned reference canvas itself: every factor is `1.0`.
-    #[cfg(test)]
-    pub const fn reference() -> Self {
-        Self {
-            width: REFERENCE_CANVAS_WIDTH,
-            height: REFERENCE_CANVAS_HEIGHT,
-        }
-    }
-
     pub const fn new(width: usize, height: usize) -> Self {
         Self { width, height }
     }
@@ -78,11 +69,6 @@ impl CanvasScale {
     /// Scale a count, never below one.
     pub fn count(self, count: usize) -> usize {
         ((count as f32 * self.area()).round() as usize).max(1)
-    }
-
-    /// Scale a count, but keep a documented floor for a tier that must survive.
-    pub fn count_at_least(self, count: usize, floor: usize) -> usize {
-        self.count(count).max(floor.max(1))
     }
 
     /// Scale an area given in pixels, never below one pixel.

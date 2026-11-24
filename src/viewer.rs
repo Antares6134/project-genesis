@@ -19,7 +19,8 @@ use crate::export::image::{
 use crate::geopolitics::{GeopoliticalHierarchy, ProvinceNode};
 use crate::language::LanguagesWorld;
 use crate::pipeline::{
-    AtlasWorld, CachedWorld, Genesis, LoadError, Stage, StageReport, StageState, cached_worlds,
+    AtlasWorld, CachedWorld, Genesis, LoadError, Stage, StageReport, StageState, WorldGenSettings,
+    cached_worlds,
 };
 use eframe::egui::{
     self, Align2, Color32, ColorImage, FontFamily, FontId, Stroke, TextStyle, TextureHandle,
@@ -2606,8 +2607,12 @@ impl MapViewer {
         // The world's constants are the reader's, not the world's: they outlive a
         // reset exactly as the cache choice does, so the next world grows under
         // the settings they have chosen.
-        let settings = self.genesis.settings().clone();
+        let (old_width, old_height) = self.genesis.canvas();
+        let mut settings = self.genesis.settings().clone();
         let (width, height) = self.resolution.size();
+        // A value still sitting at the old plate's tuned default follows the new
+        // plate; anything the reader typed is absolute and stays put.
+        settings.adopt_plate_defaults((old_width, old_height), (width, height));
         self.genesis = Genesis::new_sized(seed, width, height);
         self.genesis.set_autosave(autosave);
         self.genesis.set_settings(settings);
@@ -2844,7 +2849,10 @@ impl MapViewer {
     /// has to do is hand the pipeline whatever the reader left behind.
     fn settings_section(&mut self, ui: &mut egui::Ui, busy: bool) {
         let mut settings = self.genesis.settings().clone();
-        if settings::advanced_settings(ui, &mut settings, busy, self.language) {
+        // The ↺ buttons restore the tuned density of the plate this world is on.
+        let (width, height) = self.genesis.canvas();
+        let defaults = WorldGenSettings::for_canvas(width, height);
+        if settings::advanced_settings(ui, &mut settings, &defaults, busy, self.language) {
             self.genesis.set_settings(settings);
         }
     }
@@ -2939,7 +2947,7 @@ impl MapViewer {
         }
         caption(
             ui,
-            self.t("Province, erosion and lake budgets scale with the canvas; advanced values are quoted at 16K."),
+            self.t("Erosion and lake budgets scale with the canvas; province counts are absolute, and the ↺ defaults follow the plate."),
         );
     }
 

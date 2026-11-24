@@ -37,15 +37,21 @@ const SETTING_SLIDER_WIDTH: f32 = 190.0;
 
 /// Draw the whole Advanced Configuration section.
 ///
+/// `defaults` is the tuned density of **this world's plate** — a fresh 2K world
+/// starts at 469 provinces, an 8K at 7 500, a 16K at 30 000 — so the ↺ buttons
+/// restore the world the reader's canvas has always drawn, not a number quoted
+/// for a plate they are not on.
+///
 /// Returns `true` when the reader changed something, so the caller can hand the
 /// new settings to the pipeline — which is the only place they are stored.
 pub fn advanced_settings(
     ui: &mut egui::Ui,
     settings: &mut WorldGenSettings,
+    defaults: &WorldGenSettings,
     busy: bool,
     language: Language,
 ) -> bool {
-    draw_section(ui, settings, busy, None, language)
+    draw_section(ui, settings, defaults, busy, None, language)
 }
 
 /// The section itself, with the fold-outs optionally forced open.
@@ -57,12 +63,13 @@ pub fn advanced_settings(
 fn draw_section(
     ui: &mut egui::Ui,
     settings: &mut WorldGenSettings,
+    defaults: &WorldGenSettings,
     busy: bool,
     force_open: Option<bool>,
     language: Language,
 ) -> bool {
     let mut changed = false;
-    let edited = *settings != WorldGenSettings::default();
+    let edited = *settings != *defaults;
 
     egui::CollapsingHeader::new(section_title(edited, language))
         // The badge is part of the label, so the id must not be: a group
@@ -92,7 +99,7 @@ fn draw_section(
                         language.text("Everything is already at the engine's defaults")
                     });
                 if reset.clicked() {
-                    *settings = WorldGenSettings::default();
+                    *settings = defaults.clone();
                     changed = true;
                 }
                 if busy {
@@ -105,7 +112,7 @@ fn draw_section(
             // readable — greyed — rather than lying about what they did.
             ui.add_enabled_ui(!busy, |ui| {
                 for group in Group::ALL {
-                    draw_group(ui, group, settings, &mut changed, force_open, language);
+                    draw_group(ui, group, settings, defaults, &mut changed, force_open, language);
                 }
             });
         });
@@ -197,9 +204,9 @@ impl Group {
         }
     }
 
-    /// Put this group's constants back to the engine's defaults.
-    fn reset(self, settings: &mut WorldGenSettings) {
-        let d = WorldGenSettings::default();
+    /// Put this group's constants back to the engine's defaults for the plate.
+    fn reset(self, settings: &mut WorldGenSettings, defaults: &WorldGenSettings) {
+        let d = defaults;
         match self {
             Group::Planetary => {
                 settings.tidally_locked = d.tidally_locked;
@@ -252,9 +259,9 @@ impl Group {
     /// Asked by putting the group back to its defaults on a *copy*: one
     /// comparison answers for the group, and there is no second list of fields
     /// to keep in step with `reset`.
-    fn edited(self, settings: &WorldGenSettings) -> bool {
+    fn edited(self, settings: &WorldGenSettings, defaults: &WorldGenSettings) -> bool {
         let mut probe = settings.clone();
-        self.reset(&mut probe);
+        self.reset(&mut probe, defaults);
         *settings != probe
     }
 }
@@ -264,11 +271,12 @@ fn draw_group(
     ui: &mut egui::Ui,
     group: Group,
     settings: &mut WorldGenSettings,
+    defaults: &WorldGenSettings,
     changed: &mut bool,
     force_open: Option<bool>,
     language: Language,
 ) {
-    let edited = group.edited(settings);
+    let edited = group.edited(settings, defaults);
     let title = language.text(group.title());
     let header = if edited {
         language.fill("{}  ·  edited", &[&title])
@@ -282,12 +290,11 @@ fn draw_group(
         .default_open(false)
         .show(ui, |ui| {
             caption(ui, language.text(group.blurb()));
-            let d = WorldGenSettings::default();
-            draw_constants(ui, group, settings, changed, &d, language);
+            draw_constants(ui, group, settings, changed, defaults, language);
 
             // The way back, offered only where there is something to go back
             // from — a reset button on an untouched group is a dead control.
-            if group.edited(settings) {
+            if group.edited(settings, defaults) {
                 ui.add_space(2.0);
                 if ui
                     .add(
@@ -296,7 +303,7 @@ fn draw_group(
                     )
                     .clicked()
                 {
-                    group.reset(settings);
+                    group.reset(settings, defaults);
                     *changed = true;
                 }
             }
@@ -610,12 +617,12 @@ fn draw_constants(
                 ui,
                 changed,
                 language.text("Land provinces"),
-                language.text("Land provinces across the planet. Drives cell spacing, polygon detail and the fineness of the political boundaries."),
+                language.text("Land provinces across the planet. Each world draws its own exact count from this mean (within 7.5 %); the area, region and superregion tiers follow the drawn count (about one area per five provinces, one region per fifty and one superregion per two hundred)."),
                 &thousands(d.num_provinces as f32),
                 &mut settings.num_provinces,
                 d.num_provinces,
-                5_000..=60_000,
-                1_000,
+                250..=60_000,
+                250,
                 false,
                 language,
             );
@@ -624,13 +631,13 @@ fn draw_constants(
                 changed,
                 language.text("Marine provinces"),
                 language.text(
-                    "Sea zones partitioned across oceans and gulfs for naval and trade routing.",
+                    "Marine provinces across the world ocean. Each world draws its own exact count from this mean (within 7.5 %); the ocean's basins, superregions, regions and areas follow it.",
                 ),
                 &thousands(d.ocean_num_provinces as f32),
                 &mut settings.ocean_num_provinces,
                 d.ocean_num_provinces,
-                500..=8_000,
-                250,
+                25..=8_000,
+                25,
                 false,
                 language,
             );
@@ -1060,14 +1067,14 @@ mod tests {
             nudge(&mut settings);
             assert_ne!(settings, default, "{name} was not actually moved");
             assert!(
-                group.edited(&settings),
+                group.edited(&settings, &default),
                 "{} must notice {name}",
                 group.title()
             );
 
             // The group's own reset must restore it — and restore *only* what it
             // owns, so no constant is left to another group's button.
-            group.reset(&mut settings);
+            group.reset(&mut settings, &default);
             assert_eq!(settings, default, "{} must reset {name}", group.title());
         }
     }
@@ -1151,10 +1158,12 @@ mod tests {
     /// taken from the last frame, which is.
     fn draw_frames(settings: &mut WorldGenSettings, busy: bool) -> bool {
         let ctx = egui::Context::default();
+        let defaults = WorldGenSettings::default();
         let mut changed = false;
         for _ in 0..3 {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                changed = draw_section(ui, settings, busy, Some(true), Language::English);
+                changed =
+                    draw_section(ui, settings, &defaults, busy, Some(true), Language::English);
             });
             // Nothing is painting a headless frame, so the font atlas it built has
             // nowhere to go — but egui insists it be acknowledged rather than
@@ -1202,6 +1211,7 @@ mod tests {
             input.screen_rect = Some(screen);
             input.time = Some(1.0 + f64::from(frame));
             let mut settings = WorldGenSettings::default();
+            let defaults = WorldGenSettings::default();
 
             let mut output = ctx.run_ui(input, |ui| {
                 let panel = egui::Panel::left("settings_width_probe")
@@ -1210,7 +1220,7 @@ mod tests {
                     .exact_size(GENESIS_PANEL_WIDTH)
                     .show(ui, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| {
-                            draw_section(ui, &mut settings, false, Some(true), language);
+                            draw_section(ui, &mut settings, &defaults, false, Some(true), language);
                         });
                     });
                 panel_rect = panel.response.rect;

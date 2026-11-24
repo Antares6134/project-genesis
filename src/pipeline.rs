@@ -155,13 +155,13 @@ pub struct WorldGenSettings {
     pub min_river_flow: f32,
 
     // ── Geography & wastelands ───────────────────────────────────────────────
-    /// Land provinces across the planet, quoted at the tuned 16K reference.
+    /// Land provinces across the planet — the **mean** the seed draws from.
     ///
-    /// [`Genesis::geography_config`] scales it by the chosen canvas's area, so
-    /// the province's pixel mass — and therefore the whole Act 4/5 hierarchy —
-    /// stays the size the engine was tuned at.
+    /// Each world draws its own exact target within ±7.5 % of this number, on
+    /// whatever canvas it grows on. The province's pixel mass (and therefore the
+    /// whole Act 4/5 hierarchy) follows the canvas, but the count does not.
     pub num_provinces: usize,
-    /// Marine provinces across the world ocean.
+    /// Marine provinces across the world ocean — the **mean** the seed draws from.
     pub ocean_num_provinces: usize,
     /// Most ice-free land that may become impassable wilderness.
     ///
@@ -224,7 +224,69 @@ impl Default for WorldGenSettings {
     }
 }
 
+/// How far a drawn province target may sit from the typed mean, as a fraction.
+///
+/// 7.5 % puts a typed 4 000 between 3 700 and 4 300 — enough for the world to
+/// feel grown rather than stamped, while the typed number stays the promise.
+const DRAWN_COUNT_SPREAD: f64 = 0.075;
+
+/// Salts that keep the land and the sea from drawing the same factor.
+const LAND_PROVINCE_SALT: u64 = 0x51ED_270B_9E37_79B9;
+const OCEAN_PROVINCE_SALT: u64 = 0x2545_F491_4F6C_DD1D;
+
+/// The count this seed actually grows: the typed mean ±7.5 %, drawn once.
+///
+/// Deliberately independent of the canvas — the same seed asks for the same
+/// number of provinces on every plate — and of the seeder's own RNG, so the
+/// world's geography is untouched by the draw.
+fn drawn_count(requested: usize, seed: u64, salt: u64) -> usize {
+    // splitmix64's finalizer: a cheap, well-mixed 64-bit hash of (seed, salt).
+    let mut z = seed.wrapping_add(salt);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    let unit = (z >> 11) as f64 / (1u64 << 53) as f64; // [0, 1)
+    let factor = 1.0 + (unit * 2.0 - 1.0) * DRAWN_COUNT_SPREAD;
+    ((requested as f64 * factor).round() as usize).max(1)
+}
+
 impl WorldGenSettings {
+    /// The engine's tuned defaults for one canvas.
+    ///
+    /// The counts that the engine was tuned at are quoted on the 16K reference
+    /// plate (30 000 land provinces, 2 500 marine), so a fresh world on a
+    /// smaller plate starts at the *same province density* the atlas has always
+    /// drawn: 469 on 2K, 7 500 on 8K, 30 000 on 16K. Once the reader types a
+    /// number it is absolute and no longer follows the canvas — the plate's
+    /// defaults are only what "reset" and a fresh world begin from.
+    pub fn for_canvas(width: usize, height: usize) -> Self {
+        let scale = CanvasScale::new(width, height);
+        let mut settings = Self::default();
+        settings.num_provinces = scale.count(settings.num_provinces);
+        settings.ocean_num_provinces = scale.count(settings.ocean_num_provinces);
+        settings
+    }
+
+    /// Move the counts that are still the **old plate's** tuned defaults onto the
+    /// new plate's defaults, leaving every value the reader typed alone.
+    ///
+    /// A world's canvas is part of its identity, and choosing a new one before
+    /// act one must not silently ask a 2K plate for thirty thousand provinces.
+    /// A value that has been edited is an instruction and is never touched.
+    pub fn adopt_plate_defaults(&mut self, from: (usize, usize), to: (usize, usize)) {
+        if from == to {
+            return;
+        }
+        let old = Self::for_canvas(from.0, from.1);
+        let new = Self::for_canvas(to.0, to.1);
+        if self.num_provinces == old.num_provinces {
+            self.num_provinces = new.num_provinces;
+        }
+        if self.ocean_num_provinces == old.ocean_num_provinces {
+            self.ocean_num_provinces = new.ocean_num_provinces;
+        }
+    }
+
     /// The polar geography these settings describe, in radians.
     ///
     /// The degrees above are what the panel shows; this is the one conversion
@@ -486,7 +548,9 @@ impl Genesis {
             languages: None,
             timings: [None; 7],
             autosave: false,
-            settings: WorldGenSettings::default(),
+            // A fresh world starts at the tuned province density for its plate;
+            // anything the reader types afterwards is an absolute count.
+            settings: WorldGenSettings::for_canvas(width.max(1), height.max(1)),
         }
     }
 
@@ -504,8 +568,13 @@ impl Genesis {
         if self.stage.is_some() || self.heightmap.is_some() {
             return false;
         }
+        let old = (self.width, self.height);
         self.width = width.max(1);
         self.height = height.max(1);
+        // A count still sitting at the old plate's tuned default follows the new
+        // plate; a count the reader typed is absolute and stays put.
+        self.settings
+            .adopt_plate_defaults(old, (self.width, self.height));
         true
     }
 
@@ -705,16 +774,25 @@ impl Genesis {
     }
 
     pub fn geography_config(&self) -> GeographyConfig {
-        let mut config = GeographyConfig::for_canvas(self.width, self.height);
-        config.num_provinces = self.canvas_scale().count(self.settings.num_provinces);
+        let mut config = GeographyConfig::default();
+        // The panel's number is a mean; this seed draws its own target around it.
+        config.num_provinces = drawn_count(
+            self.settings.num_provinces.max(1),
+            self.seed,
+            LAND_PROVINCE_SALT,
+        );
         config.max_waste_share = self.settings.max_waste_share;
         config.waste_cutoff = self.settings.waste_cutoff;
         config
     }
 
     pub fn ocean_config(&self) -> OceanConfig {
-        let mut config = OceanConfig::for_canvas(self.width, self.height);
-        config.num_provinces = self.canvas_scale().count(self.settings.ocean_num_provinces);
+        let mut config = OceanConfig::default();
+        config.num_provinces = drawn_count(
+            self.settings.ocean_num_provinces.max(1),
+            self.seed,
+            OCEAN_PROVINCE_SALT,
+        );
         config
     }
 
@@ -817,8 +895,13 @@ impl Genesis {
             .map_err(|why| LoadError::Unreadable(path.clone(), why))?;
 
         let stage = Stage::ALL[(cache.stage() - 1) as usize];
+        let old_canvas = (self.width, self.height);
         self.width = cache.width;
         self.height = cache.height;
+        // A count still at the old plate's tuned default follows the plate the
+        // cache was written on; a value the reader typed is absolute and stays.
+        self.settings
+            .adopt_plate_defaults(old_canvas, (self.width, self.height));
         self.heightmap = Some(Arc::new(cache.heightmap));
         self.temperature = cache.temp_grid.map(Arc::new);
         self.precipitation = cache.precip_grid.map(Arc::new);
@@ -1408,19 +1491,19 @@ impl Genesis {
             format!("{} provinces", thousands_u64(result.num_provinces as u64)),
             format!("{} wasteland pixels", thousands_u64(wasteland as u64)),
         ];
-        // The panel's province count is quoted at the 16K reference canvas. Say
-        // so when it was scaled, and say plainly when even the scaled target did
-        // not fit: the seeder stops at its eighteen-pixel minimum spacing rather
-        // than silently pretending it seeded provinces that have no room.
+        // The panel's number is a mean, and this seed drew its own target around
+        // it. Say both, so a world a few hundred provinces off the typed value is
+        // explained rather than mistaken for a shortfall — and still say plainly
+        // when the seeder could not fit even the drawn target on this planet.
         if geo_config.num_provinces != self.settings.num_provinces {
             summary.push(format!(
-                "scaled from {} at the 16K reference",
+                "drawn from {} requested",
                 thousands_u64(self.settings.num_provinces as u64)
             ));
         }
         if result.num_provinces < geo_config.num_provinces {
             summary.push(format!(
-                "{} requested · {} fit at this canvas",
+                "{} target · {} fit on this planet",
                 thousands_u64(geo_config.num_provinces as u64),
                 thousands_u64(result.num_provinces as u64)
             ));
@@ -1463,7 +1546,6 @@ impl Genesis {
             extracted.provinces,
             self.seed,
             world.width as f32,
-            self.canvas_scale(),
             &progress,
         );
 
@@ -1807,11 +1889,18 @@ mod tests {
         assert_eq!(hydro.min_river_flow, 100.0);
 
         let geography = genesis.geography_config();
-        assert_eq!(geography.num_provinces, 30_000);
+        assert_eq!(
+            geography.num_provinces,
+            drawn_count(30_000, genesis.seed(), LAND_PROVINCE_SALT),
+            "the typed mean is drawn into the seed's own target"
+        );
         assert_eq!(geography.max_waste_share, 0.18);
         assert_eq!(geography.waste_cutoff, 0.68);
 
-        assert_eq!(genesis.ocean_config().num_provinces, 2_500);
+        assert_eq!(
+            genesis.ocean_config().num_provinces,
+            drawn_count(2_500, genesis.seed(), OCEAN_PROVINCE_SALT)
+        );
         assert_eq!(genesis.geopolitics_config().max_continents, 7);
         assert_eq!(
             genesis.polar_config(),
@@ -1863,11 +1952,17 @@ mod tests {
         assert_eq!(genesis.hydro_config().min_river_flow, 250.0);
 
         let geography = genesis.geography_config();
-        assert_eq!(geography.num_provinces, 12_000);
+        assert_eq!(
+            geography.num_provinces,
+            drawn_count(12_000, genesis.seed(), LAND_PROVINCE_SALT)
+        );
         assert_eq!(geography.max_waste_share, 0.0);
         assert_eq!(geography.waste_cutoff, 0.45);
 
-        assert_eq!(genesis.ocean_config().num_provinces, 1_000);
+        assert_eq!(
+            genesis.ocean_config().num_provinces,
+            drawn_count(1_000, genesis.seed(), OCEAN_PROVINCE_SALT)
+        );
         assert_eq!(genesis.geopolitics_config().max_continents, 3);
 
         let polar = genesis.polar_config();
@@ -2246,6 +2341,15 @@ mod tests {
 
     // ─── THE RUNTIME CANVAS ──────────────────────────────────────────────────
 
+    /// A drawn target sits within 7.5 % of the typed mean.
+    fn assert_drawn_near(drawn: usize, mean: usize) {
+        let limit = mean as f64 * 0.075 + 0.5;
+        assert!(
+            (drawn as f64 - mean as f64).abs() <= limit,
+            "drawn {drawn} is not within 7.5 % of {mean}"
+        );
+    }
+
     /// A sized pipeline grows the canvas it was given, and its terrain config
     /// reads that canvas rather than the global reference.
     #[test]
@@ -2258,12 +2362,19 @@ mod tests {
         assert_eq!(terrain.strait_max_span, 150);
         assert_eq!(terrain.max_droplet_lifetime, 5);
         assert_eq!(terrain.erosion_droplets, 54_688);
-        assert_eq!(genesis.geography_config().num_provinces, 469);
+        assert_eq!(
+            genesis.settings().num_provinces,
+            469,
+            "the plate's default mean"
+        );
+        assert_drawn_near(genesis.geography_config().num_provinces, 469);
         assert_eq!(genesis.hydro_config().min_lake_cells, 1);
     }
 
     /// The per-resolution budgets follow the area and linear scales, and the 16K
-    /// reference is exactly the world the engine has always grown.
+    /// reference is exactly the world the engine has always grown. The province
+    /// *default* is part of that density: a fresh 2K world starts at 469 and a
+    /// fresh 8K at 7 500, so the plate still draws the world it always did.
     #[test]
     fn the_resolution_budgets_scale_with_the_canvas() {
         let cases = [
@@ -2277,10 +2388,11 @@ mod tests {
             let genesis = Genesis::new_sized(42, width, height);
             let terrain = genesis.world_config();
             assert_eq!(
-                genesis.geography_config().num_provinces,
+                genesis.settings().num_provinces,
                 provinces,
-                "provinces at {width}×{height}"
+                "default provinces at {width}×{height}"
             );
+            assert_drawn_near(genesis.geography_config().num_provinces, provinces);
             assert_eq!(
                 terrain.erosion_droplets, droplets,
                 "droplets at {width}×{height}"
@@ -2297,10 +2409,132 @@ mod tests {
         }
 
         let reference = Genesis::new_sized(42, 16_384, 8_192);
-        assert_eq!(reference.geography_config().num_provinces, 30_000);
+        assert_eq!(reference.settings().num_provinces, 30_000);
+        assert_drawn_near(reference.geography_config().num_provinces, 30_000);
         assert_eq!(reference.world_config().erosion_droplets, 3_500_000);
         assert_eq!(reference.world_config().strait_width, 8);
         assert_eq!(reference.hydro_config().min_lake_cells, 12);
+    }
+
+    /// The drawn target stays inside its band, varies with the seed, and is the
+    /// same draw on every canvas.
+    #[test]
+    fn the_drawn_province_target_follows_the_seed_and_not_the_canvas() {
+        let mut seen = std::collections::BTreeSet::new();
+        for seed in 0..64u64 {
+            let drawn = drawn_count(4_000, seed, LAND_PROVINCE_SALT);
+            assert!(
+                (3_700..=4_300).contains(&drawn),
+                "seed {seed} drew {drawn}, outside 3 700–4 300"
+            );
+            seen.insert(drawn);
+        }
+        assert!(seen.len() > 8, "the draw must vary from seed to seed");
+
+        let mut settings = WorldGenSettings::default();
+        settings.num_provinces = 4_000;
+        settings.ocean_num_provinces = 500;
+        let mut land = None;
+        let mut sea = None;
+        for (width, height) in [
+            (2_048usize, 1_024usize),
+            (4_096, 2_048),
+            (8_192, 4_096),
+            (12_288, 6_144),
+            (16_384, 8_192),
+        ] {
+            let mut genesis = Genesis::new_sized(42, width, height);
+            genesis.set_settings(settings.clone());
+            let drawn = genesis.geography_config().num_provinces;
+            assert_drawn_near(drawn, 4_000);
+            land.get_or_insert(drawn);
+            assert_eq!(
+                land,
+                Some(drawn),
+                "the land draw must not follow the canvas"
+            );
+            let drawn_sea = genesis.ocean_config().num_provinces;
+            assert_drawn_near(drawn_sea, 500);
+            sea.get_or_insert(drawn_sea);
+            assert_eq!(
+                sea,
+                Some(drawn_sea),
+                "the marine draw must not follow the canvas"
+            );
+        }
+    }
+
+    /// A province count the reader typed is absolute in its *mean*: the same
+    /// number asks for the same drawn provinces on every plate.
+    #[test]
+    fn a_typed_province_count_does_not_follow_the_canvas() {
+        let mut settings = WorldGenSettings::default();
+        settings.num_provinces = 4_000;
+        settings.ocean_num_provinces = 500;
+        for (width, height) in [
+            (2_048usize, 1_024usize),
+            (4_096, 2_048),
+            (8_192, 4_096),
+            (12_288, 6_144),
+            (16_384, 8_192),
+        ] {
+            let mut genesis = Genesis::new_sized(42, width, height);
+            genesis.set_settings(settings.clone());
+            assert_eq!(
+                genesis.geography_config().num_provinces,
+                drawn_count(4_000, 42, LAND_PROVINCE_SALT),
+                "land provinces at {width}×{height}"
+            );
+            assert_eq!(
+                genesis.ocean_config().num_provinces,
+                drawn_count(500, 42, OCEAN_PROVINCE_SALT),
+                "marine provinces at {width}×{height}"
+            );
+        }
+    }
+
+    /// A fresh world starts at its plate's tuned density; a value still at that
+    /// density follows a canvas change, and a value the reader typed does not.
+    #[test]
+    fn the_plate_sets_the_default_density_and_typed_values_outlive_it() {
+        assert_eq!(
+            Genesis::new_sized(42, 2_048, 1_024)
+                .settings()
+                .num_provinces,
+            469
+        );
+        assert_eq!(
+            Genesis::new_sized(42, 8_192, 4_096)
+                .settings()
+                .num_provinces,
+            7_500
+        );
+        assert_eq!(
+            Genesis::new_sized(42, 16_384, 8_192)
+                .settings()
+                .num_provinces,
+            30_000
+        );
+
+        let mut genesis = Genesis::new_sized(42, 8_192, 4_096);
+        assert!(genesis.set_canvas(16_384, 8_192));
+        assert_eq!(
+            genesis.settings().num_provinces,
+            30_000,
+            "an untouched default follows the new plate"
+        );
+        assert!(genesis.set_canvas(8_192, 4_096));
+        assert_eq!(genesis.settings().num_provinces, 7_500);
+
+        let mut typed = genesis.settings().clone();
+        typed.num_provinces = 4_000;
+        genesis.set_settings(typed);
+        assert!(genesis.set_canvas(2_048, 1_024));
+        assert_eq!(
+            genesis.settings().num_provinces,
+            4_000,
+            "a typed count is absolute and survives a canvas change"
+        );
     }
 
     /// The canvas may be chosen before act one and never after it.

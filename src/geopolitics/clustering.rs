@@ -1,5 +1,4 @@
 use crate::core::progress::Progress;
-use crate::core::sphere::CanvasScale;
 use crate::geography::config::OceanConfig;
 use crate::geopolitics::hierarchy::{GeopoliticalHierarchy, ProvinceNode};
 use rand::prelude::*;
@@ -31,12 +30,12 @@ impl PartialOrd for DijkState {
 
 /// How a clustering tier measures the size of one of its clusters.
 ///
-/// The upper tiers are cut by head count: a Region is a run of ~45 provinces
-/// whether they are desert or delta. The land Areas cannot be, because the map
+/// The upper tiers are cut by head count: a Region is ten of the Areas the world
+/// actually built, whatever they weigh. The land Areas cannot be, because the map
 /// is read by the eye rather than counted: a desert province and a coastal speck
 /// must not buy the same amount of drawn map. The Areas are therefore budgeted
-/// in *pixels*, which is what makes the ocean's own Area plate read evenly —
-/// its provinces are already of one size.
+/// in *pixels* (the mean province's mass times five), which is what makes the
+/// ocean's own Area plate read evenly — its provinces are already of one size.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum ClusterWeight {
     /// One per province — the historical measure.
@@ -60,6 +59,130 @@ impl ClusterWeight {
     }
 }
 
+/// One node of a clustering pass: a province, an Area or a Region.
+///
+/// The same k-centre/capacity/Lloyd algorithm serves every tier, so a tier above
+/// the province can be clustered as whole units of the tier below — which is what
+/// makes the counts cascade upward instead of each tier being computed separately
+/// from the province count.
+struct ClusterNode {
+    center_x: f32,
+    center_y: f32,
+    /// What this pass balances by: one per head for the count tiers, the drawn
+    /// pixel mass for the Area tier.
+    weight: usize,
+    /// Physical drawn mass, used to weight centres when aggregating upward.
+    mass: usize,
+    neighbors: Vec<(u32, u32)>,
+}
+
+impl ClusterNode {
+    fn sentinel() -> Self {
+        Self {
+            center_x: 0.0,
+            center_y: 0.0,
+            weight: 0,
+            mass: 0,
+            neighbors: Vec::new(),
+        }
+    }
+}
+
+/// The province tier as clustering nodes.
+fn province_nodes(provinces: &[ProvinceNode], weight: ClusterWeight) -> Vec<ClusterNode> {
+    provinces
+        .iter()
+        .map(|p| ClusterNode {
+            center_x: p.center_x,
+            center_y: p.center_y,
+            weight: if p.pixel_count == 0 { 0 } else { weight.of(p) },
+            mass: p.pixel_count,
+            neighbors: p.neighbors.clone(),
+        })
+        .collect()
+}
+
+/// Aggregate children (provinces, Areas or Regions) into the nodes of the next
+/// tier, one node per child cluster: mass-weighted centre, summed mass, weight
+/// one (the tiers above Areas are balanced by head), and the child adjacency
+/// folded onto the new nodes.
+fn aggregate_nodes(
+    children: &[ClusterNode],
+    assignment: &[u32],
+    map_width: f32,
+) -> Vec<ClusterNode> {
+    let max_id = assignment.iter().copied().max().unwrap_or(0) as usize;
+    let mut nodes: Vec<ClusterNode> = (0..=max_id).map(|_| ClusterNode::sentinel()).collect();
+    let mut sum_cos = vec![0.0f64; max_id + 1];
+    let mut sum_sin = vec![0.0f64; max_id + 1];
+    let mut sum_y = vec![0.0f64; max_id + 1];
+
+    for (id, node) in children.iter().enumerate().skip(1) {
+        let cid = assignment.get(id).copied().unwrap_or(0);
+        if cid == 0 || node.mass == 0 {
+            continue;
+        }
+        let angle = (node.center_x / map_width) as f64 * std::f64::consts::TAU;
+        sum_cos[cid as usize] += angle.cos() * node.mass as f64;
+        sum_sin[cid as usize] += angle.sin() * node.mass as f64;
+        sum_y[cid as usize] += node.center_y as f64 * node.mass as f64;
+        nodes[cid as usize].mass += node.mass;
+    }
+
+    for (cid, node) in nodes.iter_mut().enumerate().skip(1) {
+        if node.mass == 0 {
+            continue;
+        }
+        let mean_angle = sum_sin[cid].atan2(sum_cos[cid]);
+        let lon = mean_angle.rem_euclid(std::f64::consts::TAU);
+        node.center_x = ((lon / std::f64::consts::TAU) * map_width as f64) as f32;
+        node.center_y = (sum_y[cid] / node.mass as f64) as f32;
+        node.weight = 1;
+    }
+
+    // Fold the children's edges onto the new nodes (cheapest crossing wins).
+    let mut edges: BTreeMap<(u32, u32), u32> = BTreeMap::new();
+    for (id, node) in children.iter().enumerate().skip(1) {
+        let a = assignment.get(id).copied().unwrap_or(0);
+        if a == 0 {
+            continue;
+        }
+        for &(nb, cost) in &node.neighbors {
+            let b = assignment.get(nb as usize).copied().unwrap_or(0);
+            if b == 0 || b == a || (b as usize) >= nodes.len() {
+                continue;
+            }
+            let pair = if a < b { (a, b) } else { (b, a) };
+            let entry = edges.entry(pair).or_insert(u32::MAX);
+            *entry = (*entry).min(cost);
+        }
+    }
+    for ((a, b), cost) in edges {
+        nodes[a as usize].neighbors.push((b, cost));
+        nodes[b as usize].neighbors.push((a, cost));
+    }
+    for node in nodes.iter_mut() {
+        node.neighbors.sort_unstable();
+    }
+
+    nodes
+}
+
+/// The parent (continent) of every child cluster, from any member's parent.
+fn cluster_parents(parent_ids: &[u32], assignment: &[u32]) -> Vec<u32> {
+    let max_id = assignment.iter().copied().max().unwrap_or(0) as usize;
+    let mut parents = vec![0u32; max_id + 1];
+    for (id, &cid) in assignment.iter().enumerate().skip(1) {
+        if cid == 0 || cid as usize >= parents.len() {
+            continue;
+        }
+        if parents[cid as usize] == 0 {
+            parents[cid as usize] = parent_ids.get(id).copied().unwrap_or(0);
+        }
+    }
+    parents
+}
+
 /// Spherical wrap-around distance on the X axis
 fn wrap_dist_sq(x1: f32, y1: f32, x2: f32, y2: f32, w: f32) -> f32 {
     let mut dx = (x1 - x2).abs();
@@ -70,8 +193,8 @@ fn wrap_dist_sq(x1: f32, y1: f32, x2: f32, y2: f32, w: f32) -> f32 {
     dx * dx + dy * dy
 }
 
-/// Cluster a set of provinces into `k` balanced groups using capacity-aware
-/// Dijkstra with Lloyd centroid relaxation.
+/// Cluster a set of nodes (provinces, Areas or Regions) into `k` balanced groups
+/// using capacity-aware Dijkstra with Lloyd centroid relaxation.
 ///
 /// Every map below is a `BTreeMap`: the clustering consumes a seeded RNG while
 /// iterating parent groups, so a stable iteration order is what makes the whole
@@ -79,12 +202,11 @@ fn wrap_dist_sq(x1: f32, y1: f32, x2: f32, y2: f32, w: f32) -> f32 {
 fn cluster_group(
     members: &[u32],
     member_set: &HashSet<u32>,
-    provinces: &[ProvinceNode],
+    nodes: &[ClusterNode],
     k: usize,
     first_cid: u32,
     rng: &mut ChaCha8Rng,
     map_width: f32,
-    weight: ClusterWeight,
 ) -> BTreeMap<u32, u32> {
     let mut assignments: BTreeMap<u32, u32> = BTreeMap::new();
 
@@ -95,7 +217,10 @@ fn cluster_group(
         return assignments;
     }
 
-    let total_weight = weight.of_ids(provinces, members);
+    let total_weight: usize = members
+        .iter()
+        .map(|&m| nodes[m as usize].weight.max(1))
+        .sum();
     let target_size = (total_weight as f32 / k as f32).max(1.0);
 
     // ── Step 1: K-Centers Farthest-point seeding ────────────────────────────
@@ -129,7 +254,7 @@ fn cluster_group(
                 farthest = state.id;
             }
 
-            for &(nb, edge_cost) in &provinces[state.id as usize].neighbors {
+            for &(nb, edge_cost) in &nodes[state.id as usize].neighbors {
                 if !member_set.contains(&nb) {
                     continue;
                 }
@@ -154,16 +279,10 @@ fn cluster_group(
                 if seeds.contains(&m) {
                     continue;
                 }
-                let (mx, my) = (
-                    provinces[m as usize].center_x,
-                    provinces[m as usize].center_y,
-                );
+                let (mx, my) = (nodes[m as usize].center_x, nodes[m as usize].center_y);
                 let mut min_to_seed = f32::MAX;
                 for &s in &seeds {
-                    let (sx, sy) = (
-                        provinces[s as usize].center_x,
-                        provinces[s as usize].center_y,
-                    );
+                    let (sx, sy) = (nodes[s as usize].center_x, nodes[s as usize].center_y);
                     let d2 = wrap_dist_sq(mx, my, sx, sy, map_width);
                     if d2 < min_to_seed {
                         min_to_seed = d2;
@@ -193,7 +312,7 @@ fn cluster_group(
             let cid = first_cid + idx as u32;
             best.insert(s, 0);
             assignments.insert(s, cid);
-            cluster_claimed[idx] += weight.of(&provinces[s as usize]);
+            cluster_claimed[idx] += nodes[s as usize].weight.max(1);
             heap.push(DijkState {
                 cost: 0,
                 id: s,
@@ -219,7 +338,7 @@ fn cluster_group(
                 1.0
             };
 
-            for &(nb, edge_cost) in &provinces[state.id as usize].neighbors {
+            for &(nb, edge_cost) in &nodes[state.id as usize].neighbors {
                 if !member_set.contains(&nb) {
                     continue;
                 }
@@ -230,7 +349,7 @@ fn cluster_group(
                 if new_cost < prev_nb {
                     best.insert(nb, new_cost);
                     if !assignments.contains_key(&nb) && c_idx < k {
-                        cluster_claimed[c_idx] += weight.of(&provinces[nb as usize]);
+                        cluster_claimed[c_idx] += nodes[nb as usize].weight.max(1);
                     }
                     assignments.insert(nb, state.cid);
                     heap.push(DijkState {
@@ -245,17 +364,11 @@ fn cluster_group(
         // Unreached members fallback to nearest seed
         for &m in members {
             if !assignments.contains_key(&m) {
-                let (mx, my) = (
-                    provinces[m as usize].center_x,
-                    provinces[m as usize].center_y,
-                );
+                let (mx, my) = (nodes[m as usize].center_x, nodes[m as usize].center_y);
                 let mut closest_cid = first_cid;
                 let mut min_d2 = f32::MAX;
                 for (idx, &s) in seeds.iter().enumerate() {
-                    let (sx, sy) = (
-                        provinces[s as usize].center_x,
-                        provinces[s as usize].center_y,
-                    );
+                    let (sx, sy) = (nodes[s as usize].center_x, nodes[s as usize].center_y);
                     let d2 = wrap_dist_sq(mx, my, sx, sy, map_width);
                     if d2 < min_d2 {
                         min_d2 = d2;
@@ -282,7 +395,7 @@ fn cluster_group(
                 let cid = assignments[&m];
                 let idx = (cid - first_cid) as usize;
                 if idx < k {
-                    let centre = &provinces[m as usize];
+                    let centre = &nodes[m as usize];
                     let angle = (centre.center_x / map_width) as f64 * std::f64::consts::TAU;
                     sum_cos_x[idx] += angle.cos();
                     sum_sin_x[idx] += angle.sin();
@@ -303,10 +416,7 @@ fn cluster_group(
                     let mut min_d2 = f32::MAX;
                     for &m in members {
                         if assignments.get(&m) == Some(&(first_cid + idx as u32)) {
-                            let (px, py) = (
-                                provinces[m as usize].center_x,
-                                provinces[m as usize].center_y,
-                            );
+                            let (px, py) = (nodes[m as usize].center_x, nodes[m as usize].center_y);
                             let d2 = wrap_dist_sq(px, py, avg_x, avg_y, map_width);
                             if d2 < min_d2 {
                                 min_d2 = d2;
@@ -323,7 +433,7 @@ fn cluster_group(
     assignments
 }
 
-/// Cluster provinces into a single tier.
+/// Cluster the nodes of one tier into its parent tier.
 /// Show the atlas a clustering pass's work so far.
 ///
 /// A clustering pass never sees a pixel — it works on province *nodes* — so the
@@ -339,7 +449,7 @@ fn preview_tier_of(progress: &Progress, label: &'static str, assignment: &[u32],
 }
 
 fn cluster_tier(
-    provinces: &[ProvinceNode],
+    nodes: &[ClusterNode],
     parent_ids: &[u32],
     target_cluster_size: usize,
     max_clusters_per_parent: usize,
@@ -348,47 +458,102 @@ fn cluster_tier(
     progress: &Progress,
     label: &'static str,
     ocean: bool,
-    weight: ClusterWeight,
+    // Province-level ids for painting a tier of aggregated nodes (province →
+    // child cluster). `None` when the nodes *are* the provinces.
+    expand: Option<&[u32]>,
 ) -> (Vec<u32>, usize) {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
-    let n = provinces.len();
+    let n = nodes.len();
     let mut assignments = vec![0u32; n];
 
     let mut parent_groups: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
-    for p in provinces.iter() {
-        if p.id == 0 || p.pixel_count == 0 {
+    for (id, node) in nodes.iter().enumerate().skip(1) {
+        if node.weight == 0 {
             continue;
         }
-        if (p.id as usize) >= parent_ids.len() {
+        if id >= parent_ids.len() {
             continue;
         }
-        let parent = parent_ids[p.id as usize];
+        let parent = parent_ids[id];
         if parent == 0 {
             continue;
         }
-        parent_groups.entry(parent).or_default().push(p.id);
+        parent_groups.entry(parent).or_default().push(id as u32);
     }
 
     // One checkpoint per parent group: the tier is built kingdom by kingdom, so
     // the atlas can watch the world fill in rather than wait for the whole tier.
     progress.sub_step(label, parent_groups.len() as u64);
 
+    // Give each parent its share of the tier with the **remainders carried
+    // across the world**, not rounded away per parent. A world of six continents
+    // at 667 provinces each rounds 3.3 down to 3 six times and loses the two
+    // superregions its own count asked for; distributing the largest fractional
+    // parts instead puts the global count on the target, whatever the canvas.
+    let target_cluster_size = target_cluster_size.max(1);
+    let mut groups: Vec<(Vec<u32>, usize)> = parent_groups
+        .into_iter()
+        .map(|(_parent, members)| {
+            let member_weight = members
+                .iter()
+                .map(|&id| nodes[id as usize].weight.max(1))
+                .sum();
+            (members, member_weight)
+        })
+        .collect();
+    let total_weight: usize = groups.iter().map(|(_, w)| *w).sum();
+    let desired = ((total_weight as f32 / target_cluster_size as f32).round() as usize).max(1);
+    let cap_of = |members: &Vec<u32>| max_clusters_per_parent.min(members.len());
+    let mut quotas: Vec<usize> = groups
+        .iter()
+        .map(|(members, w)| {
+            ((*w as f32 / target_cluster_size as f32).floor() as usize)
+                .max(1)
+                .min(cap_of(members))
+        })
+        .collect();
+    let mut assigned: usize = quotas.iter().sum();
+    while assigned < desired {
+        let Some((best, _)) = groups
+            .iter()
+            .enumerate()
+            .map(|(index, (_, w))| {
+                let raw = *w as f32 / target_cluster_size as f32;
+                (index, raw - raw.floor())
+            })
+            .filter(|&(index, _)| quotas[index] < cap_of(&groups[index].0))
+            .max_by(|a, b| {
+                a.1.partial_cmp(&b.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(b.0.cmp(&a.0))
+            })
+        else {
+            break;
+        };
+        quotas[best] += 1;
+        assigned += 1;
+    }
+
     let mut next_cid = 1u32;
 
-    for (group, (_parent, mut members)) in parent_groups.into_iter().enumerate() {
+    for (group, ((mut members, _weight), quota)) in groups.into_iter().zip(quotas).enumerate() {
         progress.tick(group as u64);
-        preview_tier_of(progress, label, &assignments, ocean);
+        // A tier above the province is painted through the child map: the picture
+        // is still per province, even though the pass works on areas or regions.
+        let paint: Vec<u32> = match expand {
+            Some(child_of_province) => child_of_province
+                .iter()
+                .map(|&child| assignments.get(child as usize).copied().unwrap_or(0))
+                .collect(),
+            None => assignments.clone(),
+        };
+        preview_tier_of(progress, label, &paint, ocean);
         let count = members.len();
         if count == 0 {
             continue;
         }
 
-        // A tier budgeted in pixels picks its quota from the member's mass, so
-        // a continent of tiny coastal provinces is cut into fewer, larger areas
-        // than the same head count of interior ones would be.
-        let member_weight = weight.of_ids(provinces, &members);
-        let k = ((member_weight as f32 / target_cluster_size as f32).round() as usize)
-            .clamp(1, max_clusters_per_parent.min(count));
+        let k = quota.clamp(1, cap_of(&members));
 
         let member_set: HashSet<u32> = members.iter().copied().collect();
         members.shuffle(&mut rng);
@@ -396,12 +561,11 @@ fn cluster_tier(
         let group_assignments = cluster_group(
             &members,
             &member_set,
-            provinces,
+            nodes,
             k,
             next_cid,
             &mut rng,
             map_width,
-            weight,
         );
 
         for (pid, cid) in group_assignments {
@@ -418,6 +582,12 @@ fn cluster_tier(
 /// Absorb small clusters below `min_size` into their strongest neighboring cluster.
 /// Strictly enforces that clusters ONLY merge into a neighbor within the SAME parent.
 ///
+/// `keep_at_least` is a floor on the tier's total: the sweep stops dissolving
+/// clusters once that many remain, so an undersized shape may survive when the
+/// world has no surplus clusters to spare. That is what keeps a tier's count on
+/// the ratio its province count asked for instead of letting the shape sweeps
+/// quietly eat into it.
+///
 /// A cluster of a few provinces is dissolved **province by province** into the
 /// neighbours each province actually touches; only a lone province (or a pair)
 /// is moved whole. Swallowing every undersized cluster into a single neighbour
@@ -428,6 +598,7 @@ fn absorb_small_clusters(
     cluster_ids: &mut [u32],
     parent_ids: &[u32],
     min_size: usize,
+    keep_at_least: usize,
     weight: ClusterWeight,
     map_width: f32,
     progress: &Progress,
@@ -485,6 +656,11 @@ fn absorb_small_clusters(
 
         small_clusters.sort_by_key(|cid| cluster_sizes[cid]);
 
+        // Never merge the tier below the count its province ratio asked for. A
+        // sliver may survive when the world has no surplus clusters to spare —
+        // the count is the promise, the shape is the consequence.
+        let live_clusters = cluster_sizes.len();
+        let mut merged_here = 0usize;
         let mut any_merged = false;
 
         for small_cid in small_clusters {
@@ -505,6 +681,10 @@ fn absorb_small_clusters(
                 <= 1
             {
                 continue;
+            }
+
+            if live_clusters.saturating_sub(merged_here) <= keep_at_least {
+                break;
             }
 
             let mut neighbor_scores: BTreeMap<u32, u32> = BTreeMap::new();
@@ -588,6 +768,13 @@ fn absorb_small_clusters(
                 }
             }
             any_merged |= moved_any;
+            if moved_any
+                && !members
+                    .iter()
+                    .any(|&m| cluster_ids[m as usize] == small_cid)
+            {
+                merged_here += 1;
+            }
         }
 
         if !any_merged {
@@ -624,27 +811,54 @@ fn reindex_clusters(cluster_ids: &mut [u32]) -> usize {
     remap.len()
 }
 
-/// How large a land Area should read on the plate, measured in province pixels.
+/// Areas a land Region aims for.
 ///
-/// The Area tier is the only one budgeted by drawn mass instead of head count:
-/// a desert province and a coastal speck must not buy the same amount of map.
-/// That irregular speckle is exactly what made the old head-counted Areas read
-/// as confetti. A land province is ≈350 px today, so these come out at roughly
-/// 13, 6 and 20 provinces respectively.
-const LAND_AREA_TARGET_PIXELS: usize = 4_500;
+/// The tiers above Areas are grouped **from the tier below**: a Region is ten of
+/// the Areas the world actually built, and a Superregion four of the Regions it
+/// actually built. That is what lets the area count's natural drift carry upward.
+const AREAS_PER_REGION: usize = 10;
 
-/// Smallest land Area that may survive the absorb sweep.
-const LAND_AREA_MIN_PIXELS: usize = 2_000;
+/// Regions a land Superregion aims for.
+const REGIONS_PER_SUPERREGION: usize = 4;
 
-/// Largest land Area the splitter will tolerate.
-const LAND_AREA_MAX_PIXELS: usize = 7_000;
+/// Provinces a land Area aims for, measured by drawn mass.
+///
+/// The Area tier is the only one budgeted by mass instead of head count: a desert
+/// province and a coastal speck must not buy the same amount of map. The budget is
+/// the *mean* province's drawn mass times this count, so the number of Areas is a
+/// ratio of the province count at any resolution while the desert still weighs
+/// more than the speck.
+const LAND_AREA_TARGET_PROVINCES: f32 = 5.0;
+
+/// Smallest land Area that may survive the absorb sweep, as a fraction of the
+/// Area budget. A quarter of a target is about one mean province — the smallest
+/// shape that still reads as a place rather than a speck.
+const LAND_AREA_MIN_FRACTION: f32 = 0.25;
+
+/// Largest land Area the splitter will tolerate, as a fraction of the Area
+/// budget: just under twice a target, about nine mean provinces. Generous enough
+/// that the splitter only corrects genuine sprawl rather than nudging the tier
+/// count away from its ratio.
+const LAND_AREA_MAX_FRACTION: f32 = 1.8;
 
 /// A second, province-count ceiling: a raft of tiny island specks must not pile
 /// into one Area just because it happens to weigh as much as a desert.
 const LAND_AREA_MAX_PROVINCES: usize = 24;
 
-/// Most Areas a single Region may be cut into — a cluster cap, not a province cap.
-const MAX_AREAS_PER_REGION: usize = 8;
+/// Most Areas a single Continent may be cut into — a safety cap, not a ratio.
+///
+/// The Area budget decides how many a continent gets; the cap only guards against
+/// a pathological archipelago asking for millions of one-province areas.
+const MAX_AREAS_PER_CONTINENT: usize = 4096;
+
+/// Most Regions a single Continent may be cut into — a safety cap, not a ratio.
+const MAX_REGIONS_PER_CONTINENT: usize = 4096;
+
+/// Most Superregions a single Continent may be cut into.
+///
+/// Generous on purpose: the target decides how many a continent gets, and the cap
+/// only guards against a pathological sliver.
+const MAX_SUPERREGIONS_PER_CONTINENT: usize = 256;
 
 /// How many tightening sweeps the shape pass may take. Three is ample: the first
 /// does almost all of the work, the rest only settle the seams it creates.
@@ -1296,35 +1510,42 @@ fn mean_frontier_edges(provinces: &[ProvinceNode], cluster_ids: &[u32]) -> f64 {
     }
 }
 
-/// Build the complete four-level geopolitical hierarchy:
+/// Build the complete four-level geopolitical hierarchy, **bottom-up**:
 ///
 /// ```
-/// Continent  (Major landmass cores + strictly anchored islands)
-///   └─ Superregion  (~200 provinces at 16K, scaled by canvas area)
-///        └─ Region  (~45 provinces at 16K, scaled with it)
-///             └─ Area  (budgeted by drawn pixel mass, island chains united)
+/// Area       (provinces grouped by drawn mass, ~5 provinces; island chains united)
+///   └─ Region  (whole Areas grouped, ~10 per region)
+///        └─ Superregion  (whole Regions grouped, ~4 per superregion)
+///             └─ Continent  (the physical landmass cores)
 /// ```
 ///
-/// The superregion and region targets are quoted at the 16K reference plate and
-/// scaled with the province count, so a 2K world's political map keeps the same
-/// tier structure at a coarser grain.
+/// Each tier is a grouping of the tier below, so its count is whatever the tier
+/// below actually produced: a world whose areas drift a few percent carries that
+/// drift into its regions, and the regions carry theirs into the superregions.
+/// Resolution changes the *shape* of a cluster, never the chain of counts.
 pub fn build_geopolitical_hierarchy(
     mut provinces: Vec<ProvinceNode>,
     seed: u64,
     map_width: f32,
-    scale: CanvasScale,
     progress: &Progress,
 ) -> GeopoliticalHierarchy {
     let n = provinces.len();
-    // The tier targets are province *counts*, tuned on the 16K reference plate.
-    // A canvas's province count is scaled by its area (see `GeographyConfig`), so
-    // the same factor carries these targets: a two-hundred-province superregion
-    // at 16K covers the same share of the world as an eight-province one at 2K.
-    // The floors keep every tier present on the smallest plate.
-    let superregion_target = scale.count_at_least(200, 8);
-    let superregion_absorb = scale.count_at_least(95, 2);
-    let region_target = scale.count_at_least(45, 4);
-    let region_absorb = scale.count_at_least(16, 1);
+    let occupied = provinces
+        .iter()
+        .filter(|p| p.pixel_count > 0)
+        .count()
+        .max(1);
+
+    // The Area budget is the mean province's drawn mass times the number of
+    // provinces an Area should hold. A desert province still buys more map than a
+    // coastal speck, but ~`occupied / 5` Areas come out of it at any resolution.
+    let drawn_px: u64 = provinces.iter().map(|p| p.pixel_count as u64).sum();
+    let mean_px = (drawn_px / occupied as u64).max(1) as f32;
+    let area_target_pixels = (mean_px * LAND_AREA_TARGET_PROVINCES).round().max(1.0) as usize;
+    let area_min_pixels =
+        ((area_target_pixels as f32 * LAND_AREA_MIN_FRACTION).round() as usize).max(1);
+    let area_max_pixels =
+        ((area_target_pixels as f32 * LAND_AREA_MAX_FRACTION).round() as usize).max(1);
 
     // ── 1. Continents ─────────────────────────────────────────────────────────
     progress.sub_step("Anchoring the continents", 0);
@@ -1340,115 +1561,32 @@ pub fn build_geopolitical_hierarchy(
         continent_count
     );
 
-    // ── 2. Superregions (Balanced realms: ~200 provinces) ─────────────────────
-    println!("  Clustering Superregions (Strictly inside Continents)…");
-    let (mut super_ids, _) = cluster_tier(
-        &provinces,
-        &continent_ids,
-        superregion_target,
-        50, // At most 50 superregions per large continent
-        seed.wrapping_add(3),
-        map_width,
-        progress,
-        "Clustering superregions",
-        false,
-        ClusterWeight::Count,
-    );
-
-    // COASTAL ISLAND ANCHORING: Every island strictly inherits its superregion from its anchor coast!
-    // - Britain, Ireland, Iceland -> Western Europe Superregion!
-    // - Newfoundland, Greenland -> North America Superregion!
-    // - Island A between Coast A and Coast B -> Coast A's Superregion!
-    for i in 1..n {
-        let anchor = provinces[i].anchor_id;
-        if anchor != 0 && anchor != i as u32 {
-            super_ids[i] = super_ids[anchor as usize];
-        }
-    }
-
-    // Absorb any superregion with < 95 provinces (guarantees no tiny sliver exists between large ones)
-    let total_superregions = absorb_small_clusters(
-        &provinces,
-        &mut super_ids,
-        &continent_ids,
-        superregion_absorb,
-        ClusterWeight::Count,
-        map_width,
-        progress,
-        "Absorbing small superregions",
-        false,
-    );
-
-    for i in 1..n {
-        provinces[i].superregion_id = super_ids[i];
-    }
-    println!(
-        "  ✓ Generated {} Superregion(s) worldwide (undersized absorbed).",
-        total_superregions
-    );
-
-    // ── 3. Regions (Kingdom level: ~35 provinces) ─────────────────────────────
-    println!("  Clustering Regions (Strictly inside Superregions)…");
-    let (mut region_ids, _) = cluster_tier(
-        &provinces,
-        &super_ids,
-        region_target,
-        10, // Up to 10 regions per superregion
-        seed.wrapping_add(2),
-        map_width,
-        progress,
-        "Clustering regions",
-        false,
-        ClusterWeight::Count,
-    );
-
-    // For islands with < 25 provinces, strictly inherit Region from anchor coast
-    // (Large islands with >= 25 provinces form their own Region within the Superregion)
-    for i in 1..n {
-        let anchor = provinces[i].anchor_id;
-        if anchor != 0 && anchor != i as u32 {
-            // Count size of this island's landmass
-            let anchor_p = &provinces[anchor as usize];
-            if provinces[i].pixel_count < 25 * 300 {
-                region_ids[i] = region_ids[anchor_p.id as usize];
-            }
-        }
-    }
-
-    // Absorb small regions (< 16 provinces) into their best neighbor region
-    let total_regions = absorb_small_clusters(
-        &provinces,
-        &mut region_ids,
-        &super_ids,
-        region_absorb,
-        ClusterWeight::Count,
-        map_width,
-        progress,
-        "Absorbing small regions",
-        false,
-    );
-
-    for i in 1..n {
-        provinces[i].region_id = region_ids[i];
-    }
-    println!(
-        "  ✓ Generated {} Region(s) worldwide (undersized absorbed).",
-        total_regions
-    );
-
-    // ── 4. Areas (the fine political grain, budgeted by drawn mass) ───────────
-    println!("  Clustering Areas (Strictly inside Regions)…");
+    // ── 2. Areas (the base of the chain) ─────────────────────────────────────
+    println!("  Clustering Areas (within Continents)…");
+    let province_mass = province_nodes(&provinces, ClusterWeight::Pixels);
     let (mut area_ids, _) = cluster_tier(
-        &provinces,
-        &region_ids,
-        LAND_AREA_TARGET_PIXELS,
-        MAX_AREAS_PER_REGION,
+        &province_mass,
+        &continent_ids,
+        area_target_pixels,
+        MAX_AREAS_PER_CONTINENT,
         seed.wrapping_add(1),
         map_width,
         progress,
         "Clustering areas",
         false,
+        None,
+    );
+
+    // A small island is one place, so it is one Area *before* the absorb sweep
+    // can hand its provinces to the mainland. Unifying first keeps an island
+    // Area's place in the count — an archipelago does not silently lose the areas
+    // its provinces earned. Island provinces are frozen against the relax.
+    let locked = unify_island_areas(
+        &provinces,
+        &mut area_ids,
+        &continent_ids,
         ClusterWeight::Pixels,
+        area_max_pixels,
     );
 
     // Absorb areas whose drawn mass is under one readable unit. Provinces are
@@ -1456,8 +1594,9 @@ pub fn build_geopolitical_hierarchy(
     let _ = absorb_small_clusters(
         &provinces,
         &mut area_ids,
-        &region_ids,
-        LAND_AREA_MIN_PIXELS,
+        &continent_ids,
+        area_min_pixels,
+        0, // the splitter grows the tier again; absorb only trades mass
         ClusterWeight::Pixels,
         map_width,
         progress,
@@ -1471,8 +1610,8 @@ pub fn build_geopolitical_hierarchy(
     let _ = split_oversized_clusters(
         &provinces,
         &mut area_ids,
-        &region_ids,
-        LAND_AREA_MAX_PIXELS,
+        &continent_ids,
+        area_max_pixels,
         ClusterWeight::Pixels,
         map_width,
         progress,
@@ -1482,7 +1621,7 @@ pub fn build_geopolitical_hierarchy(
     let _ = split_oversized_clusters(
         &provinces,
         &mut area_ids,
-        &region_ids,
+        &continent_ids,
         LAND_AREA_MAX_PROVINCES,
         ClusterWeight::Count,
         map_width,
@@ -1491,23 +1630,15 @@ pub fn build_geopolitical_hierarchy(
         false,
     );
 
-    // A small island is one place, so it is one Area; then round whatever the
-    // clustering left lopsided. Island provinces are frozen against the relax.
-    let locked = unify_island_areas(
-        &provinces,
-        &mut area_ids,
-        &region_ids,
-        ClusterWeight::Pixels,
-        LAND_AREA_MAX_PIXELS,
-    );
+    // Round whatever the clustering left lopsided.
     let frontier_before = mean_frontier_edges(&provinces, &area_ids);
     relax_area_boundaries(
         &provinces,
         &mut area_ids,
-        &region_ids,
+        &continent_ids,
         ClusterWeight::Pixels,
-        LAND_AREA_MIN_PIXELS,
-        LAND_AREA_MAX_PIXELS,
+        area_min_pixels,
+        area_max_pixels,
         &locked,
         AREA_RELAX_SWEEPS,
     );
@@ -1520,7 +1651,56 @@ pub fn build_geopolitical_hierarchy(
         provinces[i].area_id = area_ids[i];
     }
 
-    // A one-line census of the tier, so its shape can be judged from the console
+    // ── 3. Regions (whole Areas grouped) ─────────────────────────────────────
+    // The area nodes carry one unit of weight each, so a Region is ~10 Areas
+    // whatever the areas themselves weigh.
+    let area_nodes = aggregate_nodes(&province_mass, &area_ids, map_width);
+    let area_parents = cluster_parents(&continent_ids, &area_ids);
+    println!("  Clustering Regions (within Continents)…");
+    let (mut region_of_area, _) = cluster_tier(
+        &area_nodes,
+        &area_parents,
+        AREAS_PER_REGION,
+        MAX_REGIONS_PER_CONTINENT,
+        seed.wrapping_add(2),
+        map_width,
+        progress,
+        "Clustering regions",
+        false,
+        Some(&area_ids),
+    );
+    let total_regions = reindex_clusters(&mut region_of_area);
+
+    // The province-level region map, for painting and for the write-back.
+    let mut province_region = vec![0u32; n];
+    for i in 1..n {
+        province_region[i] = region_of_area[area_ids[i] as usize];
+    }
+
+    // ── 4. Superregions (whole Regions grouped) ──────────────────────────────
+    let region_nodes = aggregate_nodes(&area_nodes, &region_of_area, map_width);
+    let region_parents = cluster_parents(&area_parents, &region_of_area);
+    println!("  Clustering Superregions (within Continents)…");
+    let (mut superregion_of_region, _) = cluster_tier(
+        &region_nodes,
+        &region_parents,
+        REGIONS_PER_SUPERREGION,
+        MAX_SUPERREGIONS_PER_CONTINENT,
+        seed.wrapping_add(3),
+        map_width,
+        progress,
+        "Clustering superregions",
+        false,
+        Some(&province_region),
+    );
+    let total_superregions = reindex_clusters(&mut superregion_of_region);
+
+    for i in 1..n {
+        provinces[i].region_id = province_region[i];
+        provinces[i].superregion_id = superregion_of_region[provinces[i].region_id as usize];
+    }
+
+    // A one-line census of each tier, so its shape can be judged from the console
     // the same way relief and climate already are.
     let mut area_members: BTreeMap<u32, usize> = BTreeMap::new();
     for i in 1..n {
@@ -1534,12 +1714,26 @@ pub fn build_geopolitical_hierarchy(
     let largest = sizes.last().copied().unwrap_or(0);
     let median = sizes.get(sizes.len() / 2).copied().unwrap_or(0);
     println!(
-        "  ✓ Generated {} Area(s) worldwide — {}–{} provinces (median {}), frontier edges each {:.1} → {:.1}.",
-        total_areas, smallest, largest, median, frontier_before, frontier_after
+        "  ✓ Generated {} Area(s) of ~{} targeted — {}–{} provinces (median {}), frontier edges each {:.1} → {:.1}.",
+        total_areas,
+        (occupied as f32 / LAND_AREA_TARGET_PROVINCES).round() as usize,
+        smallest,
+        largest,
+        median,
+        frontier_before,
+        frontier_after
+    );
+    println!(
+        "  ✓ Grouped {} Areas into {} Region(s) (~{} Areas each).",
+        total_areas, total_regions, AREAS_PER_REGION
+    );
+    println!(
+        "  ✓ Grouped {} Region(s) into {} Superregion(s) (~{} Regions each).",
+        total_regions, total_superregions, REGIONS_PER_SUPERREGION
     );
 
     GeopoliticalHierarchy {
-        total_provinces: provinces.len().saturating_sub(1),
+        total_provinces: occupied,
         total_areas,
         total_regions,
         total_superregions,
@@ -1578,8 +1772,9 @@ pub fn build_ocean_hierarchy(
     // ── 1. Ocean Continents (the great basins) ────────────────────────────────
     // The whole ocean is one parent group, so this is a global partition.
     let roots: Vec<u32> = vec![1; n];
+    let ocean_nodes = province_nodes(&provinces, ClusterWeight::Count);
     let (continent_ids, continent_count) = cluster_tier(
-        &provinces,
+        &ocean_nodes,
         &roots,
         config.continent_target,
         8, // at most 8 ocean basins
@@ -1588,7 +1783,7 @@ pub fn build_ocean_hierarchy(
         progress,
         "Clustering ocean basins",
         true,
-        ClusterWeight::Count,
+        None,
     );
     for i in 1..n {
         provinces[i].continent_id = continent_ids[i];
@@ -1596,8 +1791,8 @@ pub fn build_ocean_hierarchy(
     println!("  ✓ Clustered {} Ocean Basin(s).", continent_count);
 
     // ── 2. Oceanic Superregions (Strictly inside Basins) ──────────────────────
-    let (mut super_ids, _) = cluster_tier(
-        &provinces,
+    let (mut super_ids, superregion_clusters) = cluster_tier(
+        &ocean_nodes,
         &continent_ids,
         config.superregion_target,
         50,
@@ -1606,7 +1801,7 @@ pub fn build_ocean_hierarchy(
         progress,
         "Clustering oceanic superregions",
         true,
-        ClusterWeight::Count,
+        None,
     );
     // Undersized superregions are absorbed so no tiny sliver survives between
     // two large ocean realms.
@@ -1615,6 +1810,7 @@ pub fn build_ocean_hierarchy(
         &mut super_ids,
         &continent_ids,
         (config.superregion_target / 5).max(6),
+        superregion_clusters,
         ClusterWeight::Count,
         map_width,
         progress,
@@ -1630,8 +1826,8 @@ pub fn build_ocean_hierarchy(
     );
 
     // ── 3. Oceanic Regions (Strictly inside Superregions) ─────────────────────
-    let (mut region_ids, _) = cluster_tier(
-        &provinces,
+    let (mut region_ids, region_clusters) = cluster_tier(
+        &ocean_nodes,
         &super_ids,
         config.region_target,
         40,
@@ -1640,13 +1836,14 @@ pub fn build_ocean_hierarchy(
         progress,
         "Clustering oceanic regions",
         true,
-        ClusterWeight::Count,
+        None,
     );
     let total_regions = absorb_small_clusters(
         &provinces,
         &mut region_ids,
         &super_ids,
         (config.region_target / 5).max(4),
+        region_clusters,
         ClusterWeight::Count,
         map_width,
         progress,
@@ -1663,7 +1860,7 @@ pub fn build_ocean_hierarchy(
 
     // ── 4. Oceanic Areas (Strictly inside Regions) ────────────────────────────
     let (mut area_ids, _) = cluster_tier(
-        &provinces,
+        &ocean_nodes,
         &region_ids,
         config.area_target,
         25, // at most 25 oceanic areas per region (a cluster cap)
@@ -1672,13 +1869,14 @@ pub fn build_ocean_hierarchy(
         progress,
         "Clustering oceanic areas",
         true,
-        ClusterWeight::Count,
+        None,
     );
     let _ = absorb_small_clusters(
         &provinces,
         &mut area_ids,
         &region_ids,
         2,
+        0, // the ocean splitter grows the tier again
         ClusterWeight::Count,
         map_width,
         progress,
@@ -1966,13 +2164,8 @@ mod tests {
     /// ceiling, and nothing split across two Regions.
     #[test]
     fn the_built_hierarchy_never_exceeds_the_area_ceiling() {
-        let hierarchy = build_geopolitical_hierarchy(
-            continent_grid(20, 20),
-            42,
-            100.0,
-            CanvasScale::reference(),
-            &Progress::silent(),
-        );
+        let hierarchy =
+            build_geopolitical_hierarchy(continent_grid(20, 20), 42, 100.0, &Progress::silent());
 
         let mut areas: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
         for p in hierarchy.provinces.iter().filter(|p| p.id != 0) {
@@ -2000,8 +2193,12 @@ mod tests {
                 .iter()
                 .map(|&m| hierarchy.provinces[m as usize].pixel_count)
                 .sum();
+            // The budget is the mean province's mass times the area's share, so
+            // the ceiling follows this synthetic world's 300-px provinces.
+            let area_ceiling =
+                (300.0 * LAND_AREA_TARGET_PROVINCES * LAND_AREA_MAX_FRACTION).round() as usize;
             assert!(
-                mass <= LAND_AREA_MAX_PIXELS,
+                mass <= area_ceiling,
                 "area {area} weighs {mass} px, over the ceiling"
             );
 
@@ -2013,6 +2210,93 @@ mod tests {
                 "area {area} straddles two regions"
             );
         }
+    }
+
+    /// The tier counts are ratios of the province count, and they do not depend on
+    /// the canvas: the same 2 000 provinces yield ~10 superregions, ~40 regions and
+    /// ~400 areas whether the map is 100 or 400 px across.
+    #[test]
+    fn the_tier_counts_follow_the_province_count_not_the_canvas() {
+        let provinces = continent_grid(40, 50); // 2 000 provinces, one continent
+        let narrow = build_geopolitical_hierarchy(provinces.clone(), 7, 50.0, &Progress::silent());
+        let wide = build_geopolitical_hierarchy(provinces, 7, 500.0, &Progress::silent());
+
+        assert_eq!(narrow.total_provinces, 2_000);
+        // ~n / 200, ~n / 50 and ~n / 5, with room for the absorb and split sweeps.
+        assert!(
+            (6..=14).contains(&narrow.total_superregions),
+            "2 000 provinces gave {} superregions",
+            narrow.total_superregions
+        );
+        assert!(
+            (25..=60).contains(&narrow.total_regions),
+            "2 000 provinces gave {} regions",
+            narrow.total_regions
+        );
+        assert!(
+            (280..=520).contains(&narrow.total_areas),
+            "2 000 provinces gave {} areas",
+            narrow.total_areas
+        );
+
+        // The canvas changes the shapes, and may nudge a boundary or two across an
+        // absorb/split threshold — never the ratio.
+        assert!(
+            (narrow.total_superregions as i64 - wide.total_superregions as i64).abs() <= 1,
+            "the superregion count must not follow the canvas ({} vs {})",
+            narrow.total_superregions,
+            wide.total_superregions
+        );
+        assert!(
+            (narrow.total_regions as i64 - wide.total_regions as i64).abs() <= 2,
+            "the region count must not follow the canvas ({} vs {})",
+            narrow.total_regions,
+            wide.total_regions
+        );
+        assert!(
+            (narrow.total_areas as i64 - wide.total_areas as i64).abs() <= 4,
+            "the area count must not follow the canvas ({} vs {})",
+            narrow.total_areas,
+            wide.total_areas
+        );
+    }
+
+    /// Unequal continents must not round the tier counts away: the remainder is
+    /// carried across the world, so six lopsided landmasses still produce the
+    /// 2 000 provinces' share of superregions, regions and areas.
+    #[test]
+    fn the_worldwide_quota_survives_unequal_continents() {
+        let mut provinces = continent_grid(40, 50); // 2 000 provinces
+        for p in provinces.iter_mut().skip(1) {
+            let row = (p.id - 1) / 40; // 0..50
+            p.continent_id = match row {
+                0..=9 => 1,
+                10..=19 => 2,
+                20..=29 => 3,
+                30..=36 => 4,
+                37..=43 => 5,
+                _ => 6,
+            };
+            p.anchor_id = p.id; // every province is mainland
+        }
+
+        let hierarchy = build_geopolitical_hierarchy(provinces, 11, 50.0, &Progress::silent());
+
+        assert!(
+            (9..=11).contains(&hierarchy.total_superregions),
+            "2 000 provinces over six continents gave {} superregions",
+            hierarchy.total_superregions
+        );
+        assert!(
+            (36..=44).contains(&hierarchy.total_regions),
+            "2 000 provinces gave {} regions",
+            hierarchy.total_regions
+        );
+        assert!(
+            (360..=440).contains(&hierarchy.total_areas),
+            "2 000 provinces gave {} areas",
+            hierarchy.total_areas
+        );
     }
 
     /// Total frontier edges across a tier, charged once to each side of every
@@ -2199,7 +2483,7 @@ mod tests {
             &mut ids,
             &parents,
             ClusterWeight::Pixels,
-            LAND_AREA_MAX_PIXELS,
+            2_300, // the mass ceiling these 5×5 provinces' budget yields
         );
 
         let home = ids[3];
