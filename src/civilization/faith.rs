@@ -1445,6 +1445,12 @@ pub struct Faith {
     pub calendar: CalendarAnchor,
 
     pub clergy: Clergy,
+    /// How the creed's own ideal polity stands to a state.
+    ///
+    /// A faith is a world entity, not a possession of one realm, so this is a
+    /// property of the creed rather than of any country. The atlas does not yet
+    /// assign a state religion: it reports what people keep, not what a throne
+    /// patronises.
     pub state_coupling: StateCoupling,
 
     pub locus: SacredLocus,
@@ -4388,18 +4394,29 @@ fn propose(slot: &mut Option<ContactChange>, change: ContactChange, contexts: &[
 /// exclusive or polycentric neighbour, a syncretic one borrows its strongest
 /// power, and a secretive one plants a minority cult.
 ///
+/// `religions` is the world roster, one creed per realm in founding order;
+/// `founding[realm]` is the religion that realm follows. A conversion makes the
+/// target *join the source's religion* rather than clone its text, which is what
+/// lets one faith exist in several countries. The function returns the faith each
+/// converted realm displaced, so the province pass can keep it alive in the
+/// countryside.
+///
 /// `adjacency` is the stage's own frontier map, keyed by 1-based realm id.
 pub fn apply_contact(
     rng: &mut ChaCha8Rng,
-    faiths: &mut [Faith],
+    religions: &mut Vec<Faith>,
+    founding: &mut [u16],
     contexts: &[FaithContext],
     adjacency: &BTreeMap<u16, Vec<u16>>,
-) {
-    if faiths.len() < 2 || contexts.len() != faiths.len() {
-        return;
+) -> Vec<Option<u16>> {
+    let realms = founding.len();
+    let mut displaced = vec![None; realms];
+    if realms < 2 || contexts.len() < realms || religions.is_empty() {
+        return displaced;
     }
-    let before = faiths.to_vec();
-    let mut proposals: Vec<Option<ContactChange>> = vec![None; faiths.len()];
+    let before = religions.clone();
+    let before_founding = founding.to_vec();
+    let mut proposals: Vec<Option<ContactChange>> = vec![None; realms];
 
     for (&a, neighbours) in adjacency {
         for &b in neighbours {
@@ -4410,7 +4427,7 @@ pub fn apply_contact(
                 continue;
             };
             let (ai, bi) = (ai as usize, bi as usize);
-            if ai >= before.len() || bi >= before.len() {
+            if ai >= realms || bi >= realms {
                 continue;
             }
             let (source, target) = if stronger(ai, bi, contexts) {
@@ -4418,10 +4435,20 @@ pub fn apply_contact(
             } else {
                 (bi, ai)
             };
-            let source_faith = &before[source];
+            // A society without a hearth has no creed to argue with yet; its
+            // provinces will take a neighbour's faith in the province pass.
+            if before_founding[source] == 0 || before_founding[target] == 0 {
+                continue;
+            }
+            let Some(source_faith) = before.get(before_founding[source] as usize - 1) else {
+                continue;
+            };
             match source_faith.stance {
                 OutgroupStance::Missionary => {
-                    let target_faith = &before[target];
+                    let Some(target_faith) = before.get(before_founding[target] as usize - 1)
+                    else {
+                        continue;
+                    };
                     let convertible = target_faith.stance == OutgroupStance::Exclusive
                         || target_faith.cardinality == Cardinality::Polycentric;
                     if convertible
@@ -4487,67 +4514,40 @@ pub fn apply_contact(
         let Some(change) = change else {
             continue;
         };
+        let target_religion = before_founding[target];
         match change {
             ContactChange::Convert { source } => {
-                let ctx = contexts[target];
-                let signals = Signals::from(&ctx);
-                let mut converted = before[source].clone();
-                // The creed is shared, but its names and holy places are not:
-                // the recipient grows its own in the naming phase.
-                converted.names = FaithNames::default();
-                converted.liturgical_language = None;
-                converted.sacred_sites.clear();
-                // The creed is shared, but its local officers must fit the
-                // recipient's polity: a converted band never gains an
-                // ecclesiarchy.
-                converted.clergy = draw_clergy(
-                    rng,
-                    converted.root,
-                    &converted.domains,
-                    converted.cardinality,
-                    converted.stance,
-                    &ctx,
-                    &signals,
-                );
-                converted.state_coupling = draw_coupling(
-                    rng,
-                    converted.root,
-                    converted.cardinality,
-                    converted.clergy,
-                    &ctx,
-                    &signals,
-                );
-                // The sacred place is where the recipient lives.
-                converted.locus =
-                    draw_locus(rng, converted.root, &converted.domains, &ctx, &signals);
-                converted.orientation = draw_orientation(
-                    rng,
-                    converted.root,
-                    converted.cardinality,
-                    &converted.domains,
-                    converted.locus,
-                    &ctx,
-                    &signals,
-                );
-                converted.cults = faiths[target].cults.clone();
-                faiths[target] = converted;
+                let source_religion = before_founding[source];
+                if source_religion == 0 || source_religion == target_religion {
+                    continue;
+                }
+                // The realm now keeps the source creed itself. Its own faith is
+                // not destroyed: it becomes a minority the province pass can seed
+                // back into the countryside.
+                displaced[target] = Some(target_religion);
+                founding[target] = source_religion;
             }
             ContactChange::Merge { domain, .. } => {
-                merge_domain(rng, &mut faiths[target], domain, contexts[target]);
+                if let Some(faith) = religions.get_mut(target_religion as usize - 1) {
+                    // The recipient now shares the source's religion identity, so
+                    // the borrowed power belongs to every realm that keeps it.
+                    merge_domain(rng, faith, domain, contexts[target]);
+                }
             }
             ContactChange::PlantCult { cult, .. } => {
-                let target_faith = &mut faiths[target];
-                if target_faith.cults.len() < 2
-                    && !target_faith
+                if let Some(faith) = religions.get_mut(target_religion as usize - 1)
+                    && faith.cults.len() < 2
+                    && !faith
                         .cults
                         .iter()
                         .any(|existing| existing.name == cult.name)
                 {
-                    target_faith.cults.push(cult);
+                    faith.cults.push(cult);
                 }
             }
         }
     }
+    displaced
 }
 
 fn merge_domain(rng: &mut ChaCha8Rng, faith: &mut Faith, domain: Domain, ctx: FaithContext) {
@@ -5039,7 +5039,7 @@ mod tests {
     }
 
     #[test]
-    fn contact_is_single_hop_and_adapts_the_locus() {
+    fn contact_is_single_hop_and_shares_identity() {
         let mut source_ctx = scholarly_state();
         source_ctx.complexity = 0.90;
         let target_ctx = context(
@@ -5085,22 +5085,25 @@ mod tests {
             Cardinality::Polycentric,
             vec![Domain::Flora, Domain::Fauna, Domain::Earth],
         );
-        let source_locus = a.locus;
-        let c_root = c.root;
         let mut faiths = vec![a, b, c];
+        let mut founding = vec![1u16, 2u16, 3u16];
         let mut adjacency = BTreeMap::new();
         adjacency.insert(1u16, vec![2u16]);
         adjacency.insert(2u16, vec![3u16]);
-        apply_contact(
+        let displaced = apply_contact(
             &mut ChaCha8Rng::seed_from_u64(99),
             &mut faiths,
+            &mut founding,
             &[source_ctx, target_ctx, third_ctx],
             &adjacency,
         );
-        assert_eq!(faiths[1].root, MetaphysicalRoot::Monotheism);
-        assert_eq!(faiths[1].creed(), faiths[0].creed());
-        assert_eq!(faiths[2].root, c_root, "a conversion crossed two frontiers");
-        assert_ne!(faiths[1].locus, source_locus, "the locus did not adapt");
+        // Realm 2 joins the monotheism; realm 3 is untouched, because the pass reads
+        // one snapshot and a conversion crosses one frontier.
+        assert_eq!(founding, vec![1, 1, 3]);
+        assert_eq!(displaced, vec![None, Some(2), None]);
+        assert_eq!(faiths[0].root, MetaphysicalRoot::Monotheism);
+        assert_eq!(faiths[1].root, MetaphysicalRoot::Polytheism);
+        assert_eq!(faiths[2].root, MetaphysicalRoot::Animism);
     }
 
     #[test]
@@ -5125,11 +5128,13 @@ mod tests {
             vec![Domain::Flora, Domain::Fauna, Domain::Earth],
         );
         let mut faiths = vec![source, target];
+        let mut founding = vec![1u16, 2u16];
         let mut adjacency = BTreeMap::new();
         adjacency.insert(1u16, vec![2u16]);
         apply_contact(
             &mut ChaCha8Rng::seed_from_u64(5),
             &mut faiths,
+            &mut founding,
             &[source_ctx, target_ctx],
             &adjacency,
         );

@@ -72,33 +72,74 @@ fn report(world: &CivilizationWorld, all: bool) {
         "   Mean civilized density: {:.1} people/km²",
         world.mean_density_per_km2()
     );
+    // The province layer in one place: every faith is a world entity now, not a
+    // possession of one realm. A faith may be kept in several countries, and a
+    // country may keep several faiths.
+    let faiths = world.religions_by_size();
+    if !faiths.is_empty() {
+        let multi_realm = faiths
+            .iter()
+            .filter(|religion| religion.realms.len() > 1)
+            .count();
+        let one_province = faiths
+            .iter()
+            .filter(|religion| religion.provinces.len() == 1)
+            .count();
+        println!(
+            "   {} religions · {} kept in more than one realm · {} kept in one province",
+            faiths.len(),
+            multi_realm,
+            one_province,
+        );
+        println!("   The ten largest —");
+        for religion in faiths.iter().take(10) {
+            println!(
+                "      {:<32} {:<18} {:>5} provinces · {:>11} people · {:>3} realms",
+                religion.faith.display_name(),
+                religion.faith.root.label(),
+                religion.provinces.len(),
+                thousands_u64(religion.population),
+                religion.realms.len(),
+            );
+        }
+    }
     println!();
 
-    for civ in &world.civilizations {
+    for (index, civ) in world.civilizations.iter().enumerate() {
+        let id = index as u32 + 1;
         if all || civ.tier.is_state() {
-            report_one(civ);
+            report_one(id, civ, world);
         } else {
-            report_line(civ);
+            report_line(id, civ, world);
         }
     }
 }
 
 /// One line for a people that is not a polity: what it is, where it is, how many
-/// it feeds. Enough to audit the map without burying the states.
-fn report_line(civ: &Civilization) {
+/// it feeds and the faith most of it keeps. Enough to audit the map without
+/// burying the states.
+fn report_line(id: u32, civ: &Civilization, world: &CivilizationWorld) {
+    let faith = world
+        .dominant_religion_of(id)
+        .map_or_else(|| "—".to_string(), |religion| religion.faith.display_name());
     println!(
-        "   · {:<32} {:<44} {:>4} provinces · {:>9} km² · {:>10} people ({:.2}/km²)",
+        "   · {:<32} {:<44} {:>4} provinces · {:>9} km² · {:>10} people ({:.2}/km²) · {}",
         civ.name,
         format!("{} ({})", civ.tier.form(), civ.environment.label()),
         civ.provinces.len(),
         thousands(civ.area_km2),
         thousands_u64(civ.population),
         civ.density_per_km2,
+        faith,
     );
 }
 
 /// Print one realm's dossier.
-fn report_one(civ: &Civilization) {
+fn report_one(id: u32, civ: &Civilization, world: &CivilizationWorld) {
+    let census = world.religion_of_realm(id);
+    let faith = world
+        .dominant_religion_of(id)
+        .map(|religion| &religion.faith);
     println!("   🏺 {}", civ.name);
     println!(
         "      {} · {}",
@@ -124,37 +165,78 @@ fn report_one(civ: &Civilization) {
         "Economy:",
         civ.culture.subsistence.label()
     );
-    println!("      {:<13}{}", "Faith:", civ.faith.display_name());
-    if !civ.faith.names.liturgy.is_empty() {
-        println!("      {:<13}{}", "Liturgy:", civ.faith.names.liturgy);
-    }
-    println!("        {:<11}{}", "Creed:", civ.faith.creed());
-    println!("        {}:", civ.faith.deity_title());
-    for line in civ.faith.deity_lines() {
-        println!("          {line}");
-    }
-    println!("        {:<11}{}", "Cosmos:", civ.faith.cosmos());
-    println!("        {:<11}{}", "Ethos:", civ.faith.ethos());
-    println!("        {:<11}{}", "Taboo:", civ.faith.taboo());
-    println!("        {:<11}{}", "Path:", civ.faith.path());
-    println!("        {:<11}{}", "Rites:", civ.faith.praxis());
-    println!("        {:<11}{}", "Temple:", civ.faith.polity());
-    println!("        {:<11}{}", "Manifest:", civ.faith.manifestation());
-    println!("        {:<11}{}", "Emblem:", civ.faith.emblem_name());
-    if !civ.faith.sacred_sites.is_empty() {
-        let title = format!("{}:", civ.faith.sacred_site_title());
-        let lines = civ.faith.sacred_site_lines();
-        if lines.len() == 1 {
-            println!("        {} {}", title, lines[0]);
-        } else {
-            println!("        {title}");
-            for line in lines {
+    match faith {
+        Some(faith) => {
+            let share = census
+                .and_then(|census| census.faiths.first())
+                .filter(|_| civ.population > 0)
+                .map_or(0.0, |kept| {
+                    100.0 * kept.population as f32 / civ.population as f32
+                });
+            println!(
+                "      {:<13}{} ({:.0}% of its people)",
+                "Faith:",
+                faith.display_name(),
+                share
+            );
+            if !faith.names.liturgy.is_empty() {
+                println!("      {:<13}{}", "Liturgy:", faith.names.liturgy);
+            }
+            println!("        {:<11}{}", "Creed:", faith.creed());
+            println!("        {}:", faith.deity_title());
+            for line in faith.deity_lines() {
                 println!("          {line}");
             }
+            println!("        {:<11}{}", "Cosmos:", faith.cosmos());
+            println!("        {:<11}{}", "Ethos:", faith.ethos());
+            println!("        {:<11}{}", "Taboo:", faith.taboo());
+            println!("        {:<11}{}", "Path:", faith.path());
+            println!("        {:<11}{}", "Rites:", faith.praxis());
+            println!("        {:<11}{}", "Temple:", faith.polity());
+            println!("        {:<11}{}", "Manifest:", faith.manifestation());
+            println!("        {:<11}{}", "Emblem:", faith.emblem_name());
+            if !faith.sacred_sites.is_empty() {
+                let title = format!("{}:", faith.sacred_site_title());
+                let lines = faith.sacred_site_lines();
+                if lines.len() == 1 {
+                    println!("        {} {}", title, lines[0]);
+                } else {
+                    println!("        {title}");
+                    for line in lines {
+                        println!("          {line}");
+                    }
+                }
+            }
+            if !faith.cults.is_empty() {
+                println!("        {:<11}{}", "Cults:", faith.cult_names());
+            }
         }
+        None => println!("      {:<13}None recorded", "Faith:"),
     }
-    if !civ.faith.cults.is_empty() {
-        println!("        {:<11}{}", "Cults:", civ.faith.cult_names());
+    if let Some(census) = census
+        && census.faiths.len() > 1
+    {
+        let mut kept: Vec<String> = census
+            .faiths
+            .iter()
+            .take(3)
+            .map(|kept| {
+                let name = world.religion(kept.religion).map_or_else(
+                    || "an unknown faith".to_string(),
+                    |religion| religion.faith.display_name(),
+                );
+                let share = if civ.population > 0 {
+                    100.0 * kept.population as f32 / civ.population as f32
+                } else {
+                    0.0
+                };
+                format!("{name} {share:.0}%")
+            })
+            .collect();
+        if census.faiths.len() > 3 {
+            kept.push(format!("and {} more", census.faiths.len() - 3));
+        }
+        println!("      {:<13}{}", "Faiths kept:", kept.join(" · "));
     }
     println!("      {:<13}{}", "Polity:", civ.culture.government.label());
     println!(
@@ -265,17 +347,21 @@ pub fn report_languages(world: &LanguagesWorld, civilizations: Option<&Civilizat
     if let Some(civilizations) = civilizations {
         println!();
         println!("   Named faiths (the first twenty) —");
-        for civ in civilizations.civilizations.iter().take(20) {
-            let faith = &civ.faith;
+        for religion in civilizations.religions.iter().take(20) {
+            let faith = &religion.faith;
             let liturgy = if faith.names.liturgy.is_empty() {
                 String::new()
             } else {
                 format!(" · liturgy {}", faith.names.liturgy)
             };
+            let origin = civilizations
+                .civilizations
+                .get(religion.origin_realm as usize - 1)
+                .map_or("an unknown realm", |civ| civ.name.as_str());
             println!(
                 "      {:<30} {:<34} {}{}",
                 faith.name,
-                civ.name,
+                origin,
                 faith.creed(),
                 liturgy
             );

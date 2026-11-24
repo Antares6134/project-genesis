@@ -165,6 +165,147 @@ pub struct CivilizationConfig {
     /// vaulting a mountain wall or an ocean to grab a distant province: the
     /// strongest barriers on the map are simply walls that history did not cross.
     pub max_step_cost: f32,
+
+    /// How faiths cross the ground once they exist. See [`ReligionConfig`].
+    pub religion: ReligionConfig,
+}
+
+/// Tuning for the province layer of religion: how a creed spreads from the
+/// provinces that keep it into their neighbours.
+///
+/// The figures deliberately rhyme with [`LanguageConfig`], because mountains,
+/// rivers and cities are the same barriers to a tongue and to a faith. A faith
+/// is not a language, though: its `OutgroupStance` and `Transmission` decide how
+/// far it travels, and a frontier between two realms costs more than an internal
+/// border. Nothing here decides *what* a faith believes — that stays the creed
+/// generator's business.
+///
+/// [`LanguageConfig`]: crate::language::LanguageConfig
+#[derive(Clone, Debug)]
+pub struct ReligionConfig {
+    /// Frontier passes to run. Each pass reads a snapshot and applies its
+    /// conversions together, so one atlas date cannot carry a faith across two
+    /// realms' worth of provinces in a single step.
+    pub rounds: usize,
+
+    /// Cost multiplier for a step across a realm frontier. Faiths do cross
+    /// borders — that is how one creed comes to live in several countries — but
+    /// not as readily as they move inside one.
+    pub border_friction: f32,
+
+    /// How strongly a province resists a new faith: the incumbent gets this as a
+    /// flat score bonus before any neighbour's argument is heard.
+    pub incumbent_resistance: f32,
+    /// How much better a rival's neighbour score must be before the province
+    /// turns. A low value makes a noisy checkerboard; a high one leaves every
+    /// realm single-faithed.
+    pub flip_margin: f32,
+
+    /// Population density, in people per km², above which a province counts as
+    /// urban: a city keeps — or gains — a faith of its own.
+    pub urban_density_per_km2: f32,
+    /// Cost multiplier for entering such a province.
+    pub urban_resistance: f32,
+    /// Cost multiplier for entering empty country. Creeds sweep over wilderness
+    /// more cheaply than over farmland.
+    pub wilderness_discount: f32,
+
+    /// Cost multiplier for a step along a river valley.
+    pub river_discount: f32,
+    /// Cost multiplier for a step across dry grassland.
+    pub grassland_friction: f32,
+    /// Cost multiplier for a step through woodland.
+    pub woodland_friction: f32,
+    /// Cost multiplier for a step through taiga or tropical forest.
+    pub deep_forest_friction: f32,
+    /// Cost multiplier for a step across desert or steppe.
+    pub arid_friction: f32,
+
+    /// Mean elevation, in metres, at which hills begin to cost more.
+    pub hill_start_m: f32,
+    /// Mean elevation, in metres, at which a province is a mountain wall.
+    pub mountain_wall_m: f32,
+    /// Cost multiplier for a hill step.
+    pub hill_friction: f32,
+    /// Cost multiplier for a mountain step.
+    pub mountain_friction: f32,
+
+    /// How much of a converted realm's rural countryside may keep the displaced
+    /// faith when the realm adopts a new one. Towns and the seat take the new
+    /// creed; the fields often do not, which is where a diaspora begins.
+    pub residual_share: f32,
+
+    // ── Where faiths begin ──────────────────────────────────────────────────
+    // A world does not have one religion per band. A hearth is a people large
+    // enough, or isolated enough, to grow a tradition of its own; the small
+    // societies around it adopt a neighbour's faith through the province walk.
+    /// Fewest provinces a non-state society must hold to seed a faith of its own.
+    pub hearth_min_provinces: usize,
+    /// Chance that a small society seeds an endemic faith anyway. This is the
+    /// one-province cult on a remote island or in a high valley: rare, but real.
+    pub endemic_faith_chance: f32,
+
+    // ── Regional schisms ────────────────────────────────────────────────────
+    /// A faith this large is a family of regional traditions, not one parish.
+    pub schism_min_provinces: usize,
+    /// Fewest provinces one region must hold to receive a daughter faith.
+    pub schism_min_group: usize,
+
+    // ── Diasporas ───────────────────────────────────────────────────────────
+    /// Chance that an urban or coastal province keeps a foreign faith as a
+    /// minority community. This is the city congregation, the merchant quarter
+    /// and the exiled people — one province that the map can believe in.
+    pub diaspora_chance: f32,
+    /// Most of a realm's provinces that may become such communities, as a share.
+    pub diaspora_max_share: f32,
+    /// Absolute ceiling on diaspora provinces in one realm, so a huge band does
+    /// not turn into a cosmopolitan archipelago.
+    pub diaspora_max_per_realm: usize,
+    /// Chance that such a community grows a tradition of its own rather than
+    /// keeping a neighbour's. This is the small sect that exists in a handful of
+    /// towns and nowhere as a state: rare, but the map must be able to show it.
+    pub diaspora_new_faith_chance: f32,
+}
+
+impl Default for ReligionConfig {
+    fn default() -> Self {
+        Self {
+            rounds: 4,
+
+            border_friction: 1.45,
+
+            incumbent_resistance: 0.35,
+            flip_margin: 1.15,
+
+            urban_density_per_km2: 1.8,
+            urban_resistance: 2.20,
+            wilderness_discount: 0.80,
+
+            river_discount: 0.70,
+            grassland_friction: 0.90,
+            woodland_friction: 1.10,
+            deep_forest_friction: 1.60,
+            arid_friction: 1.45,
+
+            hill_start_m: 600.0,
+            mountain_wall_m: 2_400.0,
+            hill_friction: 1.50,
+            mountain_friction: 3.30,
+
+            residual_share: 0.65,
+
+            hearth_min_provinces: 6,
+            endemic_faith_chance: 0.12,
+
+            schism_min_provinces: 30,
+            schism_min_group: 12,
+
+            diaspora_chance: 0.10,
+            diaspora_max_share: 0.20,
+            diaspora_max_per_realm: 4,
+            diaspora_new_faith_chance: 0.30,
+        }
+    }
 }
 
 impl Default for CivilizationConfig {
@@ -215,6 +356,8 @@ impl Default for CivilizationConfig {
             complex_farmer_merge_km2: 8.0e5,
 
             max_step_cost: 900.0,
+
+            religion: ReligionConfig::default(),
         }
     }
 }

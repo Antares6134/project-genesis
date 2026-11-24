@@ -5,7 +5,7 @@ mod themes;
 pub use i18n::Language;
 
 use crate::civilization::SocietyTier;
-use crate::civilization::{Civilization, CivilizationWorld, Faith, MetaphysicalRoot};
+use crate::civilization::{Civilization, CivilizationWorld, Faith, MetaphysicalRoot, Religion};
 use crate::core::fmt::{thousands, thousands_u64};
 use crate::core::polar::{
     GLACIAL_LAND_TEMP, ICE_SHELF_TEMP, PACK_ICE_TEMP, frozen_sea_name, is_frozen_sea,
@@ -701,6 +701,8 @@ pub struct MapViewer {
     marker: Option<(f32, f32)>,
     /// The realm whose entry in the legend was last clicked.
     selected_civ: Option<u32>,
+    /// The religion selected in the Religions legend, by 1-based id.
+    selected_religion: Option<u16>,
     /// The language family whose entry in the legend was last clicked.
     selected_family: Option<u16>,
     /// Whether the atlas's type scale has been installed on this frame's style.
@@ -1503,6 +1505,73 @@ fn civ_border_shade(
     color
 }
 
+/// Darken a pixel on a religion frontier.
+///
+/// Two weights, for the same reason the language map has two: the hard edge is
+/// between two different metaphysical roots, the softer one between two religions
+/// of the same family. Comparing the roots rather than the shades matters,
+/// because two religions of one root can share a shade when they are far apart —
+/// the frontier between them is still a real frontier.
+#[inline]
+fn religion_border_shade(
+    mut color: [f32; 3],
+    province_ids: Option<&Grid<u32>>,
+    civilizations: &CivilizationWorld,
+    id: u32,
+    x: usize,
+    y: usize,
+    h: usize,
+) -> [f32; 3] {
+    let Some(province_ids) = province_ids else {
+        return color;
+    };
+    let here = civilizations
+        .province_religion
+        .get(id as usize)
+        .copied()
+        .unwrap_or(0);
+    if here == 0 {
+        return color;
+    }
+    let right_id = *province_ids.get(province_ids.wrap_x(x as isize + 1) as isize, y as isize);
+    let down_id = if y + 1 < h {
+        *province_ids.get(x as isize, y as isize + 1)
+    } else {
+        id
+    };
+
+    let mut hard = false;
+    let mut soft = false;
+    for other_id in [right_id, down_id] {
+        if other_id == 0 || other_id == id {
+            continue;
+        }
+        let other = civilizations
+            .province_religion
+            .get(other_id as usize)
+            .copied()
+            .unwrap_or(0);
+        if other == 0 || other == here {
+            continue;
+        }
+        let (Some(one), Some(two)) = (civilizations.religion(here), civilizations.religion(other))
+        else {
+            continue;
+        };
+        if one.faith.root != two.faith.root {
+            hard = true;
+        } else {
+            soft = true;
+        }
+    }
+    if hard {
+        color = blend_rgb(color, CIV_INK, 0.55);
+    } else if soft {
+        color = blend_rgb(color, CIV_INK, 0.28);
+    }
+    color
+}
+
 /// Darken a pixel on a language or family frontier.
 ///
 /// Two weights, because the two lines mean different things: a family frontier is
@@ -1587,6 +1656,7 @@ fn civilization_dossier(
     ui: &mut egui::Ui,
     civ_id: u32,
     civ: &Civilization,
+    civilizations: &CivilizationWorld,
     languages: &LanguagesWorld,
     language: Language,
 ) {
@@ -1618,7 +1688,16 @@ fn civilization_dossier(
         },
     );
     dossier_row(ui, "Economy:", civ.culture.subsistence.label());
-    faith_summary(ui, &civ.faith);
+    if let Some(religion) = civilizations.dominant_religion_of(civ_id) {
+        faith_summary(ui, &religion.faith);
+        if let Some(census) = civilizations.religion_of_realm(civ_id)
+            && census.faiths.len() > 1
+        {
+            dossier_row(ui, "Faiths kept:", &census.faiths.len().to_string());
+        }
+    } else {
+        dossier_row(ui, "Faith:", "None recorded");
+    }
     caption(
         ui,
         language.text(
@@ -1705,15 +1784,22 @@ fn faith_details(ui: &mut egui::Ui, faith: &Faith) {
 }
 
 /// The full religion card the Religions map mode shows on hover: the faith, its
-/// root colour family, the society that carries it, how many people keep it, and
-/// every level of the creed beneath the name.
-fn religion_dossier(ui: &mut egui::Ui, civ: &Civilization, world: &AtlasWorld, language: Language) {
+/// root colour family, every realm and province that keeps it, and the whole
+/// cascade beneath the name.
+fn religion_dossier(
+    ui: &mut egui::Ui,
+    religion: &Religion,
+    province: u32,
+    owner: &Civilization,
+    world: &AtlasWorld,
+    language: Language,
+) {
     // A hover card has to stay a card: at 430 px it never swallows the map.
     ui.set_max_width(CARD_WIDTH);
-    let faith = &civ.faith;
+    let faith = &religion.faith;
 
     ui.horizontal(|ui| {
-        themes::swatch(ui, civ.religion_color);
+        themes::swatch(ui, religion.color);
         card_title(ui, faith.display_name());
     });
     dossier_row(ui, "Creed:", &faith.creed());
@@ -1726,14 +1812,22 @@ fn religion_dossier(ui: &mut egui::Ui, civ: &Civilization, world: &AtlasWorld, l
     });
 
     ui.separator();
-    dossier_row(ui, "Carried by:", &civ.name);
+    let realms = if religion.realms.len() == 1 {
+        "1 realm".to_string()
+    } else {
+        format!("{} realms", religion.realms.len())
+    };
     dossier_row(
         ui,
-        "Society:",
-        &format!("{} · {}", civ.tier.form(), civ.environment.label()),
+        "Kept by:",
+        &format!(
+            "{realms} · {} {}",
+            religion.provinces.len(),
+            religion.province_count_label()
+        ),
     );
     let followers_share = if world.civilizations.total_population > 0 {
-        100.0 * civ.population as f32 / world.civilizations.total_population as f32
+        100.0 * religion.population as f32 / world.civilizations.total_population as f32
     } else {
         0.0
     };
@@ -1742,14 +1836,39 @@ fn religion_dossier(ui: &mut egui::Ui, civ: &Civilization, world: &AtlasWorld, l
         "Followers:",
         &format!(
             "{} ({followers_share:.1}% of the world)",
-            thousands_u64(civ.population)
+            thousands_u64(religion.population)
         ),
     );
     dossier_row(
         ui,
         "Provinces:",
-        &format!("{} · {} km²", civ.provinces.len(), thousands(civ.area_km2)),
+        &format!(
+            "{} · {} km²",
+            religion.provinces.len(),
+            thousands(religion.area_km2)
+        ),
     );
+    dossier_row(
+        ui,
+        "Here:",
+        &format!("{} — province #{province}", owner.name),
+    );
+    // A province can keep a faith the realm's majority does not. Say so, because
+    // that difference is the whole point of a province-level map.
+    let province_faith = world
+        .civilizations
+        .province_religion
+        .get(province as usize)
+        .copied()
+        .unwrap_or(0);
+    if let Some(census) = world
+        .civilizations
+        .religion_of_realm(world.civilizations.owner_of(province))
+        && census.dominant != province_faith
+        && let Some(dominant) = world.civilizations.religion(census.dominant)
+    {
+        dossier_row(ui, "Realm's faith:", &dominant.faith.display_name());
+    }
     if let Some(site) = faith.sacred_sites.first() {
         dossier_row(
             ui,
@@ -2018,6 +2137,7 @@ impl MapViewer {
             pending_focus: None,
             marker: None,
             selected_civ: None,
+            selected_religion: None,
             selected_family: None,
             style_installed: false,
             // Deterministic on purpose: the tests and the headless plates read
@@ -2181,6 +2301,7 @@ impl MapViewer {
         self.invalidate_plate();
         self.live = None;
         self.selected_civ = None;
+        self.selected_religion = None;
         self.selected_family = None;
         // What the act made, in one line: its figures are the panel's own report
         // of a finished act, and they belong beside the acts, not in a log.
@@ -2533,6 +2654,7 @@ impl MapViewer {
         self.invalidate_plate();
         self.live = None;
         self.selected_civ = None;
+        self.selected_religion = None;
         self.selected_family = None;
         self.marker = None;
         self.scope = default_scope(
@@ -3701,7 +3823,7 @@ impl MapViewer {
                         final_color = [92.0, 150.0, 186.0];
                     } else if owner != 0 && has_land_node {
                         let civ_rgb = if religion_scope {
-                            civilizations.religion_color_of(owner)
+                            civilizations.religion_color_of_province(id)
                         } else {
                             civilizations.color_of(owner)
                         };
@@ -3722,37 +3844,34 @@ impl MapViewer {
 
                         // A landmark dot with a pale halo, so it reads on a
                         // hunter-gatherer khaki as well as on an oxblood state: the
-                        // cradle on the Civilizations map, and the faith's primary
+                        // cradle on the Civilizations map, and that faith's primary
                         // holy place on the Religions map, where the holiest city is
                         // the thing worth finding.
-                        if let Some(civ) = civilizations.civilization(owner) {
-                            let marker = if religion_scope {
-                                civ.faith
-                                    .sacred_sites
-                                    .first()
-                                    .and_then(|site| {
-                                        hierarchy.provinces.get(site.province as usize)
-                                    })
-                                    .map(|node| (node.center_x, node.center_y))
-                            } else {
-                                Some((civ.seat_x, civ.seat_y))
-                            };
-                            if let Some((marker_x, marker_y)) = marker {
-                                let dx = {
-                                    let mut d = (x as f32 - marker_x).abs();
-                                    let width = w as f32;
-                                    if d > width * 0.5 {
-                                        d = width - d;
-                                    }
-                                    d
-                                };
-                                let dy = (y as f32 - marker_y).abs();
-                                if dx.max(dy) <= 1.0 {
-                                    final_color = blend_rgb(final_color, [26.0, 20.0, 16.0], 0.85);
-                                } else if dx.max(dy) <= 2.0 {
-                                    final_color =
-                                        blend_rgb(final_color, [244.0, 240.0, 230.0], 0.30);
+                        let marker = if religion_scope {
+                            civilizations
+                                .religion_of_province(id)
+                                .and_then(|religion| religion.faith.sacred_sites.first())
+                                .and_then(|site| hierarchy.provinces.get(site.province as usize))
+                                .map(|node| (node.center_x, node.center_y))
+                        } else {
+                            civilizations
+                                .civilization(owner)
+                                .map(|civ| (civ.seat_x, civ.seat_y))
+                        };
+                        if let Some((marker_x, marker_y)) = marker {
+                            let dx = {
+                                let mut d = (x as f32 - marker_x).abs();
+                                let width = w as f32;
+                                if d > width * 0.5 {
+                                    d = width - d;
                                 }
+                                d
+                            };
+                            let dy = (y as f32 - marker_y).abs();
+                            if dx.max(dy) <= 1.0 {
+                                final_color = blend_rgb(final_color, [26.0, 20.0, 16.0], 0.85);
+                            } else if dx.max(dy) <= 2.0 {
+                                final_color = blend_rgb(final_color, [244.0, 240.0, 230.0], 0.30);
                             }
                         }
 
@@ -3781,25 +3900,34 @@ impl MapViewer {
                             {
                                 final_color = blend_rgb(final_color, CIV_INK, 0.32);
                             }
-                            // Realm frontiers, and the subdivisions *inside* a realm at
-                            // the tier the selector names — drawn as line-work only. The
-                            // fill stays the realm's own colour, so a country never
-                            // shatters into a patchwork of shades. The Religions map
-                            // draws only the frontiers, because its subject is where one
-                            // faith ends and the next begins, not how a realm is
-                            // administered inside.
-                            final_color = civ_border_shade(
-                                final_color,
-                                province_ids,
-                                hierarchy,
-                                civilizations,
-                                id,
-                                x,
-                                y,
-                                h,
-                                tier,
-                                !religion_scope,
-                            );
+                            // The Religions map draws faith frontiers, not political ones: its
+                            // subject is where one creed ends. The Civilizations map draws
+                            // realm frontiers and, when the tier selector asks, the
+                            // subdivisions inside them.
+                            if religion_scope {
+                                final_color = religion_border_shade(
+                                    final_color,
+                                    province_ids,
+                                    civilizations,
+                                    id,
+                                    x,
+                                    y,
+                                    h,
+                                );
+                            } else {
+                                final_color = civ_border_shade(
+                                    final_color,
+                                    province_ids,
+                                    hierarchy,
+                                    civilizations,
+                                    id,
+                                    x,
+                                    y,
+                                    h,
+                                    tier,
+                                    !religion_scope,
+                                );
+                            }
                         }
                     } else {
                         // Wilderness and wasteland: one parchment, so the ink of the
@@ -4430,6 +4558,7 @@ impl MapViewer {
         // are collected here and applied right after the canvas is allocated.
         let mut focus_request: Option<(f32, f32, f32)> = None;
         let mut clicked_civ: Option<u32> = None;
+        let mut clicked_religion: Option<u16> = None;
         let mut clicked_family: Option<u16> = None;
 
         // ── HYPSOMETRIC LEGEND (Topographic scope only) ───────────────────────
@@ -4752,17 +4881,26 @@ impl MapViewer {
                     ui.label(self.tf(
                         "{} religions on {} inhabited provinces",
                         &[
-                            &dawn.civilizations.len(),
+                            &dawn.religions.len(),
                             &thousands(dawn.civilized_provinces as f32),
                         ],
                     ));
                     ui.label(self.tf(
                         "{} religions · {} followers",
-                        &[
-                            &dawn.civilizations.len(),
-                            &thousands_u64(dawn.total_population),
-                        ],
+                        &[&dawn.religions.len(), &thousands_u64(dawn.total_population)],
                     ));
+                    let multi_realm = dawn
+                        .religions
+                        .iter()
+                        .filter(|religion| religion.realms.len() > 1)
+                        .count();
+                    caption(
+                        ui,
+                        self.tf(
+                            "{} of them are kept in more than one realm",
+                            &[&multi_realm],
+                        ),
+                    );
                     ui.separator();
 
                     // ── THE NINE-FAMILY KEY ───────────────────────────────
@@ -4788,12 +4926,12 @@ impl MapViewer {
 
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         for root in MetaphysicalRoot::ALL {
-                            let mut faiths: Vec<(u32, &Civilization)> = dawn
-                                .civilizations
+                            let mut faiths: Vec<(u16, &Religion)> = dawn
+                                .religions
                                 .iter()
                                 .enumerate()
-                                .map(|(index, civ)| (index as u32 + 1, civ))
-                                .filter(|(_, civ)| civ.faith.root == root)
+                                .map(|(index, religion)| (index as u16 + 1, religion))
+                                .filter(|(_, religion)| religion.faith.root == root)
                                 .collect();
                             if faiths.is_empty() {
                                 continue;
@@ -4812,25 +4950,25 @@ impl MapViewer {
                                 .strong(),
                             );
                             let mut listed = 0usize;
-                            for (id, civ) in faiths.iter() {
+                            for (id, religion) in faiths.iter() {
                                 if listed >= LISTED_PER_TIER {
                                     break;
                                 }
                                 listed += 1;
-                                let selected = self.selected_civ == Some(*id);
-                                let detail = civ.faith.creed();
+                                let selected = self.selected_religion == Some(*id);
+                                let detail = religion.faith.creed();
                                 let census = self.tf(
-                                    "{} · {} provinces · {} people",
+                                    "{} provinces · {} followers · {} realms",
                                     &[
-                                        &civ.name,
-                                        &civ.provinces.len(),
-                                        &thousands_u64(civ.population),
+                                        &religion.provinces.len(),
+                                        &thousands_u64(religion.population),
+                                        &religion.realms.len(),
                                     ],
                                 );
-                                let name = civ.faith.display_name();
+                                let name = religion.faith.display_name();
                                 if society_entry(
                                     ui,
-                                    civ.religion_color,
+                                    religion.color,
                                     name.as_str(),
                                     &detail,
                                     &census,
@@ -4839,7 +4977,7 @@ impl MapViewer {
                                 )
                                 .clicked()
                                 {
-                                    clicked_civ = Some(*id);
+                                    clicked_religion = Some(*id);
                                 }
                             }
                             if faiths.len() > listed {
@@ -4937,21 +5075,29 @@ impl MapViewer {
             }
         }
 
-        // A click on a realm's legend entry flies the map to that realm; on the
-        // Religions map it flies to the faith's holiest place instead, falling
-        // back to the realm's heartland when no site has been named.
+        // A click on a realm's legend entry flies the map to that realm.
         if let Some(id) = clicked_civ {
             self.selected_civ = Some(id);
             if let Some(civ) = world.civilizations.civilization(id) {
                 let zoom = CIV_FOCUS_ZOOM.max(self.zoom);
-                let mut target = (civ.seat_x, civ.seat_y);
-                if self.scope.is_religions()
-                    && let Some(site) = civ.faith.sacred_sites.first()
-                    && let Some(node) = world.hierarchy.provinces.get(site.province as usize)
-                {
-                    target = (node.center_x, node.center_y);
+                focus_request = Some((civ.seat_x, civ.seat_y, zoom));
+            }
+        }
+
+        // A click on a religion's legend entry flies to the faith's holiest
+        // place, falling back to the province it rose in when nothing is named.
+        if let Some(id) = clicked_religion {
+            self.selected_religion = Some(id);
+            if let Some(religion) = world.civilizations.religion(id) {
+                let focus_province = religion
+                    .faith
+                    .sacred_sites
+                    .first()
+                    .map_or(religion.origin_province, |site| site.province);
+                if let Some(node) = world.hierarchy.provinces.get(focus_province as usize) {
+                    let zoom = CIV_FOCUS_ZOOM.max(self.zoom);
+                    focus_request = Some((node.center_x, node.center_y, zoom));
                 }
-                focus_request = Some((target.0, target.1, zoom));
             }
         }
 
@@ -5170,6 +5316,7 @@ impl MapViewer {
                                 ui,
                                 owner,
                                 civ,
+                                &world.civilizations,
                                 &world.languages,
                                 self.language,
                             );
@@ -5296,7 +5443,15 @@ impl MapViewer {
                                 .civilizations
                                 .civilization(owner)
                                 .expect("owner id always indexes a civilization");
-                            religion_dossier(ui, civ, world, self.language);
+                            match world.civilizations.religion_of_province(id) {
+                                Some(religion) => {
+                                    religion_dossier(ui, religion, id, civ, world, self.language)
+                                }
+                                None => {
+                                    card_title(ui, self.t("🌾 Unclaimed Land"));
+                                    ui.strong(self.t("No faith is kept here"));
+                                }
+                            }
                             ui.separator();
                             ui.label(self.tf("Coordinates: ({}, {})", &[&map_x, &map_y]));
                         } else if lake {

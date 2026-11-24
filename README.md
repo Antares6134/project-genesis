@@ -5,7 +5,8 @@ A procedural planet generator and interactive atlas viewer written in Rust. It g
 partitions **both the landmasses and the world ocean** into matching five-tier hierarchies,
 then gives that world a history: civilizations rise where the planet is genuinely best,
 spread until wilderness, mountains or an older neighbour stops them, and carry a cradle, a
-government, a faith and a population of their own.
+government, a culture and a population of their own, while every province keeps a faith
+that may be shared with other countries or divided within one.
 
 Every plate below was rendered from one cached world (seed `3286592765982`); a seed always
 reproduces the same planet.
@@ -22,7 +23,7 @@ reproduces the same planet.
   trade winds, orographic rain shadows, then flow accumulation into dendritic rivers.
 - **Two matching hierarchies** — land and ocean each cut into *Provinces → Areas → Regions →
   Superregions → Continents/Basins*.
-- **A dawn of history** — a cradle, a rise story, an economy, a government, a social hierarchy, a seven-level faith, ancestry
+- **A dawn of history** — a cradle, a rise story, an economy, a government, a social hierarchy, a seven-level faith for every province, ancestry
   and real populations for every realm, dated from the founding of its first city.
 - **One painter for both outputs** — the headless exporter and the interactive viewer share
   their cartography, so the printed maps can never disagree with the window.
@@ -171,8 +172,9 @@ provinces each society holds on top of any scope whose subject is not already a 
 
 ### The seven-level faith
 
-The history act gives every realm a religion that is read as a cascade rather than a single
-cult label. The **metaphysical root** (monotheism, dualism, henotheism,
+Every **province** keeps a faith, and every faith is a world religion rather than a
+possession of one realm. The history act still grows a creed from the country and
+society it belongs to. The **metaphysical root** (monotheism, dualism, henotheism,
 polytheism, animism, pantheism, panentheism, deism, nontheism) sets the shape of
 the creed; the **cardinality** says whether it is singular, dyadic, hegemonic,
 polycentric or abstract; the **object of reverence** says whether it holds gods,
@@ -196,13 +198,27 @@ to flora, fauna and earth; a coast to the sea, wind and trade; a martial frontie
 to war and death while praising honor and valor. Hard constraints keep the
 impossible out — an animist people never grows an ecclesiarchy, a nontheist creed
 never keeps a living oracle, a polycentric pantheon never sends missionaries.
-Daughter realms inherit their ancestor's root and cosmology, shift their
-secondary domains towards their own biome, and occasionally schism; neighbouring
-faiths convert, merge or plant minority mystery cults across a shared frontier.
-The **Civilizations** map mode keeps a religion to its name and creed on hover;
-the **Religions** map mode carries the whole cascade, paints every province by the
-faith its society keeps, gives each metaphysical root a colour family and each
-religion a shade within it, and marks every faith's holiest place on the map.
+
+Faiths begin at **hearths**: a state, a people large enough to be a country, or an
+isolated people grows a creed of its own; the small societies around it adopt a
+nearby tradition through the province walk. A creed covering a continent grows
+**regional daughters** in its larger regions, so one religion can hold several
+regional churches. A town, a port or a lake shore may keep a foreign faith as a
+**diaspora** — a merchant quarter, an exiled congregation — and a rare community
+grows a tradition of its own, which is how a one-province faith appears without
+filling the map with confetti. Sibling realms inherit their ancestor's root and
+cosmology, shift their secondary domains towards their own country, and
+occasionally schism; neighbouring faiths convert, merge or plant minority mystery
+cults across a shared frontier.
+
+There is deliberately **no state religion yet**: the census records what each
+realm's people keep, not what a throne patronises, so a faith can live in one or
+several realms without ever being an official creed. The **Civilizations** map
+mode keeps a religion to its name and creed on hover and says how many faiths the
+realm keeps; the **Religions** map mode carries the whole cascade, paints every
+province by the faith it keeps, gives each metaphysical root a colour family and
+each religion a shade within it, draws faith frontiers rather than political ones,
+and marks every faith's holiest place on the map.
 
 ### Languages & Phonetics
 

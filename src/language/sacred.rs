@@ -506,12 +506,15 @@ fn faith_term_names(lex: &Lexicon, faith: &Faith, local: &mut NameRegistry) -> F
 
 // ─── THE PASS ───────────────────────────────────────────────────────────────
 
-/// Name every faith, its deities and domain words, its emblem, its cults and
+/// Name every religion, its deities and domain words, its emblem, its cults and
 /// its sacred sites in the world.
 ///
-/// `registry` is shared with realm, family and province names, so a faith can
-/// never take a name the gazetteer already gave a place. Names inside one faith
-/// use their own registry: two deities may share a word across unrelated creeds.
+/// A religion is named in the tongue of the realm it rose in, and its holy
+/// places are chosen from every province that keeps it — not from one realm's
+/// borders. `registry` is shared with realm, family and province names, so a
+/// faith can never take a name the gazetteer already gave a place. Names inside
+/// one faith use their own registry: two deities may share a word across
+/// unrelated creeds.
 pub fn name_religions(
     civilizations: &mut CivilizationWorld,
     languages: &mut LanguagesWorld,
@@ -519,8 +522,28 @@ pub fn name_religions(
     seed: u64,
     registry: &mut NameRegistry,
 ) {
-    for (index, civ) in civilizations.civilizations.iter_mut().enumerate() {
-        let primary = languages.language_of_realm.get(index).copied().unwrap_or(0);
+    for (index, religion) in civilizations.religions.iter_mut().enumerate() {
+        let origin = religion.origin_realm.saturating_sub(1) as usize;
+        let mut primary = languages
+            .language_of_realm
+            .get(origin)
+            .copied()
+            .unwrap_or(0);
+        // A religion whose origin realm has no surviving tongue is named by the
+        // first realm that keeps it instead: no faith is left nameless.
+        if primary == 0 {
+            primary = religion
+                .realms
+                .iter()
+                .filter_map(|realm| {
+                    languages
+                        .language_of_realm
+                        .get(*realm as usize - 1)
+                        .copied()
+                })
+                .find(|id| *id != 0)
+                .unwrap_or(0);
+        }
         let Some(primary_language) = languages.language(primary) else {
             continue;
         };
@@ -528,8 +551,8 @@ pub fn name_religions(
             continue;
         }
 
-        let liturgy = liturgical_language(&civ.faith, primary, languages);
-        civ.faith.liturgical_language = liturgy;
+        let liturgy = liturgical_language(&religion.faith, primary, languages);
+        religion.faith.liturgical_language = liturgy;
         let naming_id = liturgy.unwrap_or(primary);
         let Some(language) = languages.language(naming_id).cloned() else {
             continue;
@@ -539,24 +562,24 @@ pub fn name_religions(
             seed ^ FAITH_NAME_SALT ^ (index as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15),
         );
 
-        let (candidate, base) = faith_name(lexicon, &civ.faith, &mut rng);
-        civ.faith.name = registry.unique_rooted(&base, &candidate, lexicon);
+        let (candidate, base) = faith_name(lexicon, &religion.faith, &mut rng);
+        religion.faith.name = registry.unique_rooted(&base, &candidate, lexicon);
         // The dossier shows the proper name alone; the descriptive working name
         // is kept out of the reader's way.
-        civ.faith.gloss = civ.faith.name.clone();
+        religion.faith.gloss = religion.faith.name.clone();
         let mut local = NameRegistry::new();
-        local.unique_rooted(&base, &civ.faith.name, lexicon);
+        local.unique_rooted(&base, &religion.faith.name, lexicon);
 
-        let mut names = faith_term_names(lexicon, &civ.faith, &mut local);
+        let mut names = faith_term_names(lexicon, &religion.faith, &mut local);
         names.liturgy = if liturgy.is_some() {
             language.name.clone()
         } else {
             String::new()
         };
-        civ.faith.names = names;
+        religion.faith.names = names;
 
-        let divinity = civ.faith.divinity();
-        for cult in &mut civ.faith.cults {
+        let divinity = religion.faith.divinity();
+        for cult in &mut religion.faith.cults {
             let mut parts = domain_recipe(cult.domain).to_vec();
             parts.push(Concept::Mystery);
             let base = say_phrase(lexicon, domain_recipe(cult.domain));
@@ -568,24 +591,41 @@ pub fn name_religions(
             cult.power_name = local.unique_rooted(&power_base, &power_candidate, lexicon);
         }
 
-        let plan = sacred_site_plan(&civ.faith, civ.tier);
+        // A faith's holy places are chosen from everywhere it is kept. The site
+        // count follows the most organised realm that keeps it, so a folk creed
+        // that became a state church grows more sees.
+        let origin_tier = civilizations
+            .civilizations
+            .get(religion.origin_realm as usize - 1)
+            .map_or(SocietyTier::States, |civ| civ.tier);
+        let site_tier = religion
+            .realms
+            .iter()
+            .filter_map(|realm| {
+                civilizations
+                    .civilizations
+                    .get(*realm as usize - 1)
+                    .map(|civ| civ.tier)
+            })
+            .fold(origin_tier, std::cmp::max);
+        let plan = sacred_site_plan(&religion.faith, site_tier);
         let sites = sacred_site_provinces(
-            &civ.faith,
-            &civ.provinces,
+            &religion.faith,
+            &religion.provinces,
             profiles,
             plan.len(),
-            civ.seat_province,
+            religion.origin_province,
         );
         let mut sacred_sites = Vec::with_capacity(sites.len());
         for (site_index, (province, domain)) in sites.iter().zip(plan.iter()).enumerate() {
             // The first site is the faith's own holy place; the rest are named
             // for the power they honour.
             let recipe = if site_index == 0 {
-                locus_recipe(civ.faith.locus).to_vec()
+                locus_recipe(religion.faith.locus).to_vec()
             } else if let Some(domain) = domain {
                 domain_recipe(*domain).to_vec()
             } else {
-                locus_recipe(civ.faith.locus).to_vec()
+                locus_recipe(religion.faith.locus).to_vec()
             };
             let base = say_phrase(lexicon, &recipe);
             let mut parts = recipe;
@@ -611,7 +651,7 @@ pub fn name_religions(
                 primary: site_index == 0,
             });
         }
-        civ.faith.sacred_sites = sacred_sites;
+        religion.faith.sacred_sites = sacred_sites;
     }
 }
 

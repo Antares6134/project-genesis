@@ -5,7 +5,7 @@
 //! a state, a chiefdom, a farming village, a herd people or a band of foragers —
 //! because a world at any date is a mosaic of all five, and the map should say so.
 //!
-//! The stage runs in nine passes, each of which is a single loop over a different
+//! The stage runs in ten passes, each of which is a single loop over a different
 //! domain — which is what keeps it order-stable and reproducible for a seed:
 //!
 //! 1. **Census** — every province is measured once: its real area in km² (latitude
@@ -41,16 +41,21 @@
 //! 9. **Ancestral stock** — societies close enough to share a descent get one
 //!    tongue family, and an older realm's temple form and rites can pass to a
 //!    younger one.
+//! 10. **Province religion** — the creeds grown above are hearth seeds. Small
+//!    societies adopt a nearby tradition, a continent-sized faith grows regional
+//!    daughters, towns and ports keep diasporas, and a frontier walk decides which
+//!    province keeps which creed. A faith belongs to the world: it can live in
+//!    several realms, and one realm can keep several faiths.
 
 use crate::civilization::config::CivilizationConfig;
 use crate::civilization::epoch::{DevelopmentPace, Timeline};
 use crate::civilization::faith::{
-    FAITH_SALT, FaithContext, MetaphysicalRoot, apply_contact, generate_faith, inherit_faith,
-    weighted_pick,
+    FAITH_SALT, FaithContext, apply_contact, generate_faith, inherit_faith, weighted_pick,
 };
+use crate::civilization::religion::{ProvinceLandscape, RELIGION_SALT, distribute_religions};
 use crate::civilization::{
     Age, Civilization, CivilizationWorld, CradleKind, Culture, Environment, Faith, Government,
-    Hierarchy, Outlook, ScaleClass, SocietyTier, Subsistence,
+    Hierarchy, Outlook, ReligionWorld, ScaleClass, SocietyTier, Subsistence,
 };
 use crate::climate::PlanetaryMode;
 use crate::core::fmt::{thousands, thousands_u64};
@@ -1027,11 +1032,30 @@ pub fn generate_civilizations(
     // for the rest. Kin inherit from the head of their family, which is what makes
     // siblings on a world resemble each other while strangers do not.
     let mut cultures: Vec<Culture> = Vec::with_capacity(skeletons.len());
-    let mut faiths: Vec<Faith> = Vec::with_capacity(skeletons.len());
+    // A world does not grow one religion per band. A *hearth* — a state, a people
+    // large enough to be a country, or an isolated people — grows a creed of its
+    // own; the small societies around it adopt a neighbour's through the province
+    // walk. That is what lets one faith exist in several countries and several
+    // faiths live in one.
+    let mut religions: Vec<Faith> = Vec::with_capacity(skeletons.len());
+    let mut religion_origins: Vec<(u16, u32)> = Vec::with_capacity(skeletons.len());
+    let mut founding: Vec<u16> = Vec::with_capacity(skeletons.len());
     // Religion has its own stream, so this rewrite cannot move a cradle or a
     // population: the dawn's other draws stay exactly where they were.
     let mut faith_rng = ChaCha8Rng::seed_from_u64(seed ^ FAITH_SALT);
     let mut faith_contexts: Vec<FaithContext> = Vec::with_capacity(skeletons.len());
+
+    let mut seeds = vec![false; skeletons.len()];
+    for rank in 0..skeletons.len() {
+        let sk = &skeletons[rank];
+        let large = sk.provinces.len() >= config.religion.hearth_min_provinces;
+        let isolated = adjacency
+            .get(&(rank as u16 + 1))
+            .map_or(true, |neighbours| neighbours.is_empty());
+        let endemic = faith_rng.random::<f32>() < config.religion.endemic_faith_chance;
+        seeds[rank] = sk.tier.is_state() || large || isolated || endemic;
+    }
+
     for rank in 0..skeletons.len() {
         let ancestor = family_ancestor[rank];
         let inherited_culture = if ancestor != rank {
@@ -1039,8 +1063,15 @@ pub fn generate_civilizations(
         } else {
             None
         };
+        // Kin inherit a parent creed only when the ancestor is itself a hearth
+        // that has already been processed. A small society inherits nothing:
+        // its faith will come from its provinces.
         let inherited_faith = if ancestor != rank {
-            faiths.get(ancestor).cloned()
+            founding
+                .get(ancestor)
+                .copied()
+                .filter(|id| *id != 0)
+                .and_then(|id| religions.get(id as usize - 1).cloned())
         } else {
             None
         };
@@ -1070,20 +1101,38 @@ pub fn generate_civilizations(
             great_river: stats.flow_max >= config.great_river_flow,
             latitude_deg: sphere::row_latitude_deg(sk.cradle.cy, h),
         };
-        let faith = match inherited_faith {
-            Some(parent) if faith_rng.random::<f32>() < 0.65 => {
-                inherit_faith(&mut faith_rng, &parent, &context)
-            }
-            _ => generate_faith(&mut faith_rng, &context),
-        };
         cultures.push(culture);
-        faiths.push(faith);
+        if seeds[rank] {
+            let faith = match inherited_faith {
+                Some(parent) if faith_rng.random::<f32>() < 0.65 => {
+                    inherit_faith(&mut faith_rng, &parent, &context)
+                }
+                _ => generate_faith(&mut faith_rng, &context),
+            };
+            religions.push(faith);
+            let id = religions.len() as u16;
+            founding.push(id);
+            religion_origins.push((rank as u16 + 1, sk.cradle.prov));
+        } else {
+            // No hearth here: the province pass gives its ground a nearby faith,
+            // and a realm lying between two hearths may take both.
+            founding.push(0);
+        }
         faith_contexts.push(context);
     }
 
     // Faiths that share a frontier argue, trade and conquer. The pass reads a
     // snapshot, so a conversion can cross one frontier this atlas, not three.
-    apply_contact(&mut faith_rng, &mut faiths, &faith_contexts, &adjacency);
+    // A converted realm joins the source creed's identity rather than cloning it;
+    // the displaced faith is recorded so the province pass can keep it alive in
+    // the countryside.
+    let displaced = apply_contact(
+        &mut faith_rng,
+        &mut religions,
+        &mut founding,
+        &faith_contexts,
+        &adjacency,
+    );
 
     // ─── 7. POPULATION ───────────────────────────────────────────────────────
     // A province's population is its own carrying capacity from the census, times
@@ -1115,8 +1164,49 @@ pub fn generate_civilizations(
         }
         populations.push(total);
     }
+    // ─── 8. PROVINCE RELIGION ─────────────────────────────────────────────────
+    // Every creed now has a world identity; this pass decides which provinces
+    // actually keep it. A religion is no longer a possession of one realm: the
+    // frontier walk and the contact conversion above let one creed live in several
+    // countries and several creeds live in one country. There is deliberately no
+    // state religion yet — the census records what people keep, not what a throne
+    // patronises.
+    progress.sub_step("Distributing the faiths", 0);
+    let landscapes: Vec<ProvinceLandscape> = stats
+        .iter()
+        .map(|province| ProvinceLandscape {
+            present: province.present,
+            area_km2: province.area_km2,
+            mean_elevation_m: province.elev_mean_m(),
+            mean_temp_c: province.temp_mean(),
+            mean_precip: province.precip_mean(),
+            max_flow: province.flow_max,
+            coastal: province.sea_px > 0,
+            lakeshore: province.lake_px > 0,
+        })
+        .collect();
+    let seats: Vec<u32> = skeletons.iter().map(|sk| sk.cradle.prov).collect();
+    let realm_provinces: Vec<Vec<u32>> = skeletons.iter().map(|sk| sk.provinces.clone()).collect();
+    let mut religion_rng = ChaCha8Rng::seed_from_u64(seed ^ RELIGION_SALT);
+    let religion_world = distribute_religions(
+        religions,
+        &mut religion_origins,
+        &founding,
+        &displaced,
+        &seats,
+        &realm_provinces,
+        &owner,
+        &province_population,
+        &landscapes,
+        hierarchy,
+        &faith_contexts,
+        w,
+        &config.religion,
+        &mut religion_rng,
+    );
+    report_religion_census(&religion_world, &owner);
 
-    // ─── 8. THE DEPTH OF PREHISTORY ───────────────────────────────────────────
+    // ─── 9. THE DEPTH OF PREHISTORY ───────────────────────────────────────────
     // The calendar begins at the first city — Year 0 — and everything before it is
     // prehistory. Its depth is drawn at the very end, so that every earlier draw in
     // the stage is untouched and a world generated before this stage existed still
@@ -1142,14 +1232,12 @@ pub fn generate_civilizations(
         age: Age::from_development(frontier as f32),
     };
 
-    // ─── 9. ASSEMBLE ─────────────────────────────────────────────────────────
+    // ─── 10. ASSEMBLE ────────────────────────────────────────────────────────
     // The internal frame *is* the world's calendar: the first city stands at Year 0
     // and every date the atlas shows is a plain count from it. No conversion is
     // applied to a realm's founding or to the map date.
     let tiers_of: Vec<SocietyTier> = skeletons.iter().map(|skeleton| skeleton.tier).collect();
-    let roots_of: Vec<MetaphysicalRoot> = faiths.iter().map(|faith| faith.root).collect();
     let colors = assign_colors(&tiers_of, &adjacency);
-    let religion_colors = assign_religion_colors(&roots_of, &adjacency);
     let mut civilizations: Vec<Civilization> = Vec::with_capacity(skeletons.len());
     for rank in 0..skeletons.len() {
         let sk = &skeletons[rank];
@@ -1157,13 +1245,11 @@ pub fn generate_civilizations(
         civilizations.push(Civilization {
             name: names[rank].clone(),
             color: colors[rank],
-            religion_color: religion_colors[rank],
             tier: sk.tier,
             environment: sk.environment,
             cradle_kind: sk.cradle_kind,
             scale: sk.scale,
             culture: cultures[rank].clone(),
-            faith: faiths[rank].clone(),
             seat_province: sk.cradle.prov,
             seat_x: sk.cradle.cx,
             seat_y: sk.cradle.cy,
@@ -1212,7 +1298,82 @@ pub fn generate_civilizations(
         total_population,
         civilized_provinces,
         civilized_area_km2,
+        religions: religion_world.religions,
+        province_religion: religion_world.province_religion,
+        religion_of_realm: religion_world.religion_of_realm,
     }
+}
+/// Print the religion layer's shape: what the province assignment actually
+/// produced, so a run can be judged before the map is even opened.
+fn report_religion_census(world: &ReligionWorld, owner: &[u16]) {
+    if world.religions.is_empty() {
+        return;
+    }
+    let multi_realm = world
+        .religions
+        .iter()
+        .filter(|religion| religion.realms.len() > 1)
+        .count();
+    let mut outside_dominant = 0usize;
+    let mut foreign_origin = 0usize;
+    let mut inhabited = 0usize;
+    for (index, &realm) in owner.iter().enumerate() {
+        if realm == 0 {
+            continue;
+        }
+        let faith = world.province_religion.get(index).copied().unwrap_or(0);
+        if faith == 0 {
+            continue;
+        }
+        inhabited += 1;
+        if let Some(census) = world.religion_of_realm.get(realm as usize - 1)
+            && faith != census.dominant
+        {
+            outside_dominant += 1;
+        }
+        if world
+            .religion(faith)
+            .is_some_and(|religion| religion.origin_realm != realm)
+        {
+            foreign_origin += 1;
+        }
+    }
+    let (mut one, mut two, mut many) = (0usize, 0usize, 0usize);
+    for census in &world.religion_of_realm {
+        match census.faiths.len() {
+            0 => {}
+            1 => one += 1,
+            2 => two += 1,
+            _ => many += 1,
+        }
+    }
+    println!(
+        "✓ Faiths: {} religions · {} kept in more than one realm | realms keeping 1/2/3+ faiths: {one}/{two}/{many}",
+        world.religions.len(),
+        multi_realm,
+    );
+    if inhabited > 0 {
+        println!(
+            "  Provinces outside their realm's dominant faith: {} ({:.1}%) · faith rooted in another realm: {} ({:.1}%)",
+            outside_dominant,
+            100.0 * outside_dominant as f32 / inhabited as f32,
+            foreign_origin,
+            100.0 * foreign_origin as f32 / inhabited as f32,
+        );
+    }
+    let (mut single, mut small, mut large, mut largest) = (0usize, 0usize, 0usize, 0usize);
+    for religion in &world.religions {
+        let provinces = religion.provinces.len();
+        largest = largest.max(provinces);
+        match provinces {
+            1 => single += 1,
+            2..=5 => small += 1,
+            _ => large += 1,
+        }
+    }
+    println!(
+        "  Religions by size: {single} one-province · {small} 2–5 · {large} 6+ · largest {largest} provinces"
+    );
 }
 // ─── INTERNAL RECORDS ────────────────────────────────────────────────────────
 
@@ -1392,46 +1553,6 @@ fn assign_colors(tiers: &[SocietyTier], adjacency: &BTreeMap<u16, Vec<u16>>) -> 
     colors
 }
 
-/// Give every religion its colour: the metaphysical root carries the hue, the
-/// religion the shade.
-///
-/// The same greedy walk as [`assign_colors`], run inside each root's family: a
-/// religion takes the first shade none of its *same-root* neighbours is already
-/// wearing. Religions of different roots never compete, because their hue
-/// families are already distinct. A frontier between two religions of one kind
-/// therefore never divides two patches of the same shade, while a frontier
-/// between two kinds is drawn between two families at once.
-fn assign_religion_colors(
-    roots: &[MetaphysicalRoot],
-    adjacency: &BTreeMap<u16, Vec<u16>>,
-) -> Vec<[u8; 3]> {
-    let mut chosen = vec![usize::MAX; roots.len()];
-    let mut colors = vec![[0u8; 3]; roots.len()];
-    for (rank, &root) in roots.iter().enumerate() {
-        let mut taken = [false; MetaphysicalRoot::SHADES];
-        if let Some(neighbours) = adjacency.get(&(rank as u16 + 1)) {
-            for &neighbour in neighbours {
-                if neighbour == 0 {
-                    continue;
-                }
-                let other = neighbour as usize - 1;
-                if other == rank || other >= roots.len() || roots[other] != root {
-                    continue;
-                }
-                let shade = chosen[other];
-                if shade < MetaphysicalRoot::SHADES {
-                    taken[shade] = true;
-                }
-            }
-        }
-        let pick = (0..MetaphysicalRoot::SHADES)
-            .find(|&shade| !taken[shade])
-            .unwrap_or(0);
-        chosen[rank] = pick;
-        colors[rank] = root.shade(pick);
-    }
-    colors
-}
 ///
 /// Year zero is the first city and `map_year` is the atlas date, stepped in fixed
 /// [`DEVELOPMENT_STEP_YEARS`] increments. At each step a state grows from its own
@@ -3241,73 +3362,6 @@ mod tests {
         seen.sort_unstable();
         seen.dedup();
         assert_eq!(seen.len(), SocietyTier::SHADES);
-    }
-
-    /// Two neighbouring religions of one metaphysical root never wear the same
-    /// shade: the frontier would dissolve into a single fill.
-    #[test]
-    fn neighbouring_religions_of_one_root_never_share_a_shade() {
-        for root in MetaphysicalRoot::ALL {
-            let roots = vec![root; MetaphysicalRoot::SHADES];
-            let adjacency = ring(MetaphysicalRoot::SHADES as u16);
-            let colors = assign_religion_colors(&roots, &adjacency);
-            for rank in 0..MetaphysicalRoot::SHADES as u16 {
-                for &neighbour in &adjacency[&(rank + 1)] {
-                    assert_ne!(
-                        colors[rank as usize],
-                        colors[neighbour as usize - 1],
-                        "{} repeated a shade across a frontier",
-                        root.label()
-                    );
-                }
-            }
-            // The same world always paints the same map.
-            assert_eq!(colors, assign_religion_colors(&roots, &adjacency));
-        }
-    }
-
-    /// A root's whole family is available even when every religion of that root
-    /// touches every other: the greedy walk never runs out of shades.
-    #[test]
-    fn a_root_shade_is_always_free() {
-        let n = MetaphysicalRoot::SHADES as u16;
-        let mut adjacency: BTreeMap<u16, Vec<u16>> = BTreeMap::new();
-        for rank in 0..n {
-            for other in 0..n {
-                if other != rank {
-                    adjacency.entry(rank + 1).or_default().push(other + 1);
-                }
-            }
-        }
-        let roots = vec![MetaphysicalRoot::Polytheism; MetaphysicalRoot::SHADES];
-        let colors = assign_religion_colors(&roots, &adjacency);
-        let mut seen = colors.clone();
-        seen.sort_unstable();
-        seen.dedup();
-        assert_eq!(seen.len(), MetaphysicalRoot::SHADES);
-    }
-
-    /// Neighbours of different roots are not forced out of their own families:
-    /// a religion of one root keeps its natural shade even beside another kind.
-    #[test]
-    fn roots_keep_their_own_shades_beside_other_roots() {
-        let roots = [
-            MetaphysicalRoot::Monotheism,
-            MetaphysicalRoot::Dualism,
-            MetaphysicalRoot::Monotheism,
-        ];
-        let adjacency = BTreeMap::from([
-            (1u16, vec![2u16, 3u16]),
-            (2u16, vec![1u16, 3u16]),
-            (3u16, vec![1u16, 2u16]),
-        ]);
-        let colors = assign_religion_colors(&roots, &adjacency);
-        assert_ne!(
-            colors[0], colors[2],
-            "two neighbouring monotheisms shared a shade"
-        );
-        assert_eq!(colors[0], MetaphysicalRoot::Monotheism.shade(0));
-        assert_eq!(colors[1], MetaphysicalRoot::Dualism.shade(0));
     }
 
     /// Every tier's development sits in the band of the government axis its own

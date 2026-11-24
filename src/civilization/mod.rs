@@ -23,11 +23,12 @@
 //! be. There is no fixed span between the first people and the first city.
 //!
 //! The atlas then portrays the world at a single date (see
-//! [`CivilizationWorld::map_year`]), at which the world stands in an age and every
-//! realm has a government, a culture, a faith and a population. The faith is a
-//! seven-level cascade — metaphysical root, domain architecture, cosmology,
-//! ethos, praxis, polity and manifestation — grown from the realm's own country
-//! and society; see [`faith`] for the whole model.
+//! [`CivilizationWorld::map_year`]), at which the world stands in an age, every
+//! realm has a government, a culture and a population, and every province keeps a
+//! faith of its own. The faith is a seven-level cascade — metaphysical root,
+//! domain architecture, cosmology, ethos, praxis, polity and manifestation —
+//! grown from the country and society it belongs to and spread across the
+//! province graph; see [`faith`] and [`religion`] for the whole model.
 //!
 //! ## Determinism
 //!
@@ -42,6 +43,7 @@ pub mod config;
 pub mod epoch;
 pub mod faith;
 pub mod generator;
+pub mod religion;
 pub mod report;
 
 pub use age::Age;
@@ -50,6 +52,9 @@ pub use config::CivilizationConfig;
 pub use epoch::Timeline;
 pub use faith::{Faith, MetaphysicalRoot};
 pub use generator::generate_civilizations;
+#[allow(unused_imports)]
+pub use religion::RealmFaith;
+pub use religion::{RealmReligion, Religion, ReligionWorld};
 pub use report::{report_civilizations, report_civilizations_all, report_languages};
 
 // ─── WHY A CIVILIZATION ROSE WHERE IT DID ────────────────────────────────────
@@ -712,10 +717,6 @@ pub struct Civilization {
     pub name: String,
     /// The realm's colour on the Civilizations map mode.
     pub color: [u8; 3],
-    /// The realm's colour on the Religions map mode: a shade of the hue family
-    /// its faith's [`MetaphysicalRoot`] carries. Assigned once, after the faiths
-    /// settle, so the painter, the legend and a hover card always agree.
-    pub religion_color: [u8; 3],
 
     /// How organised this people is — the five-way scheme the atlas paints.
     pub tier: SocietyTier,
@@ -728,7 +729,6 @@ pub struct Civilization {
     #[allow(dead_code)]
     pub scale: ScaleClass,
     pub culture: Culture,
-    pub faith: Faith,
 
     /// The province the realm was born in.
     pub seat_province: u32,
@@ -817,6 +817,16 @@ pub struct CivilizationWorld {
     pub civilized_provinces: usize,
     /// Total area held by all civilizations, in km².
     pub civilized_area_km2: f32,
+
+    /// Every religion of the world, 1-based by position. A faith belongs to the
+    /// world, not to one realm: two realms may keep the same creed here, and one
+    /// realm may keep several.
+    pub religions: Vec<Religion>,
+    /// Province id → the religion it keeps (0 = water, wasteland or unsettled).
+    pub province_religion: Vec<u16>,
+    /// Civilization id - 1 → what its people actually keep. There is no state
+    /// religion in this table yet: the map reports faith, not patronage.
+    pub religion_of_realm: Vec<RealmReligion>,
 }
 
 impl CivilizationWorld {
@@ -834,6 +844,9 @@ impl CivilizationWorld {
             total_population: 0,
             civilized_provinces: 0,
             civilized_area_km2: 0.0,
+            religions: Vec::new(),
+            province_religion: Vec::new(),
+            religion_of_realm: Vec::new(),
         }
     }
 
@@ -908,10 +921,14 @@ impl CivilizationWorld {
 
     /// How many religions stand under each metaphysical root, in
     /// [`MetaphysicalRoot::ALL`] order.
+    ///
+    /// This counts *religions that are still kept somewhere*, not realms: a
+    /// religion can span several countries, and a country can keep several
+    /// religions.
     pub fn counts_by_root(&self) -> [usize; MetaphysicalRoot::ALL.len()] {
         let mut counts = [0usize; MetaphysicalRoot::ALL.len()];
-        for civ in &self.civilizations {
-            counts[civ.faith.root.index()] += 1;
+        for religion in &self.religions {
+            counts[religion.faith.root.index()] += 1;
         }
         counts
     }
@@ -920,10 +937,65 @@ impl CivilizationWorld {
     /// order.
     pub fn area_by_root(&self) -> [f32; MetaphysicalRoot::ALL.len()] {
         let mut areas = [0.0f32; MetaphysicalRoot::ALL.len()];
-        for civ in &self.civilizations {
-            areas[civ.faith.root.index()] += civ.area_km2;
+        for religion in &self.religions {
+            areas[religion.faith.root.index()] += religion.area_km2;
         }
         areas
+    }
+
+    /// A religion by its 1-based id.
+    #[inline(always)]
+    pub fn religion(&self, id: u16) -> Option<&Religion> {
+        if id == 0 {
+            return None;
+        }
+        self.religions.get(id as usize - 1)
+    }
+
+    /// The religion one province keeps, if any.
+    #[inline(always)]
+    pub fn religion_of_province(&self, province_id: u32) -> Option<&Religion> {
+        let id = self
+            .province_religion
+            .get(province_id as usize)
+            .copied()
+            .unwrap_or(0);
+        self.religion(id)
+    }
+
+    /// The colour one province wears on the Religions map. Wilderness falls back
+    /// to neutral grey, exactly as [`color_of`](Self::color_of) does.
+    #[inline(always)]
+    pub fn religion_color_of_province(&self, province_id: u32) -> [u8; 3] {
+        self.religion_of_province(province_id)
+            .map_or([128, 128, 128], |religion| religion.color)
+    }
+
+    /// A realm's religious census, by 1-based civilization id.
+    #[inline(always)]
+    pub fn religion_of_realm(&self, civ_id: u32) -> Option<&RealmReligion> {
+        if civ_id == 0 {
+            return None;
+        }
+        self.religion_of_realm.get(civ_id as usize - 1)
+    }
+
+    /// The faith most of a realm's people keep.
+    pub fn dominant_religion_of(&self, civ_id: u32) -> Option<&Religion> {
+        let census = self.religion_of_realm(civ_id)?;
+        self.religion(census.dominant)
+    }
+
+    /// Every religion sorted by how many people keep it, largest first.
+    pub fn religions_by_size(&self) -> Vec<&Religion> {
+        let mut religions: Vec<&Religion> = self.religions.iter().collect();
+        religions.sort_by(|a, b| {
+            b.population
+                .cmp(&a.population)
+                .then(b.provinces.len().cmp(&a.provinces.len()))
+                .then(a.origin_realm.cmp(&b.origin_realm))
+        });
+        religions
     }
 
     /// A civilization by id (1-based), if it exists.
@@ -945,16 +1017,6 @@ impl CivilizationWorld {
     pub fn color_of(&self, id: u32) -> [u8; 3] {
         match self.civilization(id) {
             Some(civ) => civ.color,
-            None => [128, 128, 128],
-        }
-    }
-
-    /// The religion colour of a civilization id; wilderness falls back to
-    /// neutral grey, exactly as [`color_of`](Self::color_of) does.
-    #[inline(always)]
-    pub fn religion_color_of(&self, id: u32) -> [u8; 3] {
-        match self.civilization(id) {
-            Some(civ) => civ.religion_color,
             None => [128, 128, 128],
         }
     }

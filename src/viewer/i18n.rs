@@ -1217,6 +1217,20 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "{} religiões · {} fiéis",
             "{} din · {} inançlı",
         ],
+        "{} of them are kept in more than one realm" => [
+            "{} de ellas se practican en más de un reino",
+            "{} d'entre elles sont pratiquées dans plus d'un royaume",
+            "{} davon werden in mehr als einem Reich gepflegt",
+            "{} delas são praticadas em mais de um reino",
+            "{} tanesi birden fazla diyarda yaşatılıyor",
+        ],
+        "{} provinces · {} followers · {} realms" => [
+            "{} provincias · {} fieles · {} reinos",
+            "{} provinces · {} fidèles · {} royaumes",
+            "{} Provinzen · {} Gläubige · {} Reiche",
+            "{} províncias · {} fiéis · {} reinos",
+            "{} il · {} inançlı · {} diyar",
+        ],
         "{} — {} religions · {}% of the land" => [
             "{} — {} religiones · {}% de la tierra",
             "{} — {} religions · {} % des terres",
