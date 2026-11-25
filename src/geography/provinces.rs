@@ -486,8 +486,32 @@ pub fn generate_provinces(
 
     // ─── 2. SEED CANDIDATE SELECTION ─────────────────────────────────────────
     progress.sub_step("Seeding provinces", 0);
+
+    // A province can never cross water or wasteland, so every province has to
+    // start on the component it will cover. The budget is therefore spent
+    // *per settleable component* rather than in one worldwide race: the latter
+    // let the best few thousand pixels win every centre, leaving whole islands
+    // with no province at all — land the atlas, which paints an unclaimed pixel
+    // as wasteland, then read as impassable wilderness.
+    let (component, component_area, component_best) = label_settleable_components(
+        heightmap,
+        is_lake,
+        &is_wasteland,
+        &hab_grid,
+        sea_level,
+    );
+    let land_px: usize = component_area.iter().sum();
+    let num_components = component_area.len();
+    let mean_area = land_px / config.num_provinces.max(1);
+    let min_island_area = ((mean_area as f32 * ISLAND_PROVINCE_FLOOR_SHARE).ceil() as usize)
+        .max(canvas_scale.pixels(MIN_ISLAND_PROVINCE_PX));
+    let quotas = plan_seed_quotas(&component_area, config.num_provinces, min_island_area);
+
     let stride = 4usize;
-    let mut seed_candidates: Vec<(f32, isize, isize)> = Vec::new();
+    // (score, x, y, component) — the component is what makes the budget
+    // enforceable per island instead of globally.
+    let mut seed_candidates: Vec<(f32, isize, isize, u32)> = Vec::new();
+    let mut has_candidate = vec![false; num_components];
 
     for y in (0..h).step_by(stride) {
         if y % (stride * PREVIEW_ROWS) == 0 {
@@ -497,55 +521,93 @@ pub fn generate_provinces(
             if *is_wasteland.get(x as isize, y as isize) {
                 continue; // Wastelands can never host province settlements
             }
+            let comp = *component.get(x as isize, y as isize) as usize;
+            if comp == 0 {
+                continue;
+            }
             let hab = *hab_grid.get(x as isize, y as isize);
             if hab > 0.015 {
+                has_candidate[comp] = true;
                 let r_score = hab * rng.random_range(0.5..1.0_f32);
-                seed_candidates.push((r_score, x as isize, y as isize));
+                seed_candidates.push((r_score, x as isize, y as isize, comp as u32));
             }
         }
     }
-
+    // A quota floor is a promise, so a component that never clears the candidate
+    // floor still offers its best ground: a boreal or steppe island is a place
+    // even when the habitability model finds it marginal.
+    for comp in 1..num_components {
+        if quotas[comp] > 0 && !has_candidate[comp] && component_area[comp] > 0 {
+            let (hab, cx, cy) = component_best[comp];
+            seed_candidates.push((
+                hab.max(0.0) * rng.random_range(0.5..1.0_f32),
+                cx,
+                cy,
+                comp as u32,
+            ));
+        }
+    }
     seed_candidates.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
 
-    let base_min_dist: f32 = {
-        let land_px = hab_grid.raw_slice().iter().filter(|&&v| v > 0.0).count() as f32;
-        province_span(land_px, config.num_provinces, min_span)
-    };
-
+    let base_min_dist = province_span(land_px as f32, config.num_provinces, min_span);
     let mut seeds: Vec<(isize, isize)> = Vec::with_capacity(config.num_provinces);
+    // The settleable component each centre belongs to, parallel to `seeds`. A
+    // province can only ever grow on its centre's component, so this is the
+    // province's own identity for every pass that has to keep it whole.
+    let mut seed_component: Vec<u32> = Vec::with_capacity(config.num_provinces);
+    let mut placed = vec![0usize; num_components];
 
-    for &(score, cx, cy) in &seed_candidates {
+    for &(score, cx, cy, comp) in &seed_candidates {
         if seeds.len() >= config.num_provinces {
             break;
         }
-
-        let local_hab = score;
-        let min_dist = (base_min_dist * (0.6 / (local_hab + 0.05).sqrt())).max(8.0);
+        let comp = comp as usize;
+        if placed[comp] >= quotas[comp] {
+            continue;
+        }
+        let min_dist = (base_min_dist * (0.6 / (score + 0.05).sqrt())).max(8.0);
         let min_dist_sq = (min_dist * min_dist) as isize;
-
-        let mut too_close = false;
-        for &(ax, ay) in &seeds {
-            let mut dx = (cx - ax).abs();
-            if dx > (w as isize) / 2 {
-                dx = w as isize - dx;
-            }
-            let dy = cy - ay;
-            if dx * dx + dy * dy < min_dist_sq {
-                too_close = true;
+        if seed_fits(&seeds, cx, cy, min_dist_sq, w) {
+            seeds.push((cx, cy));
+            seed_component.push(comp as u32);
+            placed[comp] += 1;
+        }
+    }
+    // Spacing is a hard rule, so a quota is a cap rather than a target: any
+    // budget the components could not spend is offered back to the world. This
+    // second walk is only reached when the first pass could not fill the budget
+    // — on an ordinary world it never runs.
+    if seeds.len() < config.num_provinces {
+        for &(score, cx, cy, comp) in &seed_candidates {
+            if seeds.len() >= config.num_provinces {
                 break;
             }
-        }
-
-        if !too_close {
-            seeds.push((cx, cy));
+            let min_dist = (base_min_dist * (0.6 / (score + 0.05).sqrt())).max(8.0);
+            let min_dist_sq = (min_dist * min_dist) as isize;
+            if seed_fits(&seeds, cx, cy, min_dist_sq, w) {
+                seeds.push((cx, cy));
+                seed_component.push(comp);
+                placed[comp as usize] += 1;
+            }
         }
     }
 
     let num_seeds = seeds.len();
+    let seeded_components = (1..num_components).filter(|&c| placed[c] > 0).count();
+    let quota_count = quotas.iter().filter(|&&q| q > 0).count();
     println!(
-        "✓ Seeded {} province centers (excluding wastelands).",
-        num_seeds
+        "✓ Seeded {} province centers (excluding wastelands) across {} settleable landmasses ({} with a quota, {} px floor).",
+        num_seeds, seeded_components, quota_count, min_island_area
     );
+    let unseated = (1..num_components)
+        .filter(|&c| quotas[c] > 0 && placed[c] == 0)
+        .count();
+    if unseated > 0 {
+        println!(
+            "  ⚠ {} settleable landmass(es) could not seat a centre within the spacing rule.",
+            unseated
+        );
+    }
 
     if num_seeds == 0 {
         return ProvinceResult {
@@ -683,8 +745,17 @@ pub fn generate_provinces(
                 let cx = heightmap.wrap_x(raw_cx) as isize;
                 let cy = raw_cy.clamp(0, h as isize - 1);
 
-                let candidate =
-                    find_valid_land(heightmap, is_lake, &is_wasteland, cx, cy, sea_level, h);
+                let candidate = find_valid_land(
+                    heightmap,
+                    is_lake,
+                    &is_wasteland,
+                    &component,
+                    seed_component[idx],
+                    cx,
+                    cy,
+                    sea_level,
+                    h,
+                );
                 if let Some(pos) = candidate {
                     seeds[idx] = pos;
                 }
@@ -696,8 +767,9 @@ pub fn generate_provinces(
             // over `PROVINCE_MAX_AREA_FACTOR` times the mean is split by moving
             // centres out of the smallest provinces into it. The head count does
             // not change — a donor's centre is the new seed — and a donor with
-            // no land neighbour (an island, an oasis) is never touched, so no
-            // ground can be left unclaimed.
+            // no land neighbour (an island, an oasis) is never touched. The move
+            // also stays on the donor's own settleable component, so a centre can
+            // never be teleported off an island: see [`plan_centre_moves`].
             let total_land_px: usize = counts[1..=num_seeds].iter().sum();
             let mean_px = (total_land_px / num_seeds).max(1);
             area_mean = mean_px;
@@ -746,8 +818,23 @@ pub fn generate_provinces(
                     }
                 }
 
-                let moves =
-                    plan_centre_moves(&counts, &has_land_neighbour, &members, &seeds, w, mean_px);
+                // A province's component is the one its centre was seeded on; the
+                // fill never leaves that component, so this labels every province
+                // with the island or continent it belongs to.
+                let mut province_component = vec![0u32; num_seeds + 1];
+                for (idx, &comp) in seed_component.iter().enumerate() {
+                    province_component[idx + 1] = comp;
+                }
+
+                let moves = plan_centre_moves(
+                    &counts,
+                    &has_land_neighbour,
+                    &province_component,
+                    &members,
+                    &seeds,
+                    w,
+                    mean_px,
+                );
                 let mut receivers = vec![false; num_seeds + 1];
                 for mv in moves {
                     seeds[mv.donor_id as usize - 1] = mv.position;
@@ -758,6 +845,9 @@ pub fn generate_provinces(
             }
         }
     }
+    // The component labels have done their work: every pass that could move a
+    // centre off its landmass has run. Release the grid before the final counts.
+    drop(component);
 
     let mut seen = vec![false; num_seeds + 1];
     let mut final_counts = vec![0usize; num_seeds + 1];
@@ -794,21 +884,33 @@ pub fn generate_provinces(
     }
 }
 
-/// Searches an expanding spiral for the nearest valid land pixel (not water, not wasteland).
+/// Searches an expanding spiral for the nearest valid land pixel **on the same
+/// settleable component** — not water, not wasteland, and not another island.
+///
+/// A province never crosses water, so re-homing its centre onto a neighbouring
+/// islet would strand the province's own ground and leave a fertile island with
+/// no province at all. The component check is what keeps a relaxed centre on the
+/// landmass whose province it is.
 fn find_valid_land(
     heightmap: &Grid<f32>,
     is_lake: &Grid<bool>,
     is_wasteland: &Grid<bool>,
+    component: &Grid<u32>,
+    expected_component: u32,
     cx: isize,
     cy: isize,
     sea_level: f32,
     h: usize,
 ) -> Option<(isize, isize)> {
-    if cy >= 0 && cy < h as isize {
-        let elev = *heightmap.get(cx, cy);
-        if elev > sea_level && !*is_lake.get(cx, cy) && !*is_wasteland.get(cx, cy) {
-            return Some((cx, cy));
-        }
+    let valid = |x: isize, y: isize| {
+        *heightmap.get(x, y) > sea_level
+            && !*is_lake.get(x, y)
+            && !*is_wasteland.get(x, y)
+            && *component.get(x, y) == expected_component
+    };
+
+    if cy >= 0 && cy < h as isize && valid(cx, cy) {
+        return Some((cx, cy));
     }
 
     for r in 1..=12isize {
@@ -816,11 +918,7 @@ fn find_valid_land(
             for dy in [-r, r] {
                 let nx = heightmap.wrap_x(cx + dx) as isize;
                 let ny = cy + dy;
-                if ny < 0 || ny >= h as isize {
-                    continue;
-                }
-                let elev = *heightmap.get(nx, ny);
-                if elev > sea_level && !*is_lake.get(nx, ny) && !*is_wasteland.get(nx, ny) {
+                if ny >= 0 && ny < h as isize && valid(nx, ny) {
                     return Some((nx, ny));
                 }
             }
@@ -829,11 +927,7 @@ fn find_valid_land(
             for dx in [-r, r] {
                 let nx = heightmap.wrap_x(cx + dx) as isize;
                 let ny = cy + dy;
-                if ny < 0 || ny >= h as isize {
-                    continue;
-                }
-                let elev = *heightmap.get(nx, ny);
-                if elev > sea_level && !*is_lake.get(nx, ny) && !*is_wasteland.get(nx, ny) {
+                if ny >= 0 && ny < h as isize && valid(nx, ny) {
                     return Some((nx, ny));
                 }
             }
@@ -936,6 +1030,23 @@ const MIN_PROVINCE_SPAN: f32 = 18.0;
 /// the Area tier's drawn-mass ceiling (`geopolitics::clustering`).
 const PROVINCE_MAX_AREA_FACTOR: f32 = 4.0;
 
+/// Smallest a settleable island may be and still be guaranteed a province of
+/// its own, as a share of the mean settled area per province.
+///
+/// A quarter of one province is deliberately generous: the atlas is made of
+/// *places*, and an island that could hold a quarter of a province's ground is
+/// a place a reader can see. Anything smaller is left to the wilderness, where
+/// it reads as the islet it is rather than as a one-pixel province.
+const ISLAND_PROVINCE_FLOOR_SHARE: f32 = 0.25;
+
+/// Absolute floor on [`ISLAND_PROVINCE_FLOOR_SHARE`], in pixels **on the 16K
+/// reference plate**.
+///
+/// An area, so it follows [`CanvasScale::pixels`]: sixty-four square pixels at
+/// 16K are four at 4K and one at 2K. It only matters on a plate whose mean
+/// province is itself only a few pixels wide.
+const MIN_ISLAND_PROVINCE_PX: usize = 64;
+
 /// Longest corridor the carver may cut, in province widths (see
 /// [`province_span`]). A pocket further from its landmass's populated network
 /// than this is left to the wilderness instead of being threaded to it by a
@@ -956,6 +1067,184 @@ fn province_span(land_px: f32, num_provinces: usize, min_span: f32) -> f32 {
         .max(min_span)
 }
 
+/// Labels every **settleable component** of the finished wilderness map: each
+/// four-connected stretch of land that is not wasteland, wrapping in longitude
+/// exactly like the terrain.
+///
+/// A province can only ever grow inside one of these components — water and
+/// impassable ground stop the flood fill dead — so the seeder has to know what
+/// they are. [`plan_seed_quotas`] then splits the province budget between them,
+/// and the component's most habitable sampled pixel is kept as the fallback
+/// centre for a marginal island that clears no candidate threshold.
+///
+/// Ids start at 1 in scan order; slot 0 is reserved for "no component" and
+/// carries no area. The grid itself is only needed while the candidate list is
+/// tagged with its component and is dropped before the flood fills.
+fn label_settleable_components(
+    heightmap: &Grid<f32>,
+    is_lake: &Grid<bool>,
+    is_wasteland: &Grid<bool>,
+    habitability: &Grid<f32>,
+    sea_level: f32,
+) -> (Grid<u32>, Vec<usize>, Vec<(f32, isize, isize)>) {
+    let w = heightmap.width;
+    let h = heightmap.height;
+    let dirs: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+    let mut component = Grid::filled_with(w, h, 0u32);
+    let mut areas = vec![0usize];
+    let mut best = vec![(f32::NEG_INFINITY, 0isize, 0isize)];
+    let mut next = 1u32;
+    let mut q: VecDeque<(isize, isize)> = VecDeque::new();
+
+    for y0 in 0..h {
+        for x0 in 0..w {
+            let sx = x0 as isize;
+            let sy = y0 as isize;
+            if *component.get(sx, sy) != 0
+                || !is_land(heightmap, is_lake, sx, sy, sea_level)
+                || *is_wasteland.get(sx, sy)
+            {
+                continue;
+            }
+
+            component.set(sx, sy, next);
+            q.clear();
+            q.push_back((sx, sy));
+            let mut area = 0usize;
+            let mut best_here = (f32::NEG_INFINITY, sx, sy);
+
+            while let Some((cx, cy)) = q.pop_front() {
+                area += 1;
+                let hab = *habitability.get(cx, cy);
+                if hab > best_here.0 {
+                    best_here = (hab, cx, cy);
+                }
+                for &(dx, dy) in &dirs {
+                    let nx = component.wrap_x(cx + dx) as isize;
+                    let ny = cy + dy;
+                    if ny < 0 || ny >= h as isize {
+                        continue;
+                    }
+                    if *component.get(nx, ny) != 0
+                        || !is_land(heightmap, is_lake, nx, ny, sea_level)
+                        || *is_wasteland.get(nx, ny)
+                    {
+                        continue;
+                    }
+                    component.set(nx, ny, next);
+                    q.push_back((nx, ny));
+                }
+            }
+
+            areas.push(area);
+            best.push(best_here);
+            next += 1;
+        }
+    }
+
+    (component, areas, best)
+}
+
+/// Splits a world's province budget across its settleable components.
+///
+/// Two rules, in this order:
+///
+/// * **Every island gets a centre.** A component whose settleable area is at
+///   least `min_island_area` (a quarter of one mean province, or a small fixed
+///   speck, whichever is larger) is guaranteed one province. Islands below that
+///   floor are left to the wilderness: they could not show a province of their
+///   own. If there are more eligible islands than the budget can afford, the
+///   largest are seated first.
+/// * **The rest follows the ground.** What remains of the budget is split in
+///   proportion to settleable area — largest-remainder, so the exact total is
+///   kept — and a continent keeps the provinces its size earns while the
+///   islands keep the ones their own size earns.
+///
+/// `areas[0]` is the reserved "no component" slot and must be zero. The result
+/// sums to `budget` whenever the world holds any settleable land, and never
+/// exceeds it.
+fn plan_seed_quotas(areas: &[usize], budget: usize, min_island_area: usize) -> Vec<usize> {
+    let mut quotas = vec![0usize; areas.len()];
+    if budget == 0 || areas.len() <= 1 {
+        return quotas;
+    }
+
+    // ── 1. The guaranteed centre of every island large enough to show one ────
+    let mut eligible: Vec<usize> = (1..areas.len())
+        .filter(|&i| areas[i] >= min_island_area.max(1))
+        .collect();
+    // Largest first, so a budget smaller than the island count still seats the
+    // islands a reader can actually see. The index is the tiebreak, so the draw
+    // stays deterministic whatever order the components were found in.
+    eligible.sort_unstable_by(|&a, &b| areas[b].cmp(&areas[a]).then_with(|| a.cmp(&b)));
+    let reserved = eligible.len().min(budget);
+    for &i in eligible.iter().take(reserved) {
+        quotas[i] = 1;
+    }
+
+    let remaining = budget - reserved;
+    if remaining == 0 {
+        return quotas;
+    }
+
+    // ── 2. The rest, in proportion to settleable area ────────────────────────
+    let total: usize = areas.iter().sum();
+    if total == 0 {
+        return quotas;
+    }
+
+    let mut base_sum = 0usize;
+    // (fractional remainder, component): the units lost to integer division go
+    // to the largest fractions, exactly like a largest-remainder parliament.
+    let mut remainders: Vec<(u128, usize)> = Vec::with_capacity(areas.len());
+    for (i, &area) in areas.iter().enumerate().skip(1) {
+        if area == 0 {
+            continue;
+        }
+        let scaled = remaining as u128 * area as u128;
+        let base = (scaled / total as u128) as usize;
+        quotas[i] += base;
+        base_sum += base;
+        remainders.push((scaled % total as u128, i));
+    }
+    remainders.sort_unstable_by(|&(ra, ia), &(rb, ib)| {
+        rb.cmp(&ra)
+            .then_with(|| areas[ib].cmp(&areas[ia]))
+            .then_with(|| ia.cmp(&ib))
+    });
+    let mut leftover = remaining.saturating_sub(base_sum);
+    for &(_, i) in &remainders {
+        if leftover == 0 {
+            break;
+        }
+        quotas[i] += 1;
+        leftover -= 1;
+    }
+
+    debug_assert_eq!(quotas.iter().sum::<usize>(), budget);
+    quotas
+}
+
+/// True when `(cx, cy)` is at least `min_dist` from every centre already chosen,
+/// measured through the map's horizontal wrap.
+///
+/// This is the seeder's one spacing rule: two centres closer than a province
+/// width would make a province too thin to read, and the rule is what lets the
+/// flood fill settle the map instead of merely stamping it.
+fn seed_fits(seeds: &[(isize, isize)], cx: isize, cy: isize, min_dist_sq: isize, w: usize) -> bool {
+    for &(ax, ay) in seeds {
+        let mut dx = (cx - ax).abs();
+        if dx > (w as isize) / 2 {
+            dx = w as isize - dx;
+        }
+        let dy = cy - ay;
+        if dx * dx + dy * dy < min_dist_sq {
+            return false;
+        }
+    }
+    true
+}
+
 /// One centre moved out of an undersized province and into an oversized one.
 struct CentreMove {
     donor_id: u32,
@@ -969,14 +1258,22 @@ struct CentreMove {
 ///
 /// A centre may only move if its province has a **land neighbour**: the donor's
 /// old ground is then absorbed by that neighbour in the next fill, so moving a
-/// centre can never leave an island or an oasis unclaimed. Donors are taken
-/// smallest-first, and each recipient is split into pieces aimed at the mean
-/// (not merely at the ceiling), so a second pass has nothing left to correct.
+/// centre can never leave a pocket unclaimed. Donors are taken smallest-first,
+/// and each recipient is split into pieces aimed at the mean (not merely at the
+/// ceiling), so a second pass has nothing left to correct.
+///
+/// A move also stays on the donor's **settleable component**. A province can
+/// never cross water or wasteland, so moving an island's centre to an oversized
+/// province on a continent would hollow the island out entirely — the next fill
+/// would give its ground to nobody, and the atlas would read it as wasteland.
+/// Donors are therefore grouped by component and only serve recipients on that
+/// same component.
 ///
 /// Pure by design: the policy can be exercised without building a world.
 fn plan_centre_moves(
     counts: &[usize],
     has_land_neighbour: &[bool],
+    province_component: &[u32],
     members: &[Vec<u32>],
     seeds: &[(isize, isize)],
     width: usize,
@@ -996,38 +1293,49 @@ fn plan_centre_moves(
     }
     oversized.sort_by_key(|&id| std::cmp::Reverse(counts[id as usize]));
 
-    let mut donors: Vec<u32> = (1..=province_count as u32)
+    let mut pool: Vec<u32> = (1..=province_count as u32)
         .filter(|&id| {
             let area = counts[id as usize];
             area > 0 && area < mean_px && has_land_neighbour[id as usize]
         })
         .collect();
-    donors.sort_by_key(|&id| counts[id as usize]);
-    let mut donors = donors.into_iter();
+    pool.sort_by_key(|&id| counts[id as usize]);
+    // BTreeMap, not HashMap: a plan is part of the world, so the draw must be
+    // deterministic whatever the allocator feels like.
+    let mut donors: std::collections::BTreeMap<u32, VecDeque<u32>> = Default::default();
+    for id in pool {
+        donors
+            .entry(province_component[id as usize])
+            .or_default()
+            .push_back(id);
+    }
+    let mut donor_total: usize = donors.values().map(VecDeque::len).sum();
 
     let mut moves = Vec::new();
     for id in oversized {
+        if donor_total == 0 {
+            break;
+        }
+        let component = province_component[id as usize];
         let needed = counts[id as usize]
             .div_ceil(mean_px.max(1))
             .saturating_sub(1)
-            .min(donors.len());
+            .min(donors.get(&component).map_or(0, VecDeque::len));
         if needed == 0 {
             continue;
         }
         let positions =
             farthest_split_seeds(&members[id as usize], seeds[id as usize - 1], needed, width);
         for position in positions {
-            let Some(donor) = donors.next() else {
+            let Some(donor) = donors.get_mut(&component).and_then(VecDeque::pop_front) else {
                 break;
             };
+            donor_total -= 1;
             moves.push(CentreMove {
                 donor_id: donor,
                 recipient_id: id,
                 position,
             });
-        }
-        if donors.len() == 0 {
-            break;
         }
     }
     moves
@@ -2274,8 +2582,18 @@ mod tests {
             }
         }
         let seeds = vec![(25isize, 20isize); counts.len()];
+        // Every province here lives on the same settleable component.
+        let component = vec![1u32; counts.len()];
 
-        let moves = plan_centre_moves(&counts, &has_neighbour, &members, &seeds, 50, 290);
+        let moves = plan_centre_moves(
+            &counts,
+            &has_neighbour,
+            &component,
+            &members,
+            &seeds,
+            50,
+            290,
+        );
         // ceil(2000 / 290) - 1 = 6 new centres, all in the giant.
         assert_eq!(moves.len(), 6);
         assert!(moves.iter().all(|m| m.recipient_id == 1));
@@ -2290,12 +2608,77 @@ mod tests {
         // An island has no land neighbour, so its centre is never moved.
         let mut island = has_neighbour.clone();
         island[2] = false;
-        let moves = plan_centre_moves(&counts, &island, &members, &seeds, 50, 290);
+        let moves = plan_centre_moves(&counts, &island, &component, &members, &seeds, 50, 290);
         assert_eq!(moves[0].donor_id, 3);
 
         // No safe donors at all means no split, rather than an orphaned island.
         let no_neighbours = vec![false; counts.len()];
-        assert!(plan_centre_moves(&counts, &no_neighbours, &members, &seeds, 50, 290).is_empty());
+        assert!(plan_centre_moves(
+            &counts,
+            &no_neighbours,
+            &component,
+            &members,
+            &seeds,
+            50,
+            290
+        )
+        .is_empty());
+    }
+
+    /// A centre never migrates to another landmass: a province cannot cross
+    /// water, so moving an island's centre to a continent would leave the
+    /// island's own ground with no province at all.
+    #[test]
+    fn centre_moves_never_cross_a_settleable_component() {
+        // One giant on component 1; two small provinces on island component 2.
+        let counts = [0usize, 2_000, 100, 100];
+        let has_neighbour = [false, true, true, true];
+        let component = [0u32, 1, 2, 2];
+        let mut members: Vec<Vec<u32>> = vec![Vec::new(); counts.len()];
+        for y in 0..40u32 {
+            for x in 0..50u32 {
+                members[1].push(y * 50 + x);
+            }
+        }
+        let seeds = vec![(25isize, 20isize); counts.len()];
+
+        assert!(
+            plan_centre_moves(
+                &counts,
+                &has_neighbour,
+                &component,
+                &members,
+                &seeds,
+                50,
+                290
+            )
+            .is_empty(),
+            "the island's centres must not be spent on a continent"
+        );
+
+        // Give the giant a sibling on its own component: that province is used,
+        // while the island's two centres stay where they are.
+        let counts = [0usize, 2_000, 100, 100, 100];
+        let has_neighbour = [false, true, true, true, true];
+        let component = [0u32, 1, 2, 2, 1];
+        let mut members = members;
+        members.push((0..40u32).flat_map(|y| (0..4u32).map(move |x| y * 50 + x)).collect());
+        let seeds = vec![(25isize, 20isize); counts.len()];
+
+        let moves = plan_centre_moves(
+            &counts,
+            &has_neighbour,
+            &component,
+            &members,
+            &seeds,
+            50,
+            290,
+        );
+        assert!(!moves.is_empty());
+        assert!(
+            moves.iter().all(|m| m.donor_id == 4),
+            "only the giant's own component may donate"
+        );
     }
 
     #[test]
@@ -2390,5 +2773,146 @@ mod tests {
             );
             assert_eq!(province_span(0.0, 4_000, floor), floor);
         }
+    }
+
+    // ── PER-ISLAND SEED BUDGETS ──────────────────────────────────────────────
+
+    /// The budget is a promise shared by the whole planet, not a race the
+    /// continents always win: every island large enough to show a province is
+    /// seated before the rest is split by area.
+    #[test]
+    fn every_settleable_island_gets_a_centre_before_the_rest_is_shared() {
+        // A continent, two visible islands and a speck below the floor.
+        let areas = [0usize, 10_000, 250, 100, 20];
+        let quotas = plan_seed_quotas(&areas, 50, 64);
+
+        assert_eq!(
+            quotas.iter().sum::<usize>(),
+            50,
+            "the budget is spent exactly"
+        );
+        assert!(quotas[2] >= 1, "the 250-px island must keep a centre");
+        assert!(quotas[3] >= 1, "the 100-px island is still a place");
+        assert_eq!(quotas[4], 0, "a speck below the floor stays wilderness");
+        assert!(
+            quotas[1] > quotas[2] * 10,
+            "the continent still keeps the provinces its size earns: {quotas:?}"
+        );
+    }
+
+    /// A budget smaller than the number of islands cannot seat everyone; the
+    /// islands a reader can actually see win the places first.
+    #[test]
+    fn a_small_budget_seats_the_largest_islands_first() {
+        let quotas = plan_seed_quotas(&[0, 10, 30, 20, 40], 2, 5);
+        assert_eq!(quotas, vec![0, 0, 1, 0, 1]);
+    }
+
+    /// Every world keeps its exact province budget, whatever its islands look
+    /// like — and a world with no settleable ground asks for none.
+    #[test]
+    fn quotas_never_exceed_the_budget() {
+        let areas = [0usize, 3, 90, 140, 1_000, 5, 0, 400];
+        for budget in [1usize, 2, 7, 50] {
+            let quotas = plan_seed_quotas(&areas, budget, 50);
+            assert_eq!(quotas.iter().sum::<usize>(), budget, "budget {budget}");
+        }
+        assert_eq!(plan_seed_quotas(&[0], 10, 1), vec![0]);
+        assert_eq!(plan_seed_quotas(&[0, 0, 0], 10, 1), vec![0, 0, 0]);
+        assert_eq!(plan_seed_quotas(&[0, 100], 0, 1), vec![0, 0]);
+    }
+
+    /// The map is a cylinder: a landmass cut by the seam is one component, not
+    /// two, or the budget would seat half an island twice.
+    #[test]
+    fn settleable_components_wrap_across_the_map_seam() {
+        let (w, h) = (16usize, 8usize);
+        let mut heightmap = Grid::filled_with(w, h, 0.20f32);
+        let is_lake = Grid::filled_with(w, h, false);
+        let is_wasteland = Grid::filled_with(w, h, false);
+        let hab = Grid::filled_with(w, h, 1.0f32);
+        for y in 2..6 {
+            for x in [0isize, 1, 14, 15] {
+                heightmap.set(x, y, 0.50);
+            }
+        }
+
+        let (component, areas, best) =
+            label_settleable_components(&heightmap, &is_lake, &is_wasteland, &hab, SEA_LEVEL);
+
+        assert_eq!(areas.len(), 2, "the seam is a longitude, not a border");
+        assert_eq!(*component.get(0, 3), *component.get(15, 3));
+        assert_eq!(areas[1], 16);
+        assert_eq!(best[1], (1.0, 0, 2));
+    }
+
+    /// A settleable island whose climate never clears the candidate floor still
+    /// gets a province: the atlas must not mistake "no centre was drawn here"
+    /// for impassable wilderness.
+    #[test]
+    fn a_marginal_island_still_receives_a_province() {
+        let mut heightmap = Grid::filled_with(W, H, 0.20f32);
+        for y in 8..40 {
+            for x in 8..32 {
+                heightmap.set(x, y, 0.50);
+            }
+        }
+        for y in 20..28 {
+            for x in 44..54 {
+                heightmap.set(x, y, 0.50);
+            }
+        }
+        let is_lake = Grid::filled_with(W, H, false);
+        // The island is far too hot for the habitability model: its best pixel
+        // scores well under the 0.015 candidate floor.
+        let mut temp = Grid::filled_with(W, H, 15.0f32);
+        for y in 20..28 {
+            for x in 44..54 {
+                temp.set(x, y, 50.0);
+            }
+        }
+        let precip = Grid::filled_with(W, H, 0.5f32);
+        let flow = Grid::filled_with(W, H, 0.0f32);
+        let permanent_ice = Grid::filled_with(W, H, false);
+        let config = GeographyConfig {
+            num_provinces: 8,
+            max_waste_share: 0.18,
+            waste_cutoff: 0.68,
+        };
+
+        let result = generate_provinces(
+            &heightmap,
+            &temp,
+            &precip,
+            &flow,
+            &is_lake,
+            &permanent_ice,
+            SEA_LEVEL,
+            100.0,
+            &config,
+            11,
+            &Progress::silent(),
+        );
+
+        let island_ids: std::collections::BTreeSet<u32> = (20..28isize)
+            .flat_map(|y| (44..54isize).map(move |x| (x, y)))
+            .map(|(x, y)| *result.province_ids.get(x, y))
+            .filter(|&id| id != 0)
+            .collect();
+        assert!(
+            !island_ids.is_empty(),
+            "the island is settleable ground and must carry a province"
+        );
+
+        let mainland_ids: std::collections::BTreeSet<u32> = (8..40isize)
+            .flat_map(|y| (8..32isize).map(move |x| (x, y)))
+            .map(|(x, y)| *result.province_ids.get(x, y))
+            .filter(|&id| id != 0)
+            .collect();
+        assert!(!mainland_ids.is_empty());
+        assert!(
+            island_ids.is_disjoint(&mainland_ids),
+            "a province can never cross the water"
+        );
     }
 }

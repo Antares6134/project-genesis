@@ -241,6 +241,46 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "🌍 Atlas do Mundo",
             "🌍 Atlas Görüntüleyici",
         ],
+        // The seed chip's hint, and the scope menu's hint. Short, because they
+        // are read on hover, and never the only place a fact is stated.
+        "Click to copy" => [
+            "Haz clic para copiar",
+            "Cliquez pour copier",
+            "Zum Kopieren klicken",
+            "Clique para copiar",
+            "Kopyalamak için tıklayın",
+        ],
+        "Map scope" => [
+            "Alcance del mapa",
+            "Étendue de la carte",
+            "Kartenumfang",
+            "Âmbito do mapa",
+            "Harita kapsamı",
+        ],
+        // The world's status chip: the one line in the bar that says how old
+        // the world is. "⏳ {}" carries an act's own sub-step, already
+        // translated, so it needs no row of its own.
+        "🌱 No world yet" => [
+            "🌱 Aún no hay mundo",
+            "🌱 Pas encore de monde",
+            "🌱 Noch keine Welt",
+            "🌱 Ainda não há mundo",
+            "🌱 Henüz dünya yok",
+        ],
+        "✔ World complete" => [
+            "✔ Mundo completo",
+            "✔ Monde achevé",
+            "✔ Welt vollendet",
+            "✔ Mundo completo",
+            "✔ Dünya tamamlandı",
+        ],
+        "🌍 {} of {} acts grown" => [
+            "🌍 {} de {} actos completados",
+            "🌍 {} actes sur {} accomplis",
+            "🌍 {} von {} Akten gewachsen",
+            "🌍 {} de {} atos concluídos",
+            "🌍 {} / {} perde tamamlandı",
+        ],
         "🗺 Physical" => [
             "🗺 Físico",
             "🗺 Physique",

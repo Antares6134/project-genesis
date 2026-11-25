@@ -72,6 +72,32 @@ const TEXT_HEADING: f32 = 20.0;
 /// [`TEXT_BODY`], narrow enough to keep the map underneath in view.
 const CARD_WIDTH: f32 = 430.0;
 
+// ─── THE CHROME ──────────────────────────────────────────────────────────────
+//
+// The window and the empty planet are one material. The plate a world has not
+// been grown on is painted in [`CHROME_INK`], and every panel, chip and
+// separator is a step up from that same ink: the atlas reads as one dark
+// instrument, not as a dark map inside a grey dialog. One accent is spent, and
+// only on the one thing the reader chose — the active scope, the active tier,
+// the selected text.
+
+/// The deepest colour in the atlas: the cold-start plate and the canvas's ink.
+const CHROME_INK: Color32 = Color32::from_rgb(9, 12, 22);
+/// Panels and the top bar: one step up from the plate.
+const CHROME_PANEL: Color32 = Color32::from_rgb(18, 23, 36);
+/// A chip's fill — the seed and the world's status.
+const CHROME_CHIP: Color32 = Color32::from_rgb(27, 34, 52);
+/// Edges: chip borders, separators, disabled controls.
+const CHROME_EDGE: Color32 = Color32::from_rgb(46, 58, 84);
+/// The one accent: what is selected, and nothing else.
+const CHROME_ACCENT: Color32 = Color32::from_rgb(88, 130, 200);
+/// Text on a chip: bright enough to read against [`CHROME_CHIP`].
+const CHROME_CHIP_TEXT: Color32 = Color32::from_rgb(214, 224, 242);
+/// The ink, thinned: a strip laid over the map without hiding it.
+const CHROME_VEIL: Color32 = Color32::from_rgba_unmultiplied_const(9, 12, 22, 224);
+/// The panel, thinned: the zoom pill floating over the map.
+const CHROME_PANEL_VEIL: Color32 = Color32::from_rgba_unmultiplied_const(18, 23, 36, 235);
+
 /// Width of the label column in a civilization dossier, so values line up.
 const DOSSIER_LABEL_WIDTH: f32 = 92.0;
 
@@ -80,6 +106,16 @@ const DOSSIER_LABEL_WIDTH: f32 = 92.0;
 /// name, and gets a little more room for it.
 const LEGEND_WIDTH: f32 = 330.0;
 const CIV_LEGEND_WIDTH: f32 = 350.0;
+
+/// The zoom pill that floats over the map's bottom-right corner. It sits on
+/// the canvas rather than in the bar because the camera belongs to the map, and
+/// because a bar that carries everything ends up two rows tall on a small
+/// window. Its size is fixed so the pill never resizes as the percentage goes
+/// from 3% to 800%.
+const ZOOM_PILL_WIDTH: f32 = 274.0;
+const ZOOM_PILL_HEIGHT: f32 = 38.0;
+/// How far the pill floats from the canvas's corner.
+const ZOOM_PILL_MARGIN: f32 = 12.0;
 
 /// The atlas's icons come from two faces, both bundled and both subset to
 /// exactly the characters the interface uses.
@@ -188,6 +224,52 @@ pub fn configure_style(style: &mut egui::Style) {
     spacing.window_margin = egui::Margin::same(10);
     spacing.menu_margin = egui::Margin::same(10);
     spacing.tooltip_width = CARD_WIDTH + 40.0;
+
+    // The colours last, because a palette never changes a measurement: the
+    // type scale above is what the atlas is read at, and it stays exactly as
+    // it was. What changes is the material the chrome is cut from.
+    style.visuals = atlas_visuals();
+}
+
+/// The atlas's own visuals: the navy chrome the panels and the empty plate
+/// share, in place of egui's default grey.
+///
+/// This is a palette, not a restyle. [`configure_style`] owns the type scale,
+/// the spacing and the hit targets; this owns only the colours, so a theme
+/// change can never quietly change how a row of text is measured. Every state
+/// of a widget gets the same corner and the same hairline, so a button is a
+/// quiet chip of chrome until the pointer arrives and the accent answers it.
+fn atlas_visuals() -> egui::Visuals {
+    let mut visuals = egui::Visuals::dark();
+    visuals.panel_fill = CHROME_PANEL;
+    visuals.window_fill = CHROME_PANEL;
+    visuals.extreme_bg_color = CHROME_INK;
+    visuals.faint_bg_color = CHROME_CHIP;
+    visuals.code_bg_color = CHROME_CHIP;
+    visuals.window_stroke = Stroke::new(1.0, CHROME_EDGE);
+    visuals.hyperlink_color = CHROME_ACCENT;
+    visuals.selection.bg_fill = CHROME_ACCENT;
+    visuals.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+    visuals.window_corner_radius = egui::CornerRadius::same(6);
+    visuals.menu_corner_radius = egui::CornerRadius::same(6);
+
+    let widgets = &mut visuals.widgets;
+    for state in [
+        &mut widgets.noninteractive,
+        &mut widgets.inactive,
+        &mut widgets.hovered,
+        &mut widgets.active,
+        &mut widgets.open,
+    ] {
+        state.corner_radius = egui::CornerRadius::same(4);
+        state.bg_stroke = Stroke::new(1.0, CHROME_EDGE);
+    }
+    widgets.noninteractive.weak_bg_fill = Color32::TRANSPARENT;
+    widgets.inactive.weak_bg_fill = CHROME_CHIP;
+    widgets.hovered.weak_bg_fill = Color32::from_rgb(40, 52, 78);
+    widgets.active.weak_bg_fill = CHROME_ACCENT;
+    widgets.open.weak_bg_fill = CHROME_CHIP;
+    visuals
 }
 
 /// The atlas's panel frame: egui's stock panel frame with the inner margin the
@@ -223,6 +305,33 @@ fn status_line(ui: &mut egui::Ui, text: impl Into<String>) {
     ui.add(egui::Label::new(egui::RichText::new(text.into()).small()).wrap());
 }
 
+/// One chip in the top bar: a short, atomic figure — the seed, the world's
+/// status — set on its own plate so it reads as a fact and not as a control.
+///
+/// The label is deliberately *extended* rather than wrapped. A chip is one
+/// line by definition: a long seed must not be split across two rows, and a
+/// phrase must not be broken down the middle. That is what keeps the bar's
+/// height a constant of the window rather than a function of the seed — the
+/// canvas below it must never move because a number got longer.
+fn chip(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
+    egui::Frame::new()
+        .fill(CHROME_CHIP)
+        .stroke(Stroke::new(1.0, CHROME_EDGE))
+        .corner_radius(egui::CornerRadius::same(4))
+        .inner_margin(egui::Margin::symmetric(8, 2))
+        .show(ui, |ui| {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(text.into())
+                        .size(TEXT_BODY)
+                        .color(CHROME_CHIP_TEXT),
+                )
+                .extend(),
+            )
+        })
+        .response
+}
+
 /// What political domain the atlas is currently portraying.
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum MapScope {
@@ -252,7 +361,47 @@ pub enum MapScope {
     Everywhere,
 }
 
+/// How many scopes at the head of [`MapScope::ALL`] are the physical survey.
+/// The scope menu draws its hairline here: the land as it is, then the people
+/// who live on it.
+const PHYSICAL_SCOPES: usize = 5;
+
 impl MapScope {
+    /// Every scope, in the order the atlas offers them: the physical survey
+    /// first — relief, the survey sheet, climate, temperature, landforms — and
+    /// then the people the world grew, from the dawn to its tongues.
+    pub const ALL: [MapScope; 11] = [
+        MapScope::Physical,
+        MapScope::Topographic,
+        MapScope::Climate,
+        MapScope::Temperature,
+        MapScope::Terrain,
+        MapScope::Civilizations,
+        MapScope::Religions,
+        MapScope::Languages,
+        MapScope::Land,
+        MapScope::Water,
+        MapScope::Everywhere,
+    ];
+
+    /// The scope's name, as the bar and its menu write it. One spelling for
+    /// every place a scope is named, so the button and the menu can never drift.
+    fn label(self) -> &'static str {
+        match self {
+            MapScope::Physical => "🗺 Physical",
+            MapScope::Topographic => "⛰ Topographic",
+            MapScope::Climate => "🌦 Climate",
+            MapScope::Temperature => "🌡 Temperature",
+            MapScope::Terrain => "🪨 Terrain",
+            MapScope::Civilizations => "🏺 Civilizations",
+            MapScope::Religions => "🛐 Religions",
+            MapScope::Languages => "🗣 Languages",
+            MapScope::Land => "🏛 Land",
+            MapScope::Water => "🌊 Water",
+            MapScope::Everywhere => "🌍 Everywhere",
+        }
+    }
+
     /// True for the scopes that portray a political hierarchy, which are the only
     /// ones the tier selector and the border toggle apply to.
     fn is_political(self) -> bool {
@@ -340,6 +489,28 @@ pub enum MapTier {
 }
 
 impl MapTier {
+    /// Every tier, from the finest to the coarsest, in the order the picker
+    /// offers them.
+    pub const ALL: [MapTier; 5] = [
+        MapTier::Provinces,
+        MapTier::Areas,
+        MapTier::Regions,
+        MapTier::Superregions,
+        MapTier::Continents,
+    ];
+
+    /// The tier's name as the bar and its picker write it: the same words the
+    /// legend and the census use for the same rung of the hierarchy.
+    fn label(self) -> &'static str {
+        match self {
+            MapTier::Provinces => "Provinces",
+            MapTier::Areas => "Areas",
+            MapTier::Regions => "Regions",
+            MapTier::Superregions => "Superregions",
+            MapTier::Continents => "Continents",
+        }
+    }
+
     /// The tier's name as a file name. The ocean hierarchy's top tier is its
     /// *basins*, which is what the headless water plate calls it.
     fn slug(self) -> &'static str {
@@ -2682,7 +2853,7 @@ impl MapViewer {
     fn cold_start(&mut self, ui: &mut egui::Ui) {
         let (rect, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
         let painter = ui.painter().with_clip_rect(rect);
-        painter.rect_filled(rect, 0.0, Color32::from_rgb(9, 12, 22));
+        painter.rect_filled(rect, 0.0, CHROME_INK);
 
         // The live plate, if act one is part-way through: the world arriving.
         if let Some(live) = &self.live {
@@ -4222,13 +4393,45 @@ impl MapViewer {
         }
     }
 
-    /// The atlas's chrome: the brand, the world's age, every map scope, the
-    /// controls that dress the map, and the language.
+    /// The world's age in one chip's worth of words: the act in flight, the
+    /// world's absence, the finished world, or how far it has climbed.
     ///
-    /// Both rows are always drawn, whatever the world's age or the scope on
-    /// screen. A control is disabled when it cannot apply — not hidden — so the
-    /// atlas never changes shape under the reader's hand and nothing it offers is
-    /// a surprise.
+    /// One decision, made once per frame, rather than a condition repeated in
+    /// the bar: the same sentence can then be read by a test as by the reader.
+    fn world_status(&self) -> String {
+        if let Some(job) = self.job.as_ref() {
+            // An act in flight is named, not merely counted: the bar says what
+            // is being grown, and how far into it the pipeline has got.
+            return self.tf("⏳ {}", &[&stage_progress(Some(job), self.language)]);
+        }
+        // The acts are a strict chain, so the deepest act the pipeline holds is
+        // also the number of acts grown — whether the world was grown here or
+        // adopted from a cache with `--load`.
+        let grown = self.genesis.stage().map_or(0, |stage| stage.index());
+        let total = Stage::ALL.len();
+        if grown == 0 {
+            self.t("🌱 No world yet").to_string()
+        } else if grown >= total {
+            self.t("✔ World complete").to_string()
+        } else {
+            self.tf("🌍 {} of {} acts grown", &[&grown, &total])
+        }
+    }
+
+    /// The atlas's chrome: who it is, which world it is showing, what the map
+    /// is portraying, and the controls that dress it.
+    ///
+    /// Two rows, always drawn, whatever the world's age or the scope on screen.
+    /// A control is disabled when it cannot apply — not hidden — so the atlas
+    /// never changes shape under the reader's hand and nothing it offers is a
+    /// surprise.
+    ///
+    /// The bar is built to keep its height constant. Every item in it is atomic
+    /// — a chip, a menu button, a checkbox — so a long seed or a long language
+    /// name makes a row wider, never taller; and the widest group in it, the
+    /// eleven scopes, is a menu rather than eleven buttons. A bar whose height
+    /// grew with its contents would move the map under the reader's cursor,
+    /// which is exactly what a crowded bar used to do.
     fn top_bar(&mut self, ui: &mut egui::Ui, frame: &egui::Frame) {
         let stage = self.world.as_ref().map(|world| world.stage);
         let has_world = self.world.is_some();
@@ -4247,6 +4450,12 @@ impl MapViewer {
         // is handed the world.
         let mut export_choice = None;
         let ctx = ui.ctx().clone();
+        // The chip's words are read off the pipeline before the bar is laid out:
+        // one status, computed once, rather than a condition repeated in a row.
+        let status = self.world_status();
+        // A scope is chosen in the menu and applied after the bar has closed, so
+        // the menu's borrow of the atlas has ended and the plate is rebuilt once.
+        let mut chosen_scope = self.scope;
 
         egui::Panel::top("top_bar")
             .frame(frame.clone())
@@ -4254,10 +4463,19 @@ impl MapViewer {
                 ui.horizontal_wrapped(|ui| {
                     panel_title(ui, self.t("🌍 Atlas Viewer"));
                     ui.separator();
-                    ui.label(egui::RichText::new(self.tf("Seed {}", &[&seed])).strong());
-                    if !has_world {
-                        caption(ui, self.t("No world yet"));
+
+                    // ── The seed and the world's status ───────────────────────
+                    // Two chips, and both are atomic: neither the seed nor the
+                    // status can wrap. Clicking the seed copies it, so a figure
+                    // the reader wants to keep is one press away.
+                    let seed_chip = chip(ui, self.tf("Seed {}", &[&seed]));
+                    let seed_chip = seed_chip
+                        .interact(egui::Sense::click())
+                        .on_hover_text(self.t("Click to copy"));
+                    if seed_chip.clicked() {
+                        ctx.copy_text(seed.to_string());
                     }
+                    chip(ui, &status);
                     ui.separator();
 
                     // ── Map scope: what the atlas portrays ────────────────────
@@ -4265,142 +4483,158 @@ impl MapViewer {
                     // have what it portrays: relief needs only the land, biomes
                     // and climate need the atmosphere, the provinces and the two
                     // hierarchies each need their own act. Before a world exists
-                    // every scope is disabled, and the bar says why.
-                    for (scope, label) in [
-                        (MapScope::Physical, "🗺 Physical"),
-                        (MapScope::Topographic, "⛰ Topographic"),
-                        (MapScope::Climate, "🌦 Climate"),
-                        (MapScope::Temperature, "🌡 Temperature"),
-                        (MapScope::Terrain, "🪨 Terrain"),
-                        (MapScope::Civilizations, "🏺 Civilizations"),
-                        (MapScope::Religions, "🛐 Religions"),
-                        (MapScope::Languages, "🗣 Languages"),
-                        (MapScope::Land, "🏛 Land"),
-                        (MapScope::Water, "🌊 Water"),
-                        (MapScope::Everywhere, "🌍 Everywhere"),
-                    ] {
-                        let ready = stage.is_some_and(|stage| scope.available(stage));
-                        let label = self.t(label);
-                        let response = ui
-                            .add_enabled_ui(ready, |ui| {
-                                ui.selectable_value(&mut self.scope, scope, label)
-                            })
-                            .inner;
-                        if !ready {
-                            let hint = match stage {
-                                None => self.t("Grow a world first").to_string(),
-                                Some(_) => {
-                                    let need = scope.min_stage();
-                                    self.tf(
-                                        "Needs “{}. {}” — {}.",
-                                        &[
-                                            &need.index(),
-                                            &self.t(need.title()),
-                                            &self.t(need.blurb()),
-                                        ],
-                                    )
-                                }
-                            };
-                            response.on_disabled_hover_text(hint);
-                        } else if response.clicked() {
-                            // Repaint in the new scope, but keep the reader's zoom
-                            // and pan: a map mode is a change of what is shown,
-                            // not of where the reader is looking. **Fit** is there
-                            // when the whole world is wanted again.
-                            self.invalidate_plate();
-                        }
-                    }
-
-                    ui.separator();
-                    if ui
-                        .button("☰")
-                        .on_hover_text(self.t("Show/hide the Genesis panel"))
-                        .clicked()
-                    {
-                        self.show_genesis_panel = !self.show_genesis_panel;
-                    }
-
-                    // ── The language ──────────────────────────────────────────
-                    // A property of the reader, not of the world: it is offered
-                    // before the first act as well as after the last, and no act
-                    // can ever disable it.
-                    if let Some(chosen) = i18n::language_picker(ui, self.language)
-                        && chosen != self.language
-                    {
-                        self.language = chosen;
-                        chosen.save_preference(std::path::Path::new(crate::pipeline::CACHE_DIR));
-                    }
-
-                    // ── The export ────────────────────────────────────────────
-                    // The map mode on screen, printed as a PNG next to the
-                    // language: a 2K or 8K plate, or the world's own size when it
-                    // is neither. Nothing is ever enlarged — an export only ever
-                    // downsamples — so a size the world is too small for stays
-                    // listed but disabled, with the reason on hover.
-                    ui.separator();
-                    let export_menu = ui
-                        .add_enabled_ui(has_world && self.export_job.is_none(), |ui| {
-                            ui.menu_button(self.t("💾 Export"), |ui| {
-                                let Some(native) = native else {
-                                    return;
-                                };
-                                for choice in ExportChoice::ALL
-                                    .into_iter()
-                                    .filter(|choice| choice.offered(native))
-                                {
-                                    let response = ui
-                                        .add_enabled(
-                                            choice.allowed(native),
-                                            egui::Button::new(choice.label(native, self.language)),
+                    // every scope is disabled, and the menu says why.
+                    //
+                    // The active scope stays on the bar, so the reader never has
+                    // to open the menu to know where they are; the menu holds the
+                    // eleven choices and the hairline between the physical
+                    // survey and the world's people.
+                    let active_scope = self.t(self.scope.label());
+                    let scope_menu = ui.menu_button(active_scope, |ui| {
+                        for (index, scope) in MapScope::ALL.into_iter().enumerate() {
+                            if index == PHYSICAL_SCOPES {
+                                ui.separator();
+                            }
+                            let ready = stage.is_some_and(|stage| scope.available(stage));
+                            let label = self.t(scope.label());
+                            let response = ui
+                                .add_enabled_ui(ready, |ui| {
+                                    ui.selectable_value(&mut chosen_scope, scope, label)
+                                })
+                                .inner;
+                            if !ready {
+                                let hint = match stage {
+                                    None => self.t("Grow a world first").to_string(),
+                                    Some(_) => {
+                                        let need = scope.min_stage();
+                                        self.tf(
+                                            "Needs “{}. {}” — {}.",
+                                            &[
+                                                &need.index(),
+                                                &self.t(need.title()),
+                                                &self.t(need.blurb()),
+                                            ],
                                         )
-                                        .on_disabled_hover_text(self.tf(
-                                            "This world is {} × {} — choose a size no larger than that",
-                                            &[&native.0, &native.1],
-                                        ));
-                                    if response.clicked() {
-                                        ui.close();
-                                        export_choice = Some(choice);
                                     }
-                                }
-                            })
-                        })
-                        .inner
-                        .response;
-                    let _ = if !has_world {
-                        export_menu.on_disabled_hover_text(self.t("Grow a world first"))
-                    } else if self.export_job.is_some() {
-                        export_menu
-                            .on_disabled_hover_text(self.t("An export is already running"))
-                    } else {
-                        export_menu.on_hover_text(self.t("Export the current map as a PNG"))
-                    };
-                    if let Some(notice) = self.export_notice.as_deref() {
-                        caption(ui, notice);
-                    }
-                });
-
-                ui.horizontal_wrapped(|ui| {
-                    // Tier selector: the political tiers when a political scope is
-                    // on, and the internal subdivision of the realms in the
-                    // Civilizations scope (a realm's own provinces, areas, regions…).
-                    let tier_ready = has_world
-                        && (self.scope.is_political() || self.scope.is_civilizations());
-                    let tier_heading = self.t("Tier:");
-                    ui.add_enabled_ui(tier_ready, |ui| {
-                        ui.label(tier_heading);
-                        for (tier, label) in [
-                            (MapTier::Provinces, "Provinces"),
-                            (MapTier::Areas, "Areas"),
-                            (MapTier::Regions, "Regions"),
-                            (MapTier::Superregions, "Superregions"),
-                            (MapTier::Continents, "Continents"),
-                        ] {
-                            let label = self.t(label);
-                            if ui.selectable_value(&mut self.tier, tier, label).clicked() {
-                                self.invalidate_plate();
+                                };
+                                response.on_disabled_hover_text(hint);
+                            } else if response.clicked() {
+                                ui.close();
                             }
                         }
                     });
+                    scope_menu.response.on_hover_text(self.t("Map scope"));
+
+                    // ── The right-hand commands ───────────────────────────────
+                    // Laid out from the right edge, so the three controls that
+                    // act on the atlas itself — the panel toggle, the export and
+                    // the language — keep their places whatever the seed's
+                    // length does to the left half of the row. In a right-to-left
+                    // layout the first control added is the rightmost one.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // ☰ folds the genesis panel away: the window's own
+                        // furniture, in the corner the eye expects it.
+                        if ui
+                            .button("☰")
+                            .on_hover_text(self.t("Show/hide the Genesis panel"))
+                            .clicked()
+                        {
+                            self.show_genesis_panel = !self.show_genesis_panel;
+                        }
+                        ui.separator();
+
+                        // ── The export ────────────────────────────────────────
+                        // The map mode on screen, printed as a PNG next to the
+                        // language: a 2K or 8K plate, or the world's own size when
+                        // it is neither. Nothing is ever enlarged — an export only
+                        // ever downsamples — so a size the world is too small for
+                        // stays listed but disabled, with the reason on hover.
+                        let export_menu = ui
+                            .add_enabled_ui(has_world && self.export_job.is_none(), |ui| {
+                                ui.menu_button(self.t("💾 Export"), |ui| {
+                                    let Some(native) = native else {
+                                        return;
+                                    };
+                                    for choice in ExportChoice::ALL
+                                        .into_iter()
+                                        .filter(|choice| choice.offered(native))
+                                    {
+                                        let response = ui
+                                            .add_enabled(
+                                                choice.allowed(native),
+                                                egui::Button::new(
+                                                    choice.label(native, self.language),
+                                                ),
+                                            )
+                                            .on_disabled_hover_text(self.tf(
+                                                "This world is {} × {} — choose a size no larger than that",
+                                                &[&native.0, &native.1],
+                                            ));
+                                        if response.clicked() {
+                                            ui.close();
+                                            export_choice = Some(choice);
+                                        }
+                                    }
+                                })
+                            })
+                            .inner
+                            .response;
+                        let _ = if !has_world {
+                            export_menu.on_disabled_hover_text(self.t("Grow a world first"))
+                        } else if self.export_job.is_some() {
+                            export_menu
+                                .on_disabled_hover_text(self.t("An export is already running"))
+                        } else {
+                            export_menu.on_hover_text(self.t("Export the current map as a PNG"))
+                        };
+                        ui.separator();
+
+                        // ── The language ──────────────────────────────────────
+                        // A property of the reader, not of the world: it is
+                        // offered before the first act as well as after the
+                        // last, and no act can ever disable it.
+                        if let Some(chosen) = i18n::language_picker(ui, self.language)
+                            && chosen != self.language
+                        {
+                            self.language = chosen;
+                            chosen.save_preference(std::path::Path::new(
+                                crate::pipeline::CACHE_DIR,
+                            ));
+                        }
+                    });
+                });
+
+                ui.horizontal_wrapped(|ui| {
+                    // ── Tier: which rung of the hierarchy is shaded ───────────
+                    // The political tiers when a political scope is on, and the
+                    // internal subdivision of the realms in the Civilizations
+                    // scope (a realm's own provinces, areas, regions…). A picker
+                    // rather than five buttons: the active tier stays readable and
+                    // the row stays short, which is what keeps the bar two rows
+                    // tall at every window size.
+                    let tier_ready = has_world
+                        && (self.scope.is_political() || self.scope.is_civilizations());
+                    let tier_heading = self.t("Tier:");
+                    let mut chosen_tier = self.tier;
+                    ui.add_enabled_ui(tier_ready, |ui| {
+                        ui.label(tier_heading);
+                        egui::ComboBox::from_id_salt("map_tier")
+                            .selected_text(self.t(self.tier.label()))
+                            .width(170.0)
+                            .show_ui(ui, |ui| {
+                                for tier in MapTier::ALL {
+                                    ui.selectable_value(
+                                        &mut chosen_tier,
+                                        tier,
+                                        self.t(tier.label()),
+                                    );
+                                }
+                            });
+                    });
+                    if chosen_tier != self.tier {
+                        self.tier = chosen_tier;
+                        self.invalidate_plate();
+                    }
 
                     ui.separator();
 
@@ -4442,33 +4676,18 @@ impl MapViewer {
                     if response.changed() {
                         self.invalidate_plate();
                     }
-                    ui.separator();
-
-                    // Zoom controls. **Fit** measures the canvas and shows the
-                    // whole planet; it is applied after the panels settle, in the
-                    // canvas's own frame.
-                    ui.add_enabled_ui(has_world, |ui| {
-                        if ui
-                            .button("➖")
-                            .on_hover_text(self.t("Zoom out"))
-                            .clicked()
-                        {
-                            self.zoom = (self.zoom * 0.75).clamp(MIN_ZOOM, MAX_ZOOM);
-                        }
-                        ui.label(format!("{:.0}%", self.zoom * 100.0));
-                        if ui.button("➕").on_hover_text(self.t("Zoom in")).clicked() {
-                            self.zoom = (self.zoom * 1.33).clamp(MIN_ZOOM, MAX_ZOOM);
-                        }
-                        if ui
-                            .button(self.t("⤢ Fit"))
-                            .on_hover_text(self.t("Fit the whole world in the window"))
-                            .clicked()
-                        {
-                            self.pending_fit = true;
-                        }
-                    });
                 });
             });
+
+        // A scope chosen in the menu is applied once the bar has closed: the
+        // menu's borrow of the atlas has ended, and the plate is rebuilt once.
+        // The reader's zoom and pan are kept — a map mode is a change of what is
+        // shown, not of where the reader is looking; **Fit** on the canvas is
+        // there when the whole world is wanted again.
+        if chosen_scope != self.scope {
+            self.scope = chosen_scope;
+            self.invalidate_plate();
+        }
 
         if let Some(choice) = export_choice {
             self.start_export(&ctx, choice);
@@ -4479,20 +4698,32 @@ impl MapViewer {
     /// hierarchy, the ocean hierarchy and the dawn. A hierarchy that has not been
     /// built yet is not printed as a row of zeroes — it is simply not there to
     /// count.
+    ///
+    /// The footer is also where the export's notice lands. It belongs to the
+    /// world's own figures rather than to the bar: an export's output path is a
+    /// sentence, and a sentence in the bar would widen the row that is supposed
+    /// to keep its shape. The footer may grow a line when a notice arrives; the
+    /// bar never does.
     fn bottom_census(&self, ui: &mut egui::Ui, frame: &egui::Frame) {
-        let Some(world) = self.world.as_ref() else {
-            return;
-        };
-        if world.hierarchy.total_provinces == 0
-            && world.ocean_hierarchy.total_provinces == 0
-            && world.civilizations.is_empty()
-        {
+        let notice = self.export_notice.as_deref();
+        let census = self.world.as_ref().filter(|world| {
+            world.hierarchy.total_provinces > 0
+                || world.ocean_hierarchy.total_provinces > 0
+                || !world.civilizations.is_empty()
+        });
+        if census.is_none() && notice.is_none() {
             return;
         }
 
         egui::Panel::bottom("bottom_census")
             .frame(frame.clone())
             .show(ui, |ui| {
+                let Some(world) = census else {
+                    if let Some(notice) = notice {
+                        status_line(ui, notice);
+                    }
+                    return;
+                };
                 if world.hierarchy.total_provinces > 0 {
                     status_line(
                         ui,
@@ -4540,7 +4771,79 @@ impl MapViewer {
                         ),
                     );
                 }
+                // What the last export said, when it has something to say: the
+                // path it wrote, or why it could not write. It sits under the
+                // census, in the same plain figures, because it is a fact about
+                // the world rather than a command on the bar.
+                if let Some(notice) = notice {
+                    status_line(ui, notice);
+                }
             });
+    }
+
+    /// Where the zoom pill sits, given the canvas rectangle: the bottom-right
+    /// corner, floating a margin in from the edge.
+    fn zoom_pill_rect(canvas: egui::Rect) -> egui::Rect {
+        egui::Rect::from_min_size(
+            canvas.max
+                - egui::vec2(
+                    ZOOM_PILL_MARGIN + ZOOM_PILL_WIDTH,
+                    ZOOM_PILL_MARGIN + ZOOM_PILL_HEIGHT,
+                ),
+            egui::vec2(ZOOM_PILL_WIDTH, ZOOM_PILL_HEIGHT),
+        )
+    }
+
+    /// Draw the zoom pill over the canvas and apply its presses.
+    ///
+    /// The camera belongs to the map, so its controls sit on the map: zoom out,
+    /// the current percentage, zoom in, and **Fit**, floating in the corner the
+    /// reader's eye returns to. **Fit** measures the canvas and shows the whole
+    /// planet; it is applied after the panels settle, in the canvas's own frame.
+    ///
+    /// Returns true when the pointer is over the pill, so the canvas can leave
+    /// the press, the drag and the scroll to the controls sitting on top of it.
+    fn zoom_pill(&mut self, ui: &mut egui::Ui, canvas: egui::Rect) -> bool {
+        let pill = Self::zoom_pill_rect(canvas);
+        // A canvas too small for the pill shows no pill rather than a clipped
+        // one: at the minimum window there is always room, but a legend can
+        // still squeeze the map, and a half-drawn control is worse than none.
+        if !canvas.contains_rect(pill) {
+            return false;
+        }
+
+        let painter = ui.painter().with_clip_rect(canvas);
+        painter.rect_filled(pill, egui::CornerRadius::same(6), CHROME_PANEL_VEIL);
+        painter.rect_stroke(
+            pill,
+            egui::CornerRadius::same(6),
+            Stroke::new(1.0, CHROME_EDGE),
+            egui::StrokeKind::Inside,
+        );
+
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(pill.shrink2(egui::vec2(8.0, 0.0)))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            |ui| {
+                if ui.button("➖").on_hover_text(self.t("Zoom out")).clicked() {
+                    self.zoom = (self.zoom * 0.75).clamp(MIN_ZOOM, MAX_ZOOM);
+                }
+                ui.label(format!("{:.0}%", self.zoom * 100.0));
+                if ui.button("➕").on_hover_text(self.t("Zoom in")).clicked() {
+                    self.zoom = (self.zoom * 1.33).clamp(MIN_ZOOM, MAX_ZOOM);
+                }
+                if ui
+                    .button(self.t("⤢ Fit"))
+                    .on_hover_text(self.t("Fit the whole world in the window"))
+                    .clicked()
+                {
+                    self.pending_fit = true;
+                }
+            },
+        );
+
+        ui.rect_contains_pointer(pill)
     }
 }
 
@@ -5143,11 +5446,20 @@ impl MapViewer {
             self.focus_on(rect, x, y, zoom);
         }
 
-        if response.dragged() {
+        // The zoom pill sits on the canvas, so the canvas must leave the press,
+        // the drag and the scroll to it: a press on the pill is a press on the
+        // camera, not a pan of the map.
+        let pill = Self::zoom_pill_rect(rect);
+        let over_pill = ui
+            .ctx()
+            .pointer_hover_pos()
+            .is_some_and(|pointer| pill.contains(pointer));
+
+        if response.dragged() && !over_pill {
             self.offset += response.drag_delta();
         }
 
-        if ui.rect_contains_pointer(rect) {
+        if !over_pill && ui.rect_contains_pointer(rect) {
             let scroll = ui.ctx().input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
                 let old_zoom = self.zoom;
@@ -5219,7 +5531,7 @@ impl MapViewer {
                     egui::vec2(rect.width().min(520.0), 34.0),
                 );
                 let painter = ui.painter().with_clip_rect(rect);
-                painter.rect_filled(strip, 4.0, Color32::from_rgba_unmultiplied(12, 16, 28, 224));
+                painter.rect_filled(strip, 4.0, CHROME_VEIL);
                 let text = format!(
                     "🔴 {} — {}",
                     self.t(live_label),
@@ -5235,8 +5547,15 @@ impl MapViewer {
             }
         }
 
+        // ── ZOOM PILL ─────────────────────────────────────────────────────────
+        // Drawn after the map, so it floats over it, and before the hover card,
+        // so a card opened over the pill is never buried under it. The pointer
+        // over the pill is not a pointer over the map: the guard above keeps the
+        // canvas from panning or zooming beneath it.
+        self.zoom_pill(ui, rect);
+
         // ── HOVER INSPECTION TOOLTIP ──────────────────────────────────────────
-        if let Some(mouse_pos) = response.hover_pos() {
+        if let Some(mouse_pos) = response.hover_pos().filter(|_| !over_pill) {
             let map_x = ((mouse_pos.x - rect.min.x - self.offset.x) / self.zoom).floor() as isize;
             let map_y = ((mouse_pos.y - rect.min.y - self.offset.y) / self.zoom).floor() as isize;
 
@@ -6037,6 +6356,183 @@ mod tests {
         says("▶ Begin — 1. Geology & Erosion");
     }
 
+    /// A long seed used to split the bar in two: the seed label wrapped at the
+    /// space between "Seed" and the number, so the bar grew a row and the map
+    /// underneath moved. The seed is a chip now, and a chip never wraps.
+    #[test]
+    fn a_long_seed_never_wraps_the_top_bar() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+        let seed = u64::MAX;
+        let mut viewer = MapViewer::new(Genesis::new(seed));
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1720.0, 1040.0));
+
+        // The seed is painted twice — once in the bar's chip and once on the
+        // cold-start plate — so the test keeps the topmost spelling.
+        let mut seed_rect: Option<egui::Rect> = None;
+        let mut title_rect: Option<egui::Rect> = None;
+        for frame in 0..3 {
+            let mut input = egui::RawInput::default();
+            input.screen_rect = Some(screen);
+            input.time = Some(1.0 + f64::from(frame));
+            let mut output = ctx.run_ui(input, |ui| viewer.frame_ui(ui));
+            for (text, rect) in drawn_text_rects(&output) {
+                if text.contains("Seed") && text.contains(&seed.to_string()) {
+                    seed_rect = Some(match seed_rect {
+                        Some(best) if best.min.y <= rect.min.y => best,
+                        _ => rect,
+                    });
+                }
+                if text.contains("🌍 Atlas Viewer") {
+                    title_rect = Some(rect);
+                }
+            }
+            output.textures_delta.clear();
+        }
+
+        let seed_rect = seed_rect.expect("the bar never painted the seed");
+        let title_rect = title_rect.expect("the bar never painted the brand");
+
+        // One line tall: a wrapped pair at this type size would be over 30 px.
+        assert!(
+            seed_rect.height() < 26.0,
+            "the seed chip wrapped onto a second line: {seed_rect:?}"
+        );
+        // And it sits on the brand's row, not on a row of its own.
+        assert!(
+            (seed_rect.center().y - title_rect.center().y).abs() < 12.0,
+            "the seed is not on the brand's row: seed {seed_rect:?}, brand {title_rect:?}"
+        );
+        // The bar's first row is at the top of the window, so the chip's row has
+        // not been pushed down by anything above it.
+        assert!(
+            seed_rect.min.y < 60.0,
+            "the seed chip is not in the top bar: {seed_rect:?}"
+        );
+    }
+
+    /// The atlas wears its own chrome: the navy the cold-start plate is painted
+    /// in, not egui's default grey. The palette is a *palette* — it must not move
+    /// a single measurement, so the type scale is checked beside it.
+    #[test]
+    fn the_atlas_wears_its_own_navy_chrome() {
+        let mut style = egui::Style::default();
+        configure_style(&mut style);
+
+        assert!(style.visuals.dark_mode, "the atlas is a dark room");
+        assert_eq!(style.visuals.panel_fill, CHROME_PANEL);
+        assert_eq!(style.visuals.extreme_bg_color, CHROME_INK);
+        assert_eq!(style.visuals.faint_bg_color, CHROME_CHIP);
+        assert_eq!(style.visuals.selection.bg_fill, CHROME_ACCENT);
+
+        // One family of navies: the plate is darkest, the panel next, the chip
+        // lightest — and the chip's text is legible against the chip.
+        assert!(CHROME_PANEL.r() > CHROME_INK.r());
+        assert!(CHROME_CHIP.r() > CHROME_PANEL.r());
+        assert!(CHROME_CHIP_TEXT.r() > CHROME_CHIP.r() + 100);
+
+        // The palette never moved the type scale.
+        let body = style
+            .text_styles
+            .get(&egui::TextStyle::Body)
+            .expect("the body size is still installed");
+        assert_eq!(body.size, TEXT_BODY);
+    }
+
+    /// The zoom controls belong to the map's camera, so they float on the canvas
+    /// rather than sitting in the bar: a bar that carries the camera as well as
+    /// the scopes is a bar that wraps.
+    #[test]
+    fn the_zoom_pill_lives_on_the_canvas() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+        // A world of six acts is enough to paint the map and its pill.
+        let genesis = Genesis::for_test(7, Stage::HydroPolitics);
+        let mut viewer = MapViewer::new(genesis);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1720.0, 1040.0));
+
+        let mut fit_rect: Option<egui::Rect> = None;
+        let mut tier_rect: Option<egui::Rect> = None;
+        for frame in 0..3 {
+            let mut input = egui::RawInput::default();
+            input.screen_rect = Some(screen);
+            input.time = Some(1.0 + f64::from(frame));
+            let mut output = ctx.run_ui(input, |ui| viewer.frame_ui(ui));
+            for (text, rect) in drawn_text_rects(&output) {
+                if text.contains("⤢ Fit") {
+                    fit_rect = Some(rect);
+                }
+                if text.contains("Tier:") {
+                    tier_rect = Some(rect);
+                }
+            }
+            output.textures_delta.clear();
+        }
+
+        let fit_rect = fit_rect.expect("the canvas never painted the zoom pill");
+        let tier_rect = tier_rect.expect("the bar never painted the tier row");
+
+        // The camera is in the lower-right quadrant of the window, and the tier
+        // row is still in the bar: the camera is not in the bar any more.
+        assert!(
+            fit_rect.center().y > screen.height() * 0.5,
+            "the zoom pill is not on the canvas: {fit_rect:?}"
+        );
+        assert!(
+            fit_rect.center().x > screen.width() * 0.55,
+            "the zoom pill is not in the corner: {fit_rect:?}"
+        );
+        assert!(
+            tier_rect.center().y < 120.0,
+            "the tier row is not in the top bar: {tier_rect:?}"
+        );
+    }
+
+    /// The bar has to hold its shape at the smallest window the application
+    /// opens (1100 × 700): two rows, and every control on them. A crowded bar
+    /// used to wrap here first, which is where the seed's wrap showed up.
+    #[test]
+    fn the_bar_holds_its_shape_at_the_minimum_window() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+        let mut viewer = MapViewer::new(Genesis::new(u64::MAX));
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1100.0, 700.0));
+
+        let mut painted = Vec::new();
+        for frame in 0..3 {
+            let mut input = egui::RawInput::default();
+            input.screen_rect = Some(screen);
+            input.time = Some(1.0 + f64::from(frame));
+            let mut output = ctx.run_ui(input, |ui| viewer.frame_ui(ui));
+            painted = drawn_text_rects(&output);
+            output.textures_delta.clear();
+        }
+
+        // Every control the bar carries is painted, and all of them are in the
+        // bar's two rows: the chrome never grows to a third.
+        for needle in [
+            "🌍 Atlas Viewer",
+            "Seed 18446744073709551615",
+            "🌱 No world yet",
+            "🌐 English",
+            "💾 Export",
+            "☰",
+            "Tier:",
+            "Borders",
+        ] {
+            let rect = painted
+                .iter()
+                .filter(|(text, _)| text.contains(needle))
+                .map(|(_, rect)| *rect)
+                .min_by(|a, b| a.min.y.partial_cmp(&b.min.y).unwrap())
+                .unwrap_or_else(|| panic!("the bar never painted {needle:?}"));
+            assert!(
+                rect.max.y < 80.0,
+                "{needle:?} is not in the bar's two rows: {rect:?}"
+            );
+        }
+    }
+
     /// The engine's own constants belong in the configuration panel, not in a
     /// caption beside the seed: a reader who wants them opens the fold-out.
     #[test]
@@ -6112,6 +6608,48 @@ mod tests {
 
         says("🏛 LAND — Continents:");
         says("🌊 OCEAN — Basins:");
+    }
+
+    /// An export's notice belongs to the world's figures, not to the bar: a long
+    /// output path in the bar would widen the row that has to keep its shape. It
+    /// lands in the footer, under the census, even before there is a census to
+    /// sit under.
+    #[test]
+    fn an_export_notice_lands_in_the_footer_not_the_bar() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+        let mut viewer = MapViewer::new(Genesis::new(42));
+        let notice = "Exported exports/world_42_physical_16384x8192.png";
+        viewer.export_notice = Some(notice.to_string());
+
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1720.0, 1040.0));
+        let mut painted = Vec::new();
+        for frame in 0..3 {
+            let mut input = egui::RawInput::default();
+            input.screen_rect = Some(screen);
+            input.time = Some(1.0 + f64::from(frame));
+            let mut output = ctx.run_ui(input, |ui| viewer.frame_ui(ui));
+            painted = drawn_text_rects(&output);
+            output.textures_delta.clear();
+        }
+
+        let rect = painted
+            .iter()
+            .filter(|(text, _)| text.contains(notice))
+            .map(|(_, rect)| *rect)
+            .min_by(|a, b| a.min.y.partial_cmp(&b.min.y).unwrap())
+            .unwrap_or_else(|| panic!("the atlas never painted the export's notice"));
+
+        // The bar is the top two rows; the footer is the bottom of the window.
+        // A notice in the bar is exactly what used to make the bar grow.
+        assert!(
+            rect.min.y > screen.height() * 0.5,
+            "the export notice is still in the bar: {rect:?}"
+        );
+        assert!(
+            rect.max.y <= screen.height() + 1.0,
+            "the export notice is not inside the window: {rect:?}"
+        );
     }
 
     /// A world that is already physical — the state `--load` leaves behind —

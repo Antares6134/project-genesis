@@ -81,12 +81,17 @@ adds `world_civilizations_map.png`, `world_languages_map.png` and `world_religio
 ### Growing a world in the atlas
 
 `--viewer` opens the window first and grows nothing until it is asked. The **top bar** is always
-there — before a world exists as well as after — carrying the seed, the map scopes, the dressing
-controls (tier, borders, civilizations overlay, zoom) and the interface language. Controls that
-cannot apply yet are disabled rather than hidden, so the atlas never changes shape under your hand.
-The collapsible **🧬 Genesis** panel on the left is the whole pipeline, in fold-out sections — the
-seed, the world's data, the acts, and the world's own constants — and **☰** in the top bar folds it
-away when the map should have the whole window. On an empty canvas a single
+there — before a world exists as well as after — and it is built to keep its height: two rows whose
+items are all atomic, so a long seed or a long language name widens a row rather than pushing the
+map down a line. Row one carries the brand, the **seed chip** (click it to copy the seed), the
+**world-status chip** (the act in flight, or how many of the seven acts are grown), the **map scope**
+menu — the active scope stays on the bar, and the menu lists all eleven, physical first, then the
+world's peoples — and, at the right edge, the interface language, **💾 Export** and **☰**. Row two
+carries the dressing controls: the **tier** picker, the **borders** toggle and the **civilizations
+overlay**. Controls that cannot apply yet are disabled rather than hidden, so the atlas never changes
+shape under your hand. The collapsible **🧬 Genesis** panel on the left is the whole pipeline, in
+fold-out sections — the seed, the world's data, the acts, and the world's own constants — and **☰**
+in the top bar folds it away when the map should have the whole window. On an empty canvas a single
 **▶ Begin — 1. Geology & Erosion** press starts the world. The census stays in the footer, three
 lines of plain figures under the canvas:
 
@@ -115,7 +120,16 @@ world is disabled, and a canvas that is not 2:1 is offered at its native size al
 plate is resampled with the same Lanczos3 filter as the headless plates. Painting and PNG
 compression run on a worker thread, so the atlas stays responsive; nothing is overwritten, and
 the file is written to `exports/world_<seed>_<mapmode>_<width>x<height>.png`, with the path shown
-in the top bar when it lands.
+in the footer when it lands.
+
+The map's camera belongs to the map: a **zoom pill** floats in the canvas's bottom-right corner —
+**➖**, the current percentage, **➕** and **⤢ Fit** — so the scale can be changed without leaving
+the map or lengthening the bar. It never pans the map beneath it, and **Fit** measures the canvas
+and shows the whole planet.
+
+The window and the empty plate are one material: the panels, the bar, the chips and the separators
+are cut from the same navy as the canvas, and one accent marks what the reader has chosen — the
+active scope, the active tier, a selection.
 
 | Act | What it makes |
 | :--- | :--- |
@@ -314,7 +328,10 @@ scaled up because it is one connected, far larger domain.
    coasts. Geography-driven wastelands (desert hearts, high massifs, rainforest interiors,
    polar **and glacial** ice) are impassable, but corridors and the sea leave every settled
    province a path to water. The seeder draws each seed's own count within 7.5 % of the typed
-   mean, and the hierarchy is built bottom-up: ~5 provinces per Area by drawn mass, ~10 Areas
+   mean, and shares that budget across the world's settleable landmasses: every island large
+   enough to show a province is guaranteed one, and the rest is split by area, so a remote
+   island is never left blank and mistaken for impassable wilderness. The hierarchy is built
+   bottom-up: ~5 provinces per Area by drawn mass, ~10 Areas
    per Region, ~4 Regions per Superregion, so the draw cascades all the way up. No province may
    exceed four times the mean settled area: the
    largest are split by moving centres out of the smallest, so one shape can never swallow a
