@@ -860,6 +860,22 @@ const MAX_REGIONS_PER_CONTINENT: usize = 4096;
 /// only guards against a pathological sliver.
 const MAX_SUPERREGIONS_PER_CONTINENT: usize = 256;
 
+/// Largest share of the world's drawn land one political Continent may hold.
+///
+/// A Continent is a political reading of the map, not a geological one: real
+/// Afroeurasia is one landmass and three continents. A landmass that takes more
+/// than about a third of the drawn world is therefore cut into contiguous parts,
+/// so no single Continent can swallow the map. A third is about Asia's share of
+/// Earth's land — the largest continent the eye still accepts as one.
+const CONTINENT_MAX_SHARE: f32 = 0.35;
+
+/// Most parts one oversized Continent is cut into.
+///
+/// Three is the political ceiling, the way Afroeurasia reads as Europe, Asia and
+/// Africa. A landmass larger than three times the share is still cut into three:
+/// smaller pieces would stop reading as continents at all.
+const CONTINENT_MAX_PARTS: usize = 3;
+
 /// How many tightening sweeps the shape pass may take. Three is ample: the first
 /// does almost all of the work, the rest only settle the seams it creates.
 const AREA_RELAX_SWEEPS: usize = 3;
@@ -876,9 +892,9 @@ const MAX_OCEAN_AREA_PROVINCES: usize = 25;
 ///
 /// The seeds are the farthest-apart pair of members, so the cut follows the
 /// cluster's longest internal axis; each seed then claims neighbouring members
-/// with a capacity-limited Dijkstra. The capacities are `len / 2` and
-/// `len - len / 2` — they sum to the member count, so a connected cluster is
-/// always fully claimed and neither half can swallow the other whole.
+/// with a capacity-limited Dijkstra. Each side's capacity is half the cluster's
+/// weight — the capacities sum to it, so a connected cluster is always fully
+/// claimed and neither half can swallow the other whole.
 ///
 /// "Size" is measured by `weight`: in provinces for the upper tiers, in pixels
 /// for the land Areas, where the cut must balance drawn map rather than heads.
@@ -892,6 +908,49 @@ fn bisect_cluster(
     map_width: f32,
     weight: ClusterWeight,
 ) -> (Vec<u32>, Vec<u32>) {
+    let node_weight = |id: u32| weight.of(&provinces[id as usize]);
+    let total_weight = group
+        .iter()
+        .map(|&id| node_weight(id))
+        .sum::<usize>()
+        .max(2);
+    bisect_cluster_at(provinces, group, map_width, node_weight, total_weight / 2)
+}
+
+/// Bisect one cluster by a caller-supplied mass per node, halving the total.
+///
+/// A Continent's mainland is bisected with its anchored islands folded onto
+/// their coast, so a large offshore landmass counts in the piece it will follow
+/// after the cut rather than surprising one half with its whole weight.
+fn bisect_cluster_by_mass(
+    provinces: &[ProvinceNode],
+    group: &[u32],
+    map_width: f32,
+    mass: &[usize],
+) -> (Vec<u32>, Vec<u32>) {
+    let node_weight = |id: u32| mass[id as usize];
+    let total_weight = group
+        .iter()
+        .map(|&id| node_weight(id))
+        .sum::<usize>()
+        .max(2);
+    bisect_cluster_at(provinces, group, map_width, node_weight, total_weight / 2)
+}
+
+/// The body of [`bisect_cluster`], with the first side's capacity chosen by the
+/// caller: half the weight for an even cut, a third for the first slice of a
+/// three-part Continent. The second side takes whatever weight is left, so the
+/// capacities always sum to the cluster's own.
+fn bisect_cluster_at<W>(
+    provinces: &[ProvinceNode],
+    group: &[u32],
+    map_width: f32,
+    node_weight: W,
+    first_cap: usize,
+) -> (Vec<u32>, Vec<u32>)
+where
+    W: Fn(u32) -> usize,
+{
     let len = group.len();
     if len < 2 {
         return (group.to_vec(), Vec::new());
@@ -927,11 +986,13 @@ fn bisect_cluster(
     }
 
     let member_set: HashSet<u32> = group.iter().copied().collect();
-    let total_weight = weight.of_ids(provinces, group).max(2);
-    let caps = [
-        (total_weight / 2).max(1),
-        (total_weight - total_weight / 2).max(1),
-    ];
+    let total_weight = group
+        .iter()
+        .map(|&id| node_weight(id))
+        .sum::<usize>()
+        .max(2);
+    let first_cap = first_cap.clamp(1, total_weight.saturating_sub(1).max(1));
+    let caps = [first_cap, (total_weight - first_cap).max(1)];
 
     let mut side_of: BTreeMap<u32, usize> = BTreeMap::new();
     let mut side_len = [0usize; 2];
@@ -939,7 +1000,7 @@ fn bisect_cluster(
 
     for (side, &seed) in [seed_a, seed_b].iter().enumerate() {
         side_of.insert(seed, side);
-        side_len[side] += weight.of(&provinces[seed as usize]);
+        side_len[side] += node_weight(seed);
         heap.push(DijkState {
             cost: 0,
             id: seed,
@@ -960,7 +1021,7 @@ fn bisect_cluster(
                 continue;
             }
             side_of.insert(nb, side);
-            side_len[side] += weight.of(&provinces[nb as usize]);
+            side_len[side] += node_weight(nb);
             heap.push(DijkState {
                 cost: state.cost.saturating_add(edge_cost),
                 id: nb,
@@ -1010,7 +1071,7 @@ fn bisect_cluster(
         }
 
         side_of.insert(m, best_side);
-        side_len[best_side] += weight.of(&provinces[m as usize]);
+        side_len[best_side] += node_weight(m);
     }
 
     let mut first = Vec::with_capacity(len);
@@ -1141,6 +1202,177 @@ fn split_oversized_clusters(
 
     // Re-index clusters to continuous 1..=total IDs, exactly as the absorber does.
     reindex_clusters(cluster_ids)
+}
+
+/// Cut any Continent that would swallow the map into contiguous political parts.
+///
+/// Continents arrive from the province graph as physical landmasses: the whole of
+/// a Pangaean world can be one Continent, which is geographically true and
+/// politically useless. This pass keeps the graph's grouping — an island still
+/// belongs to the coast it is nearest — but a Continent holding more than
+/// [`CONTINENT_MAX_SHARE`] of the drawn land is cut into two or three connected
+/// parts by the same capacity-limited bisection the Area splitter uses.
+///
+/// The cut is by drawn mass, so the parts hold comparable amounts of map, and it
+/// follows province adjacency, so every part is one place. Only the mainland is
+/// cut: islands are moved to the part their anchor coast ended up in, which keeps
+/// the graph's nearest-coast promise intact and stops a distant island from
+/// becoming a piece of its own.
+///
+/// `max_continents` stays a hard ceiling on the tier. The split may only spend the
+/// room the ceiling has left, largest Continents first, so `1` still means one
+/// Pangaean hierarchy. Returns the number of Continents after the cut.
+fn split_oversized_continents(
+    provinces: &[ProvinceNode],
+    continent_ids: &mut [u32],
+    max_continents: usize,
+    map_width: f32,
+    progress: &Progress,
+) -> usize {
+    // Drawn mass includes every anchored island; the mainland group is what may
+    // actually be cut, because an island must follow its anchor.
+    let mut mass: BTreeMap<u32, usize> = BTreeMap::new();
+    let mut mainland: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for p in provinces.iter().skip(1) {
+        if p.pixel_count == 0 {
+            continue;
+        }
+        let index = p.id as usize;
+        if index >= continent_ids.len() {
+            continue;
+        }
+        let cid = continent_ids[index];
+        if cid == 0 {
+            continue;
+        }
+        *mass.entry(cid).or_insert(0) += p.pixel_count;
+        if p.anchor_id == 0 || p.anchor_id == p.id {
+            mainland.entry(cid).or_default().push(p.id);
+        }
+    }
+
+    let total_mass: usize = mass.values().sum();
+    let mut budget = max_continents.saturating_sub(mass.len());
+    if total_mass == 0 || budget == 0 {
+        return mass.len();
+    }
+
+    // A big island is anchored to the coast it is nearest. Fold its mass onto
+    // that anchor before the cut, so the pieces stay balanced once the islands
+    // follow their coast: an offshore landmass then counts in the half it will
+    // actually join, not as a surprise weight on whichever side it lands.
+    let mut anchored_mass = vec![0usize; provinces.len()];
+    for p in provinces.iter().skip(1) {
+        if p.pixel_count == 0 {
+            continue;
+        }
+        let anchor = if p.anchor_id == 0 || p.anchor_id == p.id {
+            p.id
+        } else {
+            p.anchor_id
+        };
+        if let Some(slot) = anchored_mass.get_mut(anchor as usize) {
+            *slot += p.pixel_count;
+        }
+    }
+
+    // Worst offender first, so a limited budget always buys the biggest cuts.
+    let mut order: Vec<u32> = mass.keys().copied().collect();
+    order.sort_by(|a, b| mass[b].cmp(&mass[a]).then(a.cmp(b)));
+
+    let oversized: Vec<u32> = order
+        .into_iter()
+        .filter(|cid| {
+            mass[cid] as f32 / total_mass as f32 > CONTINENT_MAX_SHARE
+                && mainland.get(cid).is_some_and(|group| group.len() >= 2)
+        })
+        .collect();
+    if oversized.is_empty() {
+        return mass.len();
+    }
+
+    progress.sub_step("Cutting the great continents", oversized.len() as u64);
+    let mut next_cid = continent_ids.iter().copied().max().unwrap_or(0) + 1;
+
+    for (step, &cid) in oversized.iter().enumerate() {
+        progress.tick(step as u64);
+        let group = &mainland[&cid];
+        let share = mass[&cid] as f32 / total_mass as f32;
+        let wanted = (share / CONTINENT_MAX_SHARE).ceil() as usize;
+        let parts = wanted
+            .clamp(2, CONTINENT_MAX_PARTS)
+            .min(1 + budget)
+            .min(group.len());
+        if parts < 2 {
+            continue;
+        }
+
+        let node_weight = |id: u32| anchored_mass[id as usize];
+        let total = group.iter().map(|&id| node_weight(id)).sum::<usize>();
+        let (first, rest) = if parts >= 3 {
+            // Cut a third off first, then halve what is left: both cuts follow
+            // the cluster's own shape and each side stops at its own capacity,
+            // so the three pieces hold comparable amounts of drawn map.
+            bisect_cluster_at(provinces, group, map_width, node_weight, (total / 3).max(1))
+        } else {
+            bisect_cluster_by_mass(provinces, group, map_width, &anchored_mass)
+        };
+
+        let mut pieces = vec![first];
+        if parts >= 3 {
+            let (second, third) =
+                bisect_cluster_by_mass(provinces, &rest, map_width, &anchored_mass);
+            pieces.push(second);
+            pieces.push(third);
+        } else {
+            pieces.push(rest);
+        }
+
+        let made = pieces.iter().filter(|piece| !piece.is_empty()).count();
+        if made < 2 {
+            continue;
+        }
+        for (offset, piece) in pieces.into_iter().enumerate() {
+            let piece_cid = next_cid + offset as u32;
+            for pid in piece {
+                continent_ids[pid as usize] = piece_cid;
+            }
+        }
+        next_cid += made as u32;
+        budget -= made - 1;
+        preview_tier_of(
+            progress,
+            "Cutting the great continents",
+            continent_ids,
+            false,
+        );
+    }
+
+    // An island was anchored to the nearest mainland coast; after the cut it must
+    // follow that coast's part, not be left on the old continent id the mainland
+    // has just left. Whole island landmasses share one anchor, so this moves them
+    // whole.
+    for p in provinces.iter().skip(1) {
+        if p.pixel_count == 0 {
+            continue;
+        }
+        let index = p.id as usize;
+        if index >= continent_ids.len() {
+            continue;
+        }
+        let anchor = p.anchor_id as usize;
+        if p.anchor_id != 0 && p.anchor_id != p.id && anchor < continent_ids.len() {
+            continent_ids[index] = continent_ids[anchor];
+        }
+    }
+    preview_tier_of(
+        progress,
+        "Cutting the great continents",
+        continent_ids,
+        false,
+    );
+
+    reindex_clusters(continent_ids)
 }
 
 /// Give every small island landmass its own single Area.
@@ -1512,21 +1744,27 @@ fn mean_frontier_edges(provinces: &[ProvinceNode], cluster_ids: &[u32]) -> f64 {
 
 /// Build the complete four-level geopolitical hierarchy, **bottom-up**:
 ///
-/// ```
+/// ```text
 /// Area       (provinces grouped by drawn mass, ~5 provinces; island chains united)
 ///   └─ Region  (whole Areas grouped, ~10 per region)
 ///        └─ Superregion  (whole Regions grouped, ~4 per superregion)
-///             └─ Continent  (the physical landmass cores)
+///             └─ Continent  (the landmass cores, cut again if one would swallow the map)
 /// ```
 ///
 /// Each tier is a grouping of the tier below, so its count is whatever the tier
 /// below actually produced: a world whose areas drift a few percent carries that
 /// drift into its regions, and the regions carry theirs into the superregions.
 /// Resolution changes the *shape* of a cluster, never the chain of counts.
+///
+/// `max_continents` is the ceiling on the tier. The province graph has already
+/// found that many landmass cores; a core that holds too much of the world is
+/// then cut into political parts ([`split_oversized_continents`]) without taking
+/// the tier past the ceiling.
 pub fn build_geopolitical_hierarchy(
     mut provinces: Vec<ProvinceNode>,
     seed: u64,
     map_width: f32,
+    max_continents: usize,
     progress: &Progress,
 ) -> GeopoliticalHierarchy {
     let n = provinces.len();
@@ -1549,8 +1787,8 @@ pub fn build_geopolitical_hierarchy(
 
     // ── 1. Continents ─────────────────────────────────────────────────────────
     progress.sub_step("Anchoring the continents", 0);
-    let continent_ids: Vec<u32> = provinces.iter().map(|p| p.continent_id).collect();
-    let continent_count = continent_ids
+    let mut continent_ids: Vec<u32> = provinces.iter().map(|p| p.continent_id).collect();
+    let core_count = continent_ids
         .iter()
         .filter(|&&c| c != 0)
         .copied()
@@ -1558,8 +1796,26 @@ pub fn build_geopolitical_hierarchy(
         .len();
     println!(
         "✓ Identified {} Continent(s) (All islands anchored to their nearest continent).",
-        continent_count
+        core_count
     );
+
+    // The graph's continents are physical landmasses, which is correct but not
+    // political: one Pangaean core can hold four fifths of the world. Cut the
+    // worst offenders into two or three contiguous parts before anything is
+    // clustered inside them, so Areas never straddle a new political border.
+    let continent_count = split_oversized_continents(
+        &provinces,
+        &mut continent_ids,
+        max_continents,
+        map_width,
+        progress,
+    );
+    if continent_count != core_count {
+        println!(
+            "  ✓ Cut the great continents into {} political Continent(s).",
+            continent_count
+        );
+    }
 
     // ── 2. Areas (the base of the chain) ─────────────────────────────────────
     println!("  Clustering Areas (within Continents)…");
@@ -1696,6 +1952,7 @@ pub fn build_geopolitical_hierarchy(
     let total_superregions = reindex_clusters(&mut superregion_of_region);
 
     for i in 1..n {
+        provinces[i].continent_id = continent_ids[i];
         provinces[i].region_id = province_region[i];
         provinces[i].superregion_id = superregion_of_region[provinces[i].region_id as usize];
     }
@@ -2165,7 +2422,7 @@ mod tests {
     #[test]
     fn the_built_hierarchy_never_exceeds_the_area_ceiling() {
         let hierarchy =
-            build_geopolitical_hierarchy(continent_grid(20, 20), 42, 100.0, &Progress::silent());
+            build_geopolitical_hierarchy(continent_grid(20, 20), 42, 100.0, 7, &Progress::silent());
 
         let mut areas: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
         for p in hierarchy.provinces.iter().filter(|p| p.id != 0) {
@@ -2218,8 +2475,9 @@ mod tests {
     #[test]
     fn the_tier_counts_follow_the_province_count_not_the_canvas() {
         let provinces = continent_grid(40, 50); // 2 000 provinces, one continent
-        let narrow = build_geopolitical_hierarchy(provinces.clone(), 7, 50.0, &Progress::silent());
-        let wide = build_geopolitical_hierarchy(provinces, 7, 500.0, &Progress::silent());
+        let narrow =
+            build_geopolitical_hierarchy(provinces.clone(), 7, 50.0, 7, &Progress::silent());
+        let wide = build_geopolitical_hierarchy(provinces, 7, 500.0, 7, &Progress::silent());
 
         assert_eq!(narrow.total_provinces, 2_000);
         // ~n / 200, ~n / 50 and ~n / 5, with room for the absorb and split sweeps.
@@ -2280,7 +2538,12 @@ mod tests {
             p.anchor_id = p.id; // every province is mainland
         }
 
-        let hierarchy = build_geopolitical_hierarchy(provinces, 11, 50.0, &Progress::silent());
+        let hierarchy = build_geopolitical_hierarchy(provinces, 11, 50.0, 7, &Progress::silent());
+
+        assert_eq!(
+            hierarchy.total_continents, 6,
+            "no continent here is oversized, so none is cut"
+        );
 
         assert!(
             (9..=11).contains(&hierarchy.total_superregions),
@@ -2297,6 +2560,83 @@ mod tests {
             "2 000 provinces gave {} areas",
             hierarchy.total_areas
         );
+    }
+
+    /// A world that is one landmass is still a political world: the builder must
+    /// cut it into the two or three continents its size asks for, each a connected
+    /// run of provinces and none of them a majority of the map.
+    #[test]
+    fn a_pangaean_continent_is_cut_into_political_parts() {
+        let provinces = continent_grid(40, 50); // 2 000 provinces, one landmass
+        let hierarchy = build_geopolitical_hierarchy(provinces, 7, 50.0, 7, &Progress::silent());
+
+        assert_eq!(
+            hierarchy.total_continents, CONTINENT_MAX_PARTS,
+            "one landmass holding the whole world must be cut into the political ceiling"
+        );
+
+        let ids: Vec<u32> = hierarchy.provinces.iter().map(|p| p.continent_id).collect();
+        let mut mass: BTreeMap<u32, usize> = BTreeMap::new();
+        for p in hierarchy.provinces.iter().skip(1) {
+            *mass.entry(p.continent_id).or_insert(0) += p.pixel_count;
+        }
+        assert_eq!(mass.len(), hierarchy.total_continents);
+
+        let total: usize = mass.values().sum();
+        for (&cid, &part) in &mass {
+            let share = part as f32 / total as f32;
+            assert!(
+                share < 0.5,
+                "continent {cid} still holds {:.1}% of the map",
+                100.0 * share
+            );
+            assert!(
+                share > 0.2,
+                "continent {cid} is a sliver at {:.1}% of the map",
+                100.0 * share
+            );
+            assert!(
+                area_is_connected(&hierarchy.provinces, &ids, cid),
+                "continent {cid} fell into disconnected pieces"
+            );
+        }
+    }
+
+    /// An island follows the coast it was anchored to, and its mass is balanced
+    /// into that piece: a heavy offshore landmass must not leave one continent
+    /// holding most of the map.
+    #[test]
+    fn islands_follow_their_anchor_across_the_cut() {
+        let mut provinces = continent_grid(40, 50);
+        // The whole top row is one heavy island landmass, anchored to province 1.
+        for p in provinces.iter_mut().skip(2).take(39) {
+            p.anchor_id = 1;
+            p.pixel_count = 6_000;
+        }
+
+        let hierarchy = build_geopolitical_hierarchy(provinces, 7, 50.0, 7, &Progress::silent());
+        let anchor = hierarchy.provinces[1].continent_id;
+        for p in hierarchy.provinces.iter().skip(2).take(39) {
+            assert_eq!(
+                p.continent_id, anchor,
+                "island province {} left its anchor's continent",
+                p.id
+            );
+        }
+
+        let mut mass: BTreeMap<u32, usize> = BTreeMap::new();
+        for p in hierarchy.provinces.iter().skip(1) {
+            *mass.entry(p.continent_id).or_insert(0) += p.pixel_count;
+        }
+        let total: usize = mass.values().sum();
+        for (&cid, &part) in &mass {
+            let share = part as f32 / total as f32;
+            assert!(
+                (0.2..0.4).contains(&share),
+                "continent {cid} holds {:.1}% of the map",
+                100.0 * share
+            );
+        }
     }
 
     /// Total frontier edges across a tier, charged once to each side of every

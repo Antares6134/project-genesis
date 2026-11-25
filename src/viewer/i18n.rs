@@ -686,13 +686,13 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Ler o mundo guardado desta semente",
             "Bu tohumun kayıtlı dünyasını oku",
         ],
-        "Write every act grown so far, up to act 6, to saved_seeds/world_<seed>_<width>x<height>.bin" => {
+        "Write every act grown so far, up to act 7 — the advanced configuration included — to saved_seeds/world_<seed>_<width>x<height>.bin" => {
             [
-                "Escribe cada acto ya generado, hasta el acto 6, en saved_seeds/world_<seed>_<width>x<height>.bin",
-                "Écrit chaque acte déjà généré, jusqu'à l'acte 6, dans saved_seeds/world_<seed>_<width>x<height>.bin",
-                "Schreibt jeden bisher gewachsenen Akt bis Akt 6 nach saved_seeds/world_<seed>_<width>x<height>.bin",
-                "Escreve cada ato já gerado, até ao ato 6, em saved_seeds/world_<seed>_<width>x<height>.bin",
-                "Şimdiye kadar oluşan her perdeyi, 6. perdeye kadar saved_seeds/world_<seed>_<width>x<height>.bin dosyasına yazar",
+                "Escribe cada acto ya generado, hasta el acto 7 —la configuración avanzada incluida—, en saved_seeds/world_<seed>_<width>x<height>.bin",
+                "Écrit chaque acte déjà généré, jusqu'à l'acte 7 — la configuration avancée comprise — dans saved_seeds/world_<seed>_<width>x<height>.bin",
+                "Schreibt jeden bisher gewachsenen Akt bis Akt 7 — samt erweiterter Konfiguration — nach saved_seeds/world_<seed>_<width>x<height>.bin",
+                "Escreve cada ato já gerado, até ao ato 7 — incluindo a configuração avançada — em saved_seeds/world_<seed>_<width>x<height>.bin",
+                "Şimdiye kadar oluşan her perdeyi, 7. perdeye kadar — gelişmiş yapılandırma dahil — saved_seeds/world_<seed>_<width>x<height>.bin dosyasına yazar",
             ]
         }
         "A seed is a whole number — Load needs one." => [
@@ -702,12 +702,19 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
             "Uma semente é um número inteiro — Carregar precisa de uma.",
             "Tohum bir tam sayıdır — Yükle için gerekli.",
         ],
-        "💾 Save automatically when act 3 and act 6 land" => [
-            "💾 Guardar automáticamente al completar los actos 3 y 6",
-            "💾 Enregistrer automatiquement à la fin des actes 3 et 6",
-            "💾 Automatisch speichern, wenn Akt 3 und Akt 6 fertig sind",
-            "💾 Guardar automaticamente ao concluir os atos 3 e 6",
-            "💾 3. ve 6. perde tamamlanınca otomatik kaydet",
+        "💾 Save automatically when act 3, act 6 and act 7 land" => [
+            "💾 Guardar automáticamente al completar los actos 3, 6 y 7",
+            "💾 Enregistrer automatiquement à la fin des actes 3, 6 et 7",
+            "💾 Automatisch speichern, wenn Akt 3, 6 und 7 fertig sind",
+            "💾 Guardar automaticamente ao concluir os atos 3, 6 e 7",
+            "💾 3., 6. ve 7. perde tamamlanınca otomatik kaydet",
+        ],
+        "These constants travel with the world: Save records them, and Load restores them." => [
+            "Estas constantes viajan con el mundo: Guardar las registra y Cargar las restaura.",
+            "Ces constantes voyagent avec le monde : Enregistrer les inscrit et Charger les restaure.",
+            "Diese Konstanten reisen mit der Welt: Speichern schreibt sie mit, Laden stellt sie wieder her.",
+            "Estas constantes viajam com o mundo: Guardar regista-as e Carregar restaura-as.",
+            "Bu sabitler dünyayla birlikte yolculuk eder: Kaydet onları yazar, Yükle geri getirir.",
         ],
         "📂 Saved worlds ({})" => [
             "📂 Mundos guardados ({})",
@@ -2774,6 +2781,180 @@ fn catalog(english: &str) -> Option<[&'static str; 5]> {
                 "Obergrenze der großen kontinentalen Kerne, die die topologische Gruppierung findet. 1 ergibt eine einzige pangäische Hierarchie, 7 eine erdähnlich zersplitterte Welt. Landmassen jenseits der Grenze werden an den nächsten Kern verankert, genau wie eine Insel.",
                 "Limite dos principais núcleos continentais encontrados pelo agrupamento topológico. 1 dá uma única hierarquia pangeia; 7, um mundo fraturado como a Terra. As massas de terra além do limite ancoram-se ao núcleo mais próximo, tal como uma ilha.",
                 "Topolojik kümelemenin bulduğu büyük kıta çekirdeklerinin üst sınırı. 1 tek bir Pangea hiyerarşisi, 7 Dünya benzeri parçalanmış bir dünya verir. Sınırın ötesindeki kara kütleleri, tıpkı bir ada gibi en yakın çekirdeğe bağlanır.",
+            ]
+        }
+        // ── The history act's configuration ─────────────────────────────────
+        "🧭 Land provinces & wastelands" => [
+            "🧭 Provincias terrestres y yermos",
+            "🧭 Provinces terrestres et terres désolées",
+            "🧭 Landprovinzen und Ödländer",
+            "🧭 Províncias terrestres e ermos",
+            "🧭 Kara illeri ve çorak topraklar",
+        ],
+        "🌊 Marine provinces" => [
+            "🌊 Provincias marinas",
+            "🌊 Provinces marines",
+            "🌊 Marine Provinzen",
+            "🌊 Províncias marinhas",
+            "🌊 Deniz illeri",
+        ],
+        "🏺 Societies & states" => [
+            "🏺 Sociedades y estados",
+            "🏺 Sociétés et États",
+            "🏺 Gesellschaften und Staaten",
+            "🏺 Sociedades e Estados",
+            "🏺 Toplumlar ve devletler",
+        ],
+        "🛐 Religion & faiths" => [
+            "🛐 Religión y creencias",
+            "🛐 Religion et croyances",
+            "🛐 Religion und Glauben",
+            "🛐 Religião e crenças",
+            "🛐 Din ve inançlar",
+        ],
+        "🌱 Development & population" => [
+            "🌱 Desarrollo y población",
+            "🌱 Développement et population",
+            "🌱 Entwicklung und Bevölkerung",
+            "🌱 Desenvolvimento e população",
+            "🌱 Gelişim ve nüfus",
+        ],
+        "Act 3 — where the permanent ice lies, in degrees of latitude; act 1 reads the same belts when it cuts the coastlines." => {
+            [
+                "Acto 3: dónde yace el hielo permanente, en grados de latitud; el acto 1 lee las mismas franjas al recortar las costas.",
+                "Acte 3 — où se trouve la glace permanente, en degrés de latitude ; l'acte 1 lit les mêmes ceintures lorsqu'il découpe les littoraux.",
+                "Akt 3 — wo das ständige Eis liegt, in Breitengraden; Akt 1 liest dieselben Gürtel, wenn er die Küsten schneidet.",
+                "Ato 3 — onde está o gelo permanente, em graus de latitude; o ato 1 lê as mesmas faixas ao recortar as costas.",
+                "3. perde — kalıcı buzun bulunduğu enlemler; 1. perde kıyıları keserken aynı kuşakları okur.",
+            ]
+        }
+        "Act 4 — the land cut into provinces, and the wilderness left between them" => [
+            "Acto 4: la tierra dividida en provincias y la naturaleza que queda entre ellas",
+            "Acte 4 — la terre découpée en provinces et la nature laissée entre elles",
+            "Akt 4 — das Land in Provinzen gegliedert und die Wildnis dazwischen",
+            "Ato 4 — a terra dividida em províncias e a natureza que fica entre elas",
+            "4. perde — karanın illere bölünmesi ve aralarında kalan vahşi doğa",
+        ],
+        "Act 6 — the world ocean cut into marine provinces" => [
+            "Acto 6: el océano mundial dividido en provincias marinas",
+            "Acte 6 — l'océan mondial découpé en provinces marines",
+            "Akt 6 — der Weltmeer in Marineprovinzen gegliedert",
+            "Ato 6 — o oceano mundial dividido em províncias marinhas",
+            "6. perde — dünya okyanusunun deniz illerine bölünmesi",
+        ],
+        "Act 7 — how many cradles rise, and how readily farming and chiefdoms spread" => [
+            "Acto 7: cuántas cunas surgen y con qué facilidad se extienden la agricultura y los cacicazgos",
+            "Acte 7 — combien de berceaux s'élèvent et avec quelle facilité l'agriculture et les chefferies s'étendent",
+            "Akt 7 — wie viele Wiegen entstehen und wie bereitwillig Ackerbau und Häuptlingstümer sich ausbreiten",
+            "Ato 7 — quantos berços surgem e com que facilidade a agricultura e os chefados se espalham",
+            "7. perde — kaç beşiğin yükseldiği ve tarım ile şefliklerin ne kadar kolay yayıldığı",
+        ],
+        "Act 7 — how far local creeds fold into broader traditions" => [
+            "Acto 7: hasta qué punto los credos locales se pliegan en tradiciones más amplias",
+            "Acte 7 — jusqu'où les croyances locales se fondent dans des traditions plus larges",
+            "Akt 7 — wie weit sich lokale Glaubensformen in breitere Traditionen fügen",
+            "Ato 7 — até que ponto os credos locais se dobram em tradições mais amplas",
+            "7. perde — yerel inançların daha geniş geleneklere ne ölçüde katlandığı",
+        ],
+        "Act 7 — how fast realms develop, and how many people they hold" => [
+            "Acto 7: con qué rapidez se desarrollan los reinos y cuántas personas albergan",
+            "Acte 7 — la vitesse à laquelle les royaumes se développent et le nombre de personnes qu'ils abritent",
+            "Akt 7 — wie schnell sich Reiche entwickeln und wie viele Menschen sie tragen",
+            "Ato 7 — com que rapidez os reinos se desenvolvem e quantas pessoas albergam",
+            "7. perde — krallıkların ne kadar hızlı geliştiği ve kaç kişiyi barındırdığı",
+        ],
+        "↺ Reset this act's constants" => [
+            "↺ Restablecer las constantes de este acto",
+            "↺ Rétablir les constantes de cet acte",
+            "↺ Die Konstanten dieses Akts zurücksetzen",
+            "↺ Repor as constantes deste ato",
+            "↺ Bu perdenin sabitlerini sıfırla",
+        ],
+        "Every constant of this act back to the engine's default" => [
+            "Todas las constantes de este acto vuelven al valor por defecto del motor",
+            "Toutes les constantes de cet acte reviennent à la valeur par défaut du moteur",
+            "Alle Konstanten dieses Akts zurück auf den Standard der Engine",
+            "Todas as constantes deste ato voltam ao valor padrão do motor",
+            "Bu perdenin tüm sabitleri motorun varsayılanına döner",
+        ],
+        "Civilization level" => [
+            "Nivel de civilización",
+            "Niveau de civilisation",
+            "Zivilisationsniveau",
+            "Nível de civilização",
+            "Uygarlık düzeyi",
+        ],
+        "Society consolidation" => [
+            "Consolidación de sociedades",
+            "Consolidation des sociétés",
+            "Konsolidierung der Gesellschaften",
+            "Consolidação das sociedades",
+            "Toplum konsolidasyonu",
+        ],
+        "Religion consolidation" => [
+            "Consolidación religiosa",
+            "Consolidation religieuse",
+            "Religionskonsolidierung",
+            "Consolidação religiosa",
+            "Din konsolidasyonu",
+        ],
+        "Population multiplier" => [
+            "Multiplicador de población",
+            "Multiplicateur de population",
+            "Bevölkerungsmultiplikator",
+            "Multiplicador de população",
+            "Nüfus çarpanı",
+        ],
+        "Development pace" => [
+            "Ritmo de desarrollo",
+            "Rythme de développement",
+            "Entwicklungstempo",
+            "Ritmo de desenvolvimento",
+            "Gelişim hızı",
+        ],
+        "Scales the civilization the world grows: higher values draw more cradles and let farming and chiefdoms reach farther from them; lower values leave more of the map to foragers and herders." => {
+            [
+                "Escala la civilización que crece el mundo: valores más altos sortean más cunas y permiten que la agricultura y los cacicazgos lleguen más lejos; valores más bajos dejan más del mapa a cazadores-recolectores y pastores.",
+                "Fait varier la civilisation que le monde fait naître : des valeurs hautes tirent plus de berceaux et laissent l'agriculture et les chefferies s'étendre plus loin ; des valeurs basses laissent davantage de carte aux chasseurs-cueilleurs et aux pasteurs.",
+                "Skaliert die Zivilisation, die die Welt hervorbringt: Höhere Werte ziehen mehr Wiegen und lassen Ackerbau und Häuptlingstümer weiter reichen; niedrigere Werte überlassen mehr der Karte Jägern und Hirten.",
+                "Escala a civilização que o mundo faz crescer: valores mais altos sorteiam mais berços e deixam a agricultura e os chefados chegar mais longe; valores mais baixos deixam mais do mapa a caçadores-recolectores e pastores.",
+                "Dünyanın oluşturduğu uygarlığı ölçekler: yüksek değerler daha çok beşik seçer ve tarım ile şefliklerin daha uzağa ulaşmasını sağlar; düşük değerler haritanın daha çoğunu avcı-toplayıcılara ve çobanlara bırakır.",
+            ]
+        }
+        "How strongly neighbouring peoples of one kind merge into a single society. Higher values leave fewer, larger forager bands, herding peoples, farming villages and chiefdoms; lower values keep more small societies standing. States are never merged." => {
+            [
+                "Cuán intensamente se fusionan pueblos vecinos del mismo tipo en una sola sociedad. Valores altos dejan menos bandas de cazadores, pueblos pastores, aldeas agrícolas y cacicazgos, pero más grandes; valores bajos mantienen más sociedades pequeñas. Los estados nunca se fusionan.",
+                "Force avec laquelle des peuples voisins du même genre fusionnent en une seule société. Des valeurs hautes laissent moins de bandes de chasseurs, de peuples pasteurs, de villages agricoles et de chefferies, mais plus vastes ; des valeurs basses maintiennent davantage de petites sociétés. Les États ne fusionnent jamais.",
+                "Wie stark benachbarte Völker derselben Art zu einer Gesellschaft verschmelzen. Höhere Werte hinterlassen weniger, aber größere Jägerbanden, Hirtenvölker, Bauerndörfer und Häuptlingstümer; niedrigere Werte lassen mehr kleine Gesellschaften bestehen. Staaten werden nie verschmolzen.",
+                "Com que força povos vizinhos do mesmo tipo se fundem numa só sociedade. Valores altos deixam menos bandos de caçadores, povos pastores, aldeias agrícolas e chefados, mas maiores; valores baixos mantêm mais sociedades pequenas. Os Estados nunca se fundem.",
+                "Aynı türden komşu halkların tek bir toplumda ne kadar güçlü birleştiği. Yüksek değerler daha az ama daha büyük avcı grupları, çoban halkları, tarım köyleri ve şeflikler bırakır; düşük değerler daha çok küçük toplumun ayakta kalmasını sağlar. Devletler asla birleştirilmez.",
+            ]
+        }
+        "How strongly local creeds fold into broader traditions. Higher values lower every society's and superregion's faith ceiling, raise the bar for a schism, make new hearths, diasporas and residual faiths rarer, and dissolve the smallest traditions into the neighbour they share the longest border with — fewer, larger religions, each one unbroken ground; lower values do the opposite." => {
+            [
+                "Cuán intensamente se pliegan los credos locales en tradiciones más amplias. Valores altos bajan el techo de creencias de cada sociedad y superregión, elevan el listón para un cisma, hacen más raros los nuevos hogares, las diásporas y las creencias residuales, y disuelven las tradiciones más pequeñas en el vecino con el que comparten la frontera más larga: menos religiones, más grandes y cada una de una sola pieza; valores bajos hacen lo contrario.",
+                "Force avec laquelle les croyances locales se fondent dans des traditions plus larges. Des valeurs hautes abaissent le plafond de croyances de chaque société et super-région, élèvent le seuil d'un schisme, rendent plus rares les nouveaux foyers, les diasporas et les croyances résiduelles, et dissolvent les plus petites traditions dans le voisin avec lequel elles partagent la plus longue frontière : moins de religions, plus vastes et d'un seul tenant ; des valeurs basses font l'inverse.",
+                "Wie stark sich lokale Glaubensformen in breitere Traditionen fügen. Höhere Werte senken die Glaubensobergrenze jeder Gesellschaft und Superregion, erhöhen die Hürde für ein Schisma, machen neue Herde, Diasporen und Restglauben seltener und lösen die kleinsten Traditionen in dem Nachbarn auf, mit dem sie die längste Grenze teilen — weniger, größere Religionen, jede aus einem Stück; niedrigere Werte tun das Gegenteil.",
+                "Com que força os credos locais se dobram em tradições mais amplas. Valores altos baixam o teto de crenças de cada sociedade e super-região, elevam o limiar de um cisma, tornam mais raros os novos fogos, as diásporas e as crenças residuais, e dissolvem as tradições mais pequenas no vizinho com quem partilham a fronteira mais longa — menos religiões, maiores e cada uma de uma só peça; valores baixos fazem o contrário.",
+                "Yerel inançların daha geniş geleneklere ne kadar güçlü katlandığı. Yüksek değerler her toplumun ve üst bölgenin inanç tavanını düşürür, bir bölünme eşiğini yükseltir, yeni ocakları, diasporaları ve artık inançları daha seyrek yapar ve en küçük gelenekleri en uzun sınırı paylaştıkları komşunun içinde eritir: daha az, daha büyük ve her biri tek parça dinler; düşük değerler bunun tersini yapar.",
+            ]
+        }
+        "Multiplies how fast every state climbs the development axis after its founding. Higher values reach a later age with more developed governments and denser populations; lower values keep the world nearer its first cities." => {
+            [
+                "Multiplica la rapidez con que cada estado asciende por el eje de desarrollo tras su fundación. Valores altos alcanzan una era posterior, con gobiernos más desarrollados y poblaciones más densas; valores bajos mantienen el mundo más cerca de sus primeras ciudades.",
+                "Multiplie la vitesse à laquelle chaque État gravit l'axe de développement après sa fondation. Des valeurs hautes atteignent un âge plus tardif, avec des gouvernements plus développés et des populations plus denses ; des valeurs basses gardent le monde plus près de ses premières villes.",
+                "Multipliziert, wie schnell jeder Staat nach seiner Gründung die Entwicklungsachse erklimmt. Höhere Werte erreichen ein späteres Zeitalter mit entwickelteren Regierungen und dichteren Bevölkerungen; niedrigere Werte halten die Welt näher an ihren ersten Städten.",
+                "Multiplica a rapidez com que cada Estado sobe o eixo de desenvolvimento após a sua fundação. Valores altos alcançam uma era posterior, com governos mais desenvolvidos e populações mais densas; valores baixos mantêm o mundo mais perto das suas primeiras cidades.",
+                "Her devletin kuruluşundan sonra gelişim eksenini ne kadar hızlı tırmandığını çarpar. Yüksek değerler daha gelişmiş hükümetler ve daha yoğun nüfuslarla daha geç bir çağa ulaşır; düşük değerler dünyayı ilk şehirlerine daha yakın tutar.",
+            ]
+        }
+        "Scales every province's carrying capacity and the density at which a province counts as urban, so the world's peoples grow or shrink together without changing which provinces are cities. ×1.00 is the engine's own." => {
+            [
+                "Escala la capacidad de carga de cada provincia y la densidad a la que una provincia cuenta como urbana, de modo que los pueblos del mundo crecen o se reducen juntos sin cambiar qué provincias son ciudades. ×1,00 es el valor propio del motor.",
+                "Met à l'échelle la capacité de charge de chaque province et la densité à laquelle une province compte comme urbaine, afin que les peuples du monde croissent ou diminuent ensemble sans changer quelles provinces sont des villes. ×1,00 est la valeur propre du moteur.",
+                "Skaliert die Tragfähigkeit jeder Provinz und die Dichte, ab der eine Provinz als städtisch gilt, sodass die Völker der Welt gemeinsam wachsen oder schrumpfen, ohne zu ändern, welche Provinzen Städte sind. ×1,00 ist der Wert der Engine.",
+                "Escala a capacidade de carga de cada província e a densidade a partir da qual uma província conta como urbana, para que os povos do mundo cresçam ou diminuam juntos sem mudar quais províncias são cidades. ×1,00 é o valor próprio do motor.",
+                "Her ilin taşıma kapasitesini ve bir ilin kentsel sayıldığı yoğunluğu birlikte ölçekler; böylece dünyanın halkları hangi illerin şehir olduğu değişmeden birlikte büyür ya da küçülür. ×1,00 motorun kendi değeridir.",
             ]
         }
         "N" => ["N", "N", "N", "N", "K"],

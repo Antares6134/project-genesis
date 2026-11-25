@@ -40,6 +40,32 @@
 //! ceiling also caps how many daughters one schism may grow, so the map never
 //! has to undo an explosion it could have prevented.
 //!
+//! ## Shapes
+//!
+//! A ceiling is a *census*: it says how many creeds a society may keep, not where
+//! any of them lies. Folding by census alone can hand one keeper a band of ground
+//! a thousand kilometres from its own body, and a frontier walk that follows
+//! cheap ground can run a faith one province wide for a hundred kilometres. Both
+//! are shapes no history produced, so three passes put the map right:
+//!
+//! * `merge_small_faiths` folds a tradition that cannot hold its own ground into
+//!   the neighbour it shares the longest **land** frontier with, so every fold
+//!   grows the tradition already standing on the other side. It runs smallest
+//!   first, keeps a tradition that lives only on protected ground (a town
+//!   congregation, a port quarter, a displaced people), and stops when the world
+//!   holds the number of traditions its consolidation allows.
+//! * `repair_fragments` gives every survivor one body: a creed's land-connected
+//!   pieces are found, the largest and any piece holding a town, a port or the
+//!   faith's own hearth are kept, and every other piece is handed whole to the
+//!   neighbour it shares the longest border with.
+//! * `smooth_frontiers` takes back the fingers and ribbons: a province turns
+//!   when two thirds of its own land frontier already keeps another faith and at
+//!   least two neighbours keep it.
+//!
+//! All three read a [`FrontierIndex`], which distinguishes a land border from the
+//! sea link a narrow strait leaves — a creed that reaches across water is a
+//! congregation on an island, not a stripe.
+//!
 //! [`SocietyTier`]: crate::civilization::SocietyTier
 //! [`ReligionConfig::faiths_per_tier`]: crate::civilization::config::ReligionConfig::faiths_per_tier
 //! [`ReligionConfig::faiths_per_superregion`]: crate::civilization::config::ReligionConfig::faiths_per_superregion
@@ -54,7 +80,7 @@ use crate::geopolitics::{GeopoliticalHierarchy, ProvinceNode};
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
 
 use super::SocietyTier;
 
@@ -82,7 +108,7 @@ pub struct ProvinceLandscape {
 }
 
 /// One religion of the world: a creed and every place that keeps it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Religion {
     /// The seven-level cascade, exactly as the creed generator drew it.
     pub faith: Faith,
@@ -115,7 +141,7 @@ impl Religion {
 }
 
 /// One faith as it stands inside one realm's borders.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RealmFaith {
     pub religion: u16,
     pub provinces: u32,
@@ -124,7 +150,7 @@ pub struct RealmFaith {
 
 /// A realm's religious census. There is deliberately no state religion here yet:
 /// the atlas records what a realm's people keep, not what a throne patronises.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct RealmReligion {
     /// The faith most of the realm's people keep. Zero only for an empty realm.
     pub dominant: u16,
@@ -160,6 +186,87 @@ impl ReligionWorld {
         self.religions.get(id as usize - 1)
     }
 }
+// ─── THE LAND FRONTIER ──────────────────────────────────────────────────────
+
+/// A land frontier: which provinces share a land border, and how many pixel pairs
+/// long that border is.
+///
+/// The province graph's own [`ProvinceNode::neighbors`] deliberately mixes land
+/// borders with the sea links a narrow strait leaves, because a creed crosses
+/// both. Shape work has to keep them apart: two provinces on opposite sides of a
+/// channel are one sea apart, not one border apart, and a faith that reaches
+/// across water is a congregation on an island rather than a stripe. The history
+/// act measures this once, in the census, while it is walking every pixel anyway.
+///
+/// [`ProvinceNode::neighbors`]: crate::geopolitics::ProvinceNode
+pub type LandFrontier = BTreeMap<(u32, u32), u32>;
+
+/// The same frontier as one list per province — what every shape pass walks.
+#[derive(Clone, Debug, Default)]
+pub struct FrontierIndex {
+    neighbours: Vec<Vec<(u32, u32)>>,
+}
+
+impl FrontierIndex {
+    /// Lay a measured frontier out by province.
+    pub fn new(provinces: usize, frontier: &LandFrontier) -> Self {
+        let mut neighbours = vec![Vec::new(); provinces];
+        for (&(one, other), &shared) in frontier {
+            let (one, other) = (one as usize, other as usize);
+            if one >= provinces || other >= provinces || one == other {
+                continue;
+            }
+            neighbours[one].push((other as u32, shared));
+            neighbours[other].push((one as u32, shared));
+        }
+        Self { neighbours }
+    }
+
+    /// The provinces that share a land border with this one, and how long it is.
+    pub fn of(&self, province: usize) -> &[(u32, u32)] {
+        self.neighbours
+            .get(province)
+            .map_or(&[], |neighbours| neighbours.as_slice())
+    }
+
+    /// Whether two provinces share any land border at all.
+    pub fn touches(&self, province: usize, other: u32) -> bool {
+        self.of(province).iter().any(|&(near, _)| near == other)
+    }
+}
+
+/// Root of a tradition's union-find set, halving the path as it goes.
+fn faith_root(parent: &mut [u16], mut faith: u16) -> u16 {
+    while parent[faith as usize] != faith {
+        parent[faith as usize] = parent[parent[faith as usize] as usize];
+        faith = parent[faith as usize];
+    }
+    faith
+}
+
+/// Which religions share a land frontier, and how long it is.
+fn faith_frontier(assignment: &[u16], frontier: &FrontierIndex) -> BTreeMap<(u16, u16), u32> {
+    let mut borders: BTreeMap<(u16, u16), u32> = BTreeMap::new();
+    for index in 1..assignment.len() {
+        let one = assignment[index];
+        if one == 0 {
+            continue;
+        }
+        for &(neighbour, shared) in frontier.of(index) {
+            // One tally per pair, whichever way round the frontier is met.
+            if (neighbour as usize) <= index {
+                continue;
+            }
+            let other = assignment[neighbour as usize];
+            if other == 0 || other == one {
+                continue;
+            }
+            *borders.entry((one.min(other), one.max(other))).or_insert(0) += shared;
+        }
+    }
+    borders
+}
+
 // ─── THE DISTRIBUTION ───────────────────────────────────────────────────────
 
 /// Spread the world's faiths across its provinces and census what each realm
@@ -169,6 +276,8 @@ impl ReligionWorld {
 /// `origins[i]` is the `(origin realm, origin province)` of `faiths[i]`;
 /// `founding[realm]` is the religion id that realm follows after contact, and
 /// `displaced[realm]` is the faith a conversion displaced there, if any.
+/// `frontier` is the land frontier the census measured, which is what lets every
+/// shape pass below tell a border from a strait.
 ///
 /// Every inhabited province starts with its owner's founding faith. A realm that
 /// converted keeps the displaced faith in a share of its rural provinces, which
@@ -176,7 +285,8 @@ impl ReligionWorld {
 /// neighbours argue; the cleanup leaves believable one-province communities alone.
 /// Two consolidation passes — one before the frontier and one after it — keep
 /// each society and each mobile superregion at the handful of traditions it can
-/// really carry.
+/// really carry, and the shape passes between them fold what cannot hold its own
+/// ground into the neighbour it shares the longest border with.
 #[allow(clippy::too_many_arguments)]
 pub fn distribute_religions(
     mut faiths: Vec<Faith>,
@@ -190,6 +300,7 @@ pub fn distribute_religions(
     population: &[u64],
     landscapes: &[ProvinceLandscape],
     hierarchy: &GeopoliticalHierarchy,
+    frontier: &FrontierIndex,
     contexts: &[FaithContext],
     width: usize,
     config: &ReligionConfig,
@@ -199,6 +310,11 @@ pub fn distribute_religions(
     if faiths.is_empty() || n == 0 {
         return ReligionWorld::empty(n);
     }
+    // How many hearths the dawn seeded. The shape pass below reads this as the
+    // world's own measure of how many traditions there are to fold: at a
+    // consolidation of one every hearth keeps its own creeds, at ten ten hearths
+    // share a broad tradition.
+    let hearths = faiths.len();
 
     // ── 1. The ground each realm's faith already holds ──────────────────────
     let mut assignment = vec![0u16; n];
@@ -260,6 +376,7 @@ pub fn distribute_religions(
         population,
         landscapes,
         hierarchy,
+        frontier,
         contexts,
         config,
         rng,
@@ -294,6 +411,7 @@ pub fn distribute_religions(
         realm_tiers,
         population,
         hierarchy,
+        frontier,
         config,
     );
     consolidate_superregions(
@@ -303,6 +421,7 @@ pub fn distribute_religions(
         realm_tiers,
         population,
         hierarchy,
+        frontier,
         config,
     );
 
@@ -378,7 +497,32 @@ pub fn distribute_religions(
         assignment = next;
     }
 
-    // ── 7. Consolidation after the frontier ─────────────────────────────────
+    // ── 7. Shapes ───────────────────────────────────────────────────────────
+    // A province-level map is not a puzzle of disconnected patches. The folds
+    // above are a census — they say which creeds a society may keep, not where
+    // each one lies — so this is where the map is made to look like history:
+    // dissolve what cannot hold its own ground into the neighbour it shares the
+    // longest border with, and give every survivor one body plus the enclaves a
+    // town or a hearth can explain.
+    //
+    // How many traditions the world may keep: the dawn's hearths divided by the
+    // reader's consolidation, so ×1 leaves every hearth its own creeds and ×10
+    // folds ten hearths into one broad tradition.
+    let quota = ((hearths as f32 / config.faith_quota_divisor.max(0.01)).round() as usize)
+        .max(MIN_WORLD_FAITHS);
+    merge_small_faiths(
+        &mut assignment,
+        &faiths,
+        landscapes,
+        frontier,
+        hierarchy,
+        &protected,
+        quota,
+        config,
+    );
+    repair_fragments(&mut assignment, &faiths, frontier, &protected, origins);
+
+    // ── 8. Consolidation after the frontier ─────────────────────────────────
     // A faith may have crossed a border or been planted as a diaspora since the
     // first pass. The same two ceilings are applied again, so the final map
     // never keeps more traditions than its society or its superregion allows.
@@ -389,6 +533,7 @@ pub fn distribute_religions(
         realm_tiers,
         population,
         hierarchy,
+        frontier,
         config,
     );
     consolidate_superregions(
@@ -398,10 +543,27 @@ pub fn distribute_religions(
         realm_tiers,
         population,
         hierarchy,
+        frontier,
         config,
     );
+    // Those folds are aspatial by nature: a keeper receives ground wherever the
+    // realm or superregion holds a recension. Give the ruined shapes back their
+    // one body before the frontier is smoothed.
+    repair_fragments(&mut assignment, &faiths, frontier, &protected, origins);
 
-    // ── 8. One-province communities ─────────────────────────────────────────
+    // ── 9. Round the frontiers ──────────────────────────────────────────────
+    // The cost walk leaves fingers along rivers and ribbons along coasts. Two
+    // conservative sweeps take them back without touching a genuine border.
+    smooth_frontiers(
+        &mut assignment,
+        owner,
+        landscapes,
+        frontier,
+        &protected,
+        config.smooth_sweeps,
+    );
+
+    // ── 10. One-province communities ────────────────────────────────────────
     // A faith may live in a single province — a city congregation, a port
     // quarter, a displaced people — but a lone rural patch that no history
     // explains is speckle. Only the latter is swept into its neighbours.
@@ -584,6 +746,10 @@ fn fill_step_cost(
 /// `region_id`, because a state or a chiefdom really does keep regional
 /// churches. The tier's own ceiling also caps the daughters: a people that may
 /// keep three faiths cannot grow ten from one schism.
+///
+/// A daughter is a **place**, not a list of provinces that happen to share a
+/// region: it grows outward through the parent's own ground from its most
+/// populous province, so its shape is one body however ragged the region was.
 #[allow(clippy::too_many_arguments)]
 fn schism_large_faiths(
     faiths: &mut Vec<Faith>,
@@ -594,6 +760,7 @@ fn schism_large_faiths(
     population: &[u64],
     landscapes: &[ProvinceLandscape],
     hierarchy: &GeopoliticalHierarchy,
+    frontier: &FrontierIndex,
     contexts: &[FaithContext],
     config: &ReligionConfig,
     rng: &mut ChaCha8Rng,
@@ -686,11 +853,54 @@ fn schism_large_faiths(
                 .max_by_key(|province| population[**province as usize])
                 .unwrap_or(&members[0]);
             origins.push((realm, seat));
-            for province in members {
+            // The daughter keeps only the ground it can reach from its own
+            // hearth through the parent's provinces: a region of the parent's
+            // faith that is cut in two by another creed gives its daughter the
+            // half its hearth stands in, and the far half stays with the parent
+            // (or is taken by the next daughter along).
+            for province in grow_from(seat, &members, assignment, faith_id, frontier) {
                 assignment[province as usize] = new_id;
             }
         }
     }
+}
+
+/// The connected part of a faith's ground that can be reached from one province,
+/// staying inside the region that asked for a daughter.
+///
+/// `assignment` is read as the walk goes, so a province an earlier daughter has
+/// already taken is not walked through a second time: two sisters never share a
+/// province, and each one is one body.
+fn grow_from(
+    seat: u32,
+    members: &[u32],
+    assignment: &[u16],
+    parent: u16,
+    frontier: &FrontierIndex,
+) -> Vec<u32> {
+    let allowed: BTreeSet<u32> = members.iter().copied().collect();
+    let mut seen: BTreeSet<u32> = BTreeSet::new();
+    let mut queue: VecDeque<u32> = VecDeque::new();
+    let mut grown: Vec<u32> = Vec::new();
+    if allowed.contains(&seat) {
+        seen.insert(seat);
+        queue.push_back(seat);
+    }
+    while let Some(province) = queue.pop_front() {
+        grown.push(province);
+        for &(neighbour, _) in frontier.of(province as usize) {
+            if !allowed.contains(&neighbour) || neighbour as usize >= assignment.len() {
+                continue;
+            }
+            if assignment[neighbour as usize] != parent {
+                continue;
+            }
+            if seen.insert(neighbour) {
+                queue.push_back(neighbour);
+            }
+        }
+    }
+    grown
 }
 // ─── CONSOLIDATION ──────────────────────────────────────────────────────────
 
@@ -756,7 +966,10 @@ impl FaithCellStats {
 /// The ceiling is the whole point: a hunter-gatherer people that spans a
 /// continent is one tradition with two or three local recensions, not forty
 /// near-identical creeds. A state is left alone, because its local cults are
-/// what a state really looks like.
+/// what a state really looks like. The keepers a cell chooses are handed the
+/// ground of the faiths they absorb along their own border, so a fold grows the
+/// tradition that was already there instead of painting a patch of its colour
+/// wherever the census found a recension.
 fn consolidate_realms(
     assignment: &mut [u16],
     faiths: &[Faith],
@@ -764,6 +977,7 @@ fn consolidate_realms(
     realm_tiers: &[SocietyTier],
     population: &[u64],
     hierarchy: &GeopoliticalHierarchy,
+    frontier: &FrontierIndex,
     config: &ReligionConfig,
 ) {
     let n = assignment.len();
@@ -772,6 +986,7 @@ fn consolidate_realms(
         return;
     }
     let kinds: Vec<TraditionKind> = faiths.iter().map(tradition_kind).collect();
+    let borders = faith_frontier(assignment, frontier);
 
     // What each faith holds inside each realm, and which of its geographic
     // groups (superregion for the mobile tiers, region for the settled ones)
@@ -807,7 +1022,7 @@ fn consolidate_realms(
         if cap == usize::MAX || stats.len() <= cap {
             continue;
         }
-        let plan = plan_consolidation(stats, &kinds, cap);
+        let plan = plan_consolidation(stats, &kinds, &borders, cap);
         if !plan.is_empty() {
             plans[realm] = Some(plan);
         }
@@ -835,7 +1050,8 @@ fn consolidate_realms(
 /// This is the Tengrism of the steppe: many peoples, one family of creeds. The
 /// same planner runs on the whole superregion, but only for the two mobile
 /// tiers; a settled region's mosaic is left alone. A local recension still
-/// survives because the planner keeps one faith per region inside the family.
+/// survives because the planner keeps one faith per region inside the family,
+/// and each of those keepers receives only the ground it shares a border with.
 fn consolidate_superregions(
     assignment: &mut [u16],
     faiths: &[Faith],
@@ -843,6 +1059,7 @@ fn consolidate_superregions(
     realm_tiers: &[SocietyTier],
     population: &[u64],
     hierarchy: &GeopoliticalHierarchy,
+    frontier: &FrontierIndex,
     config: &ReligionConfig,
 ) {
     let n = assignment.len();
@@ -850,6 +1067,7 @@ fn consolidate_superregions(
         return;
     }
     let kinds: Vec<TraditionKind> = faiths.iter().map(tradition_kind).collect();
+    let borders = faith_frontier(assignment, frontier);
 
     // A cell is one superregion's ground held by one mobile tier. Only the
     // provinces in that cell are reassigned, so a faith that also lives in a
@@ -888,7 +1106,7 @@ fn consolidate_superregions(
         if cap == usize::MAX || stats.len() <= cap {
             continue;
         }
-        let plan = plan_consolidation(stats, &kinds, cap);
+        let plan = plan_consolidation(stats, &kinds, &borders, cap);
         if !plan.is_empty() {
             plans.insert(*key, plan);
         }
@@ -916,16 +1134,19 @@ fn consolidate_superregions(
 /// The leading tradition is the kind that holds the most ground. Its largest
 /// faith becomes the umbrella; one keeper is kept for every other kind with a
 /// real share of the ground, then one for each geographic group, then the
-/// largest of what remains. Every non-keeper falls to the keeper of its own kind
-/// (and within that kind to the largest, which keeps one tradition dominant),
-/// or — only when a cell has more kinds than its ceiling — to the keeper sharing
-/// its ground.
+/// largest of what remains.
+///
+/// Where a non-keeper goes is a question about the map, not the census: it falls
+/// to the keeper it shares the longest **land frontier** with, because that is
+/// how a creed actually gives way to its neighbour. Only when no keeper touches
+/// it does the old rule apply — its own kind, its own region, the largest.
 ///
 /// Deterministic throughout: every walk is over a sorted `BTreeMap` or a list
 /// with a total order.
 fn plan_consolidation(
     stats: &BTreeMap<u16, FaithCellStats>,
     kinds: &[TraditionKind],
+    borders: &BTreeMap<(u16, u16), u32>,
     cap: usize,
 ) -> BTreeMap<u16, u16> {
     let cap = cap.max(1);
@@ -1047,13 +1268,67 @@ fn plan_consolidation(
     }
 
     let mut plan = BTreeMap::new();
-    for &id in &ranked {
-        if kept.contains(&id) {
+    // Every faith's bordering faiths inside this cell, longest border first.
+    // Two faiths outside the cell never enter: a fold is a local affair.
+    let mut contacts: BTreeMap<u16, Vec<(u16, u32)>> = BTreeMap::new();
+    for (&(one, other), &shared) in borders {
+        if !stats.contains_key(&one) || !stats.contains_key(&other) {
+            continue;
+        }
+        contacts.entry(one).or_default().push((other, shared));
+        contacts.entry(other).or_default().push((one, shared));
+    }
+    for list in contacts.values_mut() {
+        list.sort_by(|(one, left), (other, right)| right.cmp(left).then_with(|| one.cmp(other)));
+    }
+    let touching =
+        |faith: u16| -> &[(u16, u32)] { contacts.get(&faith).map_or(&[], |list| list.as_slice()) };
+
+    // A faith gives way to the keeper it borders; a faith that borders only other
+    // losers follows the strongest of them, so a chain of little creeds finds the
+    // keeper at the end of the chain instead of jumping across the cell. Repeated
+    // until nothing more can be resolved, then whatever is left — a ring of
+    // losers, or an island creed with no land border at all — falls back to the
+    // census: its own kind, its own region, the largest keeper.
+    let losers: Vec<u16> = ranked
+        .iter()
+        .copied()
+        .filter(|id| !kept.contains(id))
+        .collect();
+    for _ in 0..losers.len() {
+        let mut progressed = false;
+        for &id in &losers {
+            if plan.contains_key(&id) {
+                continue;
+            }
+            let direct = touching(id)
+                .iter()
+                .filter(|(partner, _)| kept.contains(partner))
+                .max_by(|(one, left), (other, right)| left.cmp(right).then_with(|| other.cmp(one)))
+                .map(|&(keeper, _)| keeper);
+            if let Some(keeper) = direct {
+                plan.insert(id, keeper);
+                progressed = true;
+                continue;
+            }
+            if let Some(&(partner, _)) = touching(id).first()
+                && let Some(&keeper) = plan.get(&partner)
+            {
+                plan.insert(id, keeper);
+                progressed = true;
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+    for &id in &losers {
+        if plan.contains_key(&id) {
             continue;
         }
         let kind = kinds.get(id as usize - 1).copied();
         let group = stats[&id].dominant_group();
-        let target = keepers
+        let keeper = keepers
             .iter()
             .copied()
             .max_by(|&a, &b| {
@@ -1068,11 +1343,397 @@ fn plan_consolidation(
                 score(a).cmp(&score(b))
             })
             .unwrap_or(primary_faith);
-        if target != id {
-            plan.insert(id, target);
+        if keeper != id {
+            plan.insert(id, keeper);
         }
     }
     plan
+}
+
+// ─── SHAPES ─────────────────────────────────────────────────────────────────
+
+/// The floor a world may be folded down to.
+///
+/// Consolidation is a reader's wish for a coarser map, not a licence to leave a
+/// world with two religions. Eight is the point where the map still says
+/// something about the world it drew.
+const MIN_WORLD_FAITHS: usize = 8;
+
+/// Fold traditions that cannot hold their own ground into the neighbour they
+/// share the longest frontier with, until the world carries only the traditions
+/// its consolidation allows.
+///
+/// This is the pass that gives the Religions map its shapes. The ceilings above
+/// are a *census*: they say how many creeds a society may keep, not where any of
+/// them lies, and folding by census alone can hand one keeper a band of ground a
+/// thousand kilometres from its own body. Here every fold crosses a real land
+/// border and grows the tradition already standing on the other side, so a
+/// survivor is a body with a long edge rather than a scatter with many.
+///
+/// Smallest first, so little creeds pair off with each other instead of one giant
+/// absorbing every neighbour it touches. A tradition that lives only on protected
+/// ground — a town congregation, a port quarter, a displaced people — is an
+/// enclave the map must be able to show, and is never dissolved. The larger
+/// tradition keeps its name, its origin and its place in the palette; the smaller
+/// one becomes history.
+///
+/// Deterministic: every walk is over a sorted map or a list with a total order.
+fn merge_small_faiths(
+    assignment: &mut [u16],
+    faiths: &[Faith],
+    landscapes: &[ProvinceLandscape],
+    frontier: &FrontierIndex,
+    hierarchy: &GeopoliticalHierarchy,
+    protected: &BTreeSet<u32>,
+    quota: usize,
+    config: &ReligionConfig,
+) {
+    let n = assignment.len();
+    let total = faiths.len();
+    if total < 2 || n < 3 {
+        return;
+    }
+    let kinds: Vec<TraditionKind> = faiths.iter().map(tradition_kind).collect();
+
+    // What every tradition holds, and whether any of it is ground nobody
+    // protected — the ground a fold may take.
+    let mut provinces = vec![0u32; total + 1];
+    let mut ground = vec![0.0f32; total + 1];
+    let mut enclave = vec![true; total + 1];
+    for index in 1..n {
+        let faith = assignment[index] as usize;
+        if faith == 0 || faith > total {
+            continue;
+        }
+        provinces[faith] += 1;
+        ground[faith] += landscapes[index].area_km2;
+        if !protected.contains(&(index as u32)) {
+            enclave[faith] = false;
+        }
+    }
+
+    let borders = faith_frontier(assignment, frontier);
+    // A tradition with no land neighbour at all — an island's creed — may still
+    // join the mainland across the water. That is a real congregation, not a
+    // stripe, so the sea links are only a fallback.
+    let mut sea_links: BTreeMap<(u16, u16), u32> = BTreeMap::new();
+    for index in 1..n {
+        let one = assignment[index];
+        if one == 0 {
+            continue;
+        }
+        let Some(node) = hierarchy.provinces.get(index) else {
+            continue;
+        };
+        for &(neighbour, _) in &node.neighbors {
+            let other = assignment.get(neighbour as usize).copied().unwrap_or(0);
+            if other == 0 || other == one || frontier.touches(index, neighbour) {
+                continue;
+            }
+            *sea_links
+                .entry((one.min(other), one.max(other)))
+                .or_insert(0) += 1;
+        }
+    }
+
+    let mut parent: Vec<u16> = (0..=total as u16).collect();
+    let mut stuck: BTreeSet<u16> = BTreeSet::new();
+    loop {
+        let mut roots: Vec<u16> = (1..=total as u16)
+            .filter(|&faith| {
+                faith_root(&mut parent, faith) == faith && provinces[faith as usize] > 0
+            })
+            .collect();
+        if roots.len() < 2 {
+            break;
+        }
+        roots.sort_by(|&one, &other| {
+            provinces[one as usize]
+                .cmp(&provinces[other as usize])
+                .then_with(|| {
+                    ground[one as usize]
+                        .partial_cmp(&ground[other as usize])
+                        .unwrap_or(Ordering::Equal)
+                })
+                .then_with(|| one.cmp(&other))
+        });
+        // Over the quota every tradition is fair game; under it, only a speck.
+        let over_quota = roots.len() > quota;
+        let Some(mover) = roots.iter().copied().find(|faith| {
+            !enclave[*faith as usize]
+                && !stuck.contains(faith)
+                && (over_quota
+                    || (provinces[*faith as usize] as usize) < config.faith_min_provinces)
+        }) else {
+            break;
+        };
+
+        // Which surviving traditions this one touches, and how much frontier it
+        // shares with each. Land first; the sea only when there is no land.
+        let mut contact: BTreeMap<u16, (u32, u32)> = BTreeMap::new();
+        for (&(one, other), &shared) in &borders {
+            let root_one = faith_root(&mut parent, one);
+            let root_other = faith_root(&mut parent, other);
+            if root_one == root_other {
+                continue;
+            }
+            let partner = if root_one == mover {
+                root_other
+            } else if root_other == mover {
+                root_one
+            } else {
+                continue;
+            };
+            contact.entry(partner).or_insert((0, 0)).0 += shared;
+        }
+        if contact.is_empty() {
+            for (&(one, other), &links) in &sea_links {
+                let root_one = faith_root(&mut parent, one);
+                let root_other = faith_root(&mut parent, other);
+                if root_one == root_other {
+                    continue;
+                }
+                let partner = if root_one == mover {
+                    root_other
+                } else if root_other == mover {
+                    root_one
+                } else {
+                    continue;
+                };
+                contact.entry(partner).or_insert((0, 0)).1 += links;
+            }
+        }
+        let mover_kind = kinds.get(mover as usize - 1).copied();
+        // The neighbour with the longest shared frontier wins; a tie is broken
+        // by the land count, then by sharing the mover's tradition kind, then by
+        // the larger tradition, and finally by the lower id, so the same world
+        // always folds the same way.
+        let mut partner: Option<u16> = None;
+        let mut best: Option<(u32, u32, bool, u32)> = None;
+        for (&candidate, &(land, sea)) in &contact {
+            // An enclave keeps its ground and never grows: a town congregation,
+            // a port quarter, a displaced people is not a state religion.
+            if enclave[candidate as usize] {
+                continue;
+            }
+            let same_kind = mover_kind
+                .is_some_and(|kind| kinds.get(candidate as usize - 1).copied() == Some(kind));
+            let score = (land, sea, same_kind, provinces[candidate as usize]);
+            let better = match best {
+                None => true,
+                Some(current) => {
+                    score > current
+                        || (score == current && partner.is_none_or(|held| candidate < held))
+                }
+            };
+            if better {
+                best = Some(score);
+                partner = Some(candidate);
+            }
+        }
+        let Some(partner) = partner else {
+            // Nowhere to go: this creed is an island in every sense.
+            stuck.insert(mover);
+            continue;
+        };
+
+        let (survivor, absorbed) = if provinces[partner as usize] >= provinces[mover as usize] {
+            (partner, mover)
+        } else {
+            (mover, partner)
+        };
+        parent[absorbed as usize] = survivor;
+        provinces[survivor as usize] += provinces[absorbed as usize];
+        provinces[absorbed as usize] = 0;
+        ground[survivor as usize] += ground[absorbed as usize];
+        enclave[survivor as usize] = enclave[survivor as usize] && enclave[absorbed as usize];
+        stuck.clear();
+    }
+
+    // Every province now keeps the tradition its survivor kept.
+    for index in 1..n {
+        let faith = assignment[index];
+        if faith == 0 || faith as usize > total {
+            continue;
+        }
+        assignment[index] = faith_root(&mut parent, faith);
+    }
+}
+
+// ─── REPAIRING THE PIECES ───────────────────────────────────────────────────
+
+/// Give every tradition one body, plus the enclaves that history can explain.
+///
+/// A creed is a place before it is a colour: a religion holding three unrelated
+/// patches is a map error, not a history. This pass finds each tradition's
+/// land-connected pieces, keeps the largest — and any piece holding a town, a
+/// port, a displaced community or the faith's own hearth — and hands every other
+/// piece, *whole*, to the neighbour it shares the longest land frontier with, so
+/// the piece stays one piece. A piece with no land neighbour at all is an island
+/// congregation and is left where it is.
+///
+/// Run twice: a piece handed to its neighbour changes what that neighbour's own
+/// pieces look like.
+fn repair_fragments(
+    assignment: &mut [u16],
+    faiths: &[Faith],
+    frontier: &FrontierIndex,
+    protected: &BTreeSet<u32>,
+    origins: &[(u16, u32)],
+) {
+    let n = assignment.len();
+    if faiths.is_empty() || n < 3 {
+        return;
+    }
+    for _ in 0..2 {
+        let mut changed = false;
+        for faith in 1..=faiths.len() as u16 {
+            // Every land-connected piece of this faith's ground.
+            let mut seen = vec![false; n];
+            let mut pieces: Vec<Vec<u32>> = Vec::new();
+            for index in 1..n {
+                if assignment[index] != faith || seen[index] {
+                    continue;
+                }
+                seen[index] = true;
+                let mut piece = vec![index as u32];
+                let mut next = 0;
+                while next < piece.len() {
+                    let province = piece[next] as usize;
+                    next += 1;
+                    for &(neighbour, _) in frontier.of(province) {
+                        let other = neighbour as usize;
+                        if other < n && !seen[other] && assignment[other] == faith {
+                            seen[other] = true;
+                            piece.push(neighbour);
+                        }
+                    }
+                }
+                pieces.push(piece);
+            }
+            if pieces.len() < 2 {
+                continue;
+            }
+            let hearth = origins
+                .get(faith as usize - 1)
+                .map(|&(_, province)| province);
+            let body = pieces
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, piece)| piece.len())
+                .map(|(rank, _)| rank)
+                .unwrap_or(0);
+            for (rank, piece) in pieces.iter().enumerate() {
+                if rank == body {
+                    continue;
+                }
+                if piece
+                    .iter()
+                    .any(|&province| protected.contains(&province) || Some(province) == hearth)
+                {
+                    continue;
+                }
+                // Hand it to the neighbour it shares the longest border with.
+                let mut votes: BTreeMap<u16, u32> = BTreeMap::new();
+                for &province in piece {
+                    for &(neighbour, shared) in frontier.of(province as usize) {
+                        let other = assignment[neighbour as usize];
+                        if other != 0 && other != faith {
+                            *votes.entry(other).or_insert(0) += shared;
+                        }
+                    }
+                }
+                let Some((&target, _)) = votes.iter().max_by(|(one, left), (other, right)| {
+                    left.cmp(right).then_with(|| other.cmp(one))
+                }) else {
+                    continue;
+                };
+                for &province in piece {
+                    assignment[province as usize] = target;
+                }
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
+// ─── ROUNDING THE FRONTIERS ─────────────────────────────────────────────────
+
+/// Take back the fingers and ribbons a cost walk leaves.
+///
+/// A creed travels where the going is cheap — down a river, along a shore — and
+/// the frontier pass happily runs it one province wide for a hundred kilometres.
+/// No history looks like that. A province turns when two thirds of its own land
+/// frontier already keeps another faith and at least two neighbours keep it: a
+/// genuinely contested province stays where it is, and a headland with a single
+/// neighbour is never repainted by its only company. Protected ground — a seat, a
+/// diaspora quarter — never turns at all.
+///
+/// Two sweeps are enough to straighten a ribbon; more would start eating real
+/// borders.
+fn smooth_frontiers(
+    assignment: &mut [u16],
+    owner: &[u16],
+    landscapes: &[ProvinceLandscape],
+    frontier: &FrontierIndex,
+    protected: &BTreeSet<u32>,
+    sweeps: usize,
+) {
+    let n = assignment.len();
+    if sweeps == 0 || n < 3 {
+        return;
+    }
+    for _ in 0..sweeps {
+        let snapshot = assignment.to_vec();
+        let mut changed = false;
+        for index in 1..n {
+            if owner[index] == 0
+                || !landscapes[index].present
+                || protected.contains(&(index as u32))
+            {
+                continue;
+            }
+            let faith = snapshot[index];
+            if faith == 0 {
+                continue;
+            }
+            let mut votes: BTreeMap<u16, u32> = BTreeMap::new();
+            let mut total = 0u32;
+            for &(neighbour, shared) in frontier.of(index) {
+                let other = snapshot[neighbour as usize];
+                if other == 0 {
+                    continue;
+                }
+                *votes.entry(other).or_insert(0) += shared;
+                total += shared;
+            }
+            let Some((&best, &weight)) = votes
+                .iter()
+                .max_by(|(one, left), (other, right)| left.cmp(right).then_with(|| other.cmp(one)))
+            else {
+                continue;
+            };
+            if best == faith || weight * 3 < total * 2 {
+                continue;
+            }
+            let support = frontier
+                .of(index)
+                .iter()
+                .filter(|&&(neighbour, _)| snapshot[neighbour as usize] == best)
+                .count();
+            if support < 2 {
+                continue;
+            }
+            assignment[index] = best;
+            changed = true;
+        }
+        if !changed {
+            break;
+        }
+    }
 }
 
 // ─── DIASPORAS ──────────────────────────────────────────────────────────────
@@ -1594,38 +2255,47 @@ fn religion_adjacency(
 /// Give every religion its colour: the metaphysical root carries the hue, the
 /// religion the shade.
 ///
-/// The same greedy walk as the society palette, run inside each root's family: a
-/// religion takes the first shade none of its *same-root* neighbours is already
-/// wearing. Religions of different roots never compete, because their hue
-/// families are already distinct.
+/// The walk is greedy and **perceptual**: a religion takes the shade of its root's
+/// family that lies furthest from every same-root neighbour already painted,
+/// measured as ΔE\*ab so that "furthest" means what the eye means. It is not
+/// enough for two neighbouring faiths to wear two different indices of the family
+/// — the greedy first-fit could hand them the two most similar tones in it. A
+/// shade already worn next door scores zero and can only be chosen when the whole
+/// family is spoken for, which is what keeps a crowded root readable. Religions
+/// of different roots never compete, because their hue families are already
+/// distinct. Deterministic: ties go to the lower shade index.
 pub fn assign_religion_colors(
     roots: &[MetaphysicalRoot],
     adjacency: &BTreeMap<u16, Vec<u16>>,
 ) -> Vec<[u8; 3]> {
-    let mut chosen = vec![usize::MAX; roots.len()];
     let mut colors = vec![[0u8; 3]; roots.len()];
     for (rank, &root) in roots.iter().enumerate() {
-        let mut taken = [false; MetaphysicalRoot::SHADES];
-        if let Some(neighbours) = adjacency.get(&(rank as u16 + 1)) {
-            for &neighbour in neighbours {
-                if neighbour == 0 {
-                    continue;
-                }
-                let other = neighbour as usize - 1;
-                if other == rank || other >= roots.len() || roots[other] != root {
-                    continue;
-                }
-                let shade = chosen[other];
-                if shade < MetaphysicalRoot::SHADES {
-                    taken[shade] = true;
-                }
+        // Only religions already painted can constrain this one; a same-root
+        // neighbour later in the walk is constrained by *this* colour in turn, so
+        // the pair is still separated.
+        let neighbours: Vec<usize> = adjacency
+            .get(&(rank as u16 + 1))
+            .map(|neighbours| {
+                neighbours
+                    .iter()
+                    .filter_map(|&neighbour| neighbour.checked_sub(1))
+                    .map(|other| other as usize)
+                    .filter(|&other| other != rank && other < rank && roots[other] == root)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut best = (f32::MIN, 0usize);
+        for shade in 0..MetaphysicalRoot::SHADES {
+            let colour = root.shade(shade);
+            let room = neighbours
+                .iter()
+                .map(|&other| crate::civilization::delta_e(colour, colors[other]))
+                .fold(f32::MAX, f32::min);
+            if room > best.0 {
+                best = (room, shade);
             }
         }
-        let pick = (0..MetaphysicalRoot::SHADES)
-            .find(|&shade| !taken[shade])
-            .unwrap_or(0);
-        chosen[rank] = pick;
-        colors[rank] = root.shade(pick);
+        colors[rank] = root.shade(best.1);
     }
     colors
 }
@@ -1743,6 +2413,39 @@ mod tests {
         hierarchy
     }
 
+    /// The land frontier under a test hierarchy: the chain's own adjacencies, one
+    /// pixel pair per border, read straight off the graph.
+    fn land_of(hierarchy: &GeopoliticalHierarchy) -> FrontierIndex {
+        let mut frontier: LandFrontier = BTreeMap::new();
+        for node in hierarchy.provinces.iter().skip(1) {
+            for &(neighbour, _) in &node.neighbors {
+                if neighbour == 0 {
+                    continue;
+                }
+                frontier
+                    .entry((node.id.min(neighbour), node.id.max(neighbour)))
+                    .or_insert(10);
+            }
+        }
+        FrontierIndex::new(hierarchy.provinces.len(), &frontier)
+    }
+
+    /// True when every faith on a chain holds one unbroken run of provinces.
+    fn every_faith_is_one_run(assignment: &[u16]) -> bool {
+        let mut seen: BTreeSet<u16> = BTreeSet::new();
+        let mut previous = 0u16;
+        for &faith in assignment.iter().skip(1) {
+            if faith == 0 || faith == previous {
+                continue;
+            }
+            if !seen.insert(faith) {
+                return false;
+            }
+            previous = faith;
+        }
+        true
+    }
+
     /// Faiths forced into one tradition kind: animist totemists, all alike.
     fn same_kind_faiths(count: usize) -> Vec<Faith> {
         let mut roster = faiths(count);
@@ -1780,6 +2483,7 @@ mod tests {
             &[tier],
             &population,
             &hierarchy,
+            &land_of(&hierarchy),
             &ReligionConfig::default(),
         );
         assignment
@@ -1819,6 +2523,7 @@ mod tests {
             &population,
             &landscapes,
             &hierarchy,
+            &land_of(&hierarchy),
             &contexts,
             100,
             &config,
@@ -1851,6 +2556,7 @@ mod tests {
             &population,
             &landscapes,
             &hierarchy,
+            &land_of(&hierarchy),
             &contexts,
             100,
             &ReligionConfig::default(),
@@ -1932,6 +2638,7 @@ mod tests {
             &population,
             &landscapes,
             &hierarchy,
+            &land_of(&hierarchy),
             &contexts,
             100,
             &config,
@@ -1942,9 +2649,10 @@ mod tests {
 
     #[test]
     fn consolidation_caps_a_forager_people() {
-        // Sizes deliberately sum to 40 and leave one clear primary: after the
-        // ceiling the three keepers are 20, 5 and 5, and every other same-kind
-        // faith folds into the primary.
+        // Eight faiths on one forager chain; the tier's ceiling keeps three. The
+        // survivors are the three that hold the largest ground, and every other
+        // faith folds into the keeper it actually borders — so each survivor keeps
+        // one unbroken run instead of a scatter of distant patches.
         let sizes = [20u32, 5, 5, 5, 2, 1, 1, 1];
         let assignment = consolidated_world(SocietyTier::HunterGatherers, &sizes);
         let counts = faith_counts(&assignment);
@@ -1954,22 +2662,25 @@ mod tests {
             "a forager people should keep three faiths, not {}",
             counts.len()
         );
-        assert_eq!(counts.get(&1).copied().unwrap_or(0), 30);
-        assert_eq!(counts.get(&2).copied().unwrap_or(0), 5);
-        assert_eq!(counts.get(&3).copied().unwrap_or(0), 5);
+        assert_eq!(counts.values().sum::<u32>(), 40);
+        assert!(
+            every_faith_is_one_run(&assignment),
+            "a fold must grow a keeper, never split it: {assignment:?}"
+        );
     }
 
     #[test]
-    fn consolidation_keeps_a_dominant_faith() {
+    fn consolidation_keeps_the_leading_tradition_largest() {
         let sizes = [20u32, 5, 5, 5, 2, 1, 1, 1];
         let assignment = consolidated_world(SocietyTier::HunterGatherers, &sizes);
         let counts = faith_counts(&assignment);
         let total: u32 = counts.values().sum();
-        let dominant = counts.get(&1).copied().unwrap_or(0);
+        let largest = counts.values().copied().max().unwrap_or(0);
+        let leading = counts.get(&1).copied().unwrap_or(0);
         assert_eq!(total, 40);
-        assert!(
-            dominant * 4 >= total * 3,
-            "the leading tradition held {dominant}/{total}, not at least 75%"
+        assert_eq!(
+            leading, largest,
+            "the leading tradition must stay the largest of its cell"
         );
     }
 
@@ -2023,6 +2734,7 @@ mod tests {
             &[SocietyTier::HunterGatherers],
             &population,
             &hierarchy,
+            &land_of(&hierarchy),
             &ReligionConfig::default(),
         );
         let counts = faith_counts(&assignment);
@@ -2065,6 +2777,7 @@ mod tests {
             &[SocietyTier::HunterGatherers; 4],
             &population,
             &hierarchy,
+            &land_of(&hierarchy),
             &config,
         );
         let counts = faith_counts(&assignment);
@@ -2097,6 +2810,7 @@ mod tests {
             &[SocietyTier::States; 4],
             &population,
             &hierarchy,
+            &land_of(&hierarchy),
             &ReligionConfig::default(),
         );
         assert_eq!(
@@ -2136,6 +2850,7 @@ mod tests {
             &population,
             &landscapes,
             &hierarchy,
+            &land_of(&hierarchy),
             &contexts,
             &config,
             &mut rng,
@@ -2156,6 +2871,229 @@ mod tests {
         // Six superregions, but a forager people may keep only three faiths.
         let hierarchy = chain_grouped(60, 5, 10);
         assert_eq!(schism_forager(hierarchy, 3), 3);
+    }
+
+    /// A chain world of `nodes` provinces, all one realm, with one tradition per
+    /// run: `runs` lists how many provinces each faith holds.
+    fn runs_world(runs: &[u32]) -> (GeopoliticalHierarchy, Vec<u16>) {
+        let nodes: usize = runs.iter().map(|&size| size as usize).sum();
+        let hierarchy = chain(nodes);
+        let mut assignment = vec![0u16; nodes + 1];
+        let mut next = 1usize;
+        for (faith, &size) in runs.iter().enumerate() {
+            for _ in 0..size {
+                assignment[next] = faith as u16 + 1;
+                next += 1;
+            }
+        }
+        (hierarchy, assignment)
+    }
+
+    #[test]
+    fn a_faith_below_the_floor_folds_into_the_neighbour_it_borders() {
+        let (hierarchy, mut assignment) = runs_world(&[2, 3, 1]);
+        let landscapes = vec![landscape(); 7];
+        let roster = same_kind_faiths(3);
+        merge_small_faiths(
+            &mut assignment,
+            &roster,
+            &landscapes,
+            &land_of(&hierarchy),
+            &hierarchy,
+            &BTreeSet::new(),
+            6,
+            &ReligionConfig::default(),
+        );
+        let counts = faith_counts(&assignment);
+        assert_eq!(
+            counts.len(),
+            2,
+            "the one-province creed should have been folded, not kept: {counts:?}"
+        );
+        assert_eq!(counts.get(&2).copied().unwrap_or(0), 4);
+        assert!(every_faith_is_one_run(&assignment));
+    }
+
+    #[test]
+    fn a_town_congregation_is_never_dissolved_or_grown() {
+        // One small creed, one province, and that province is a town: the map must
+        // be able to show it. It neither disappears into the neighbour nor grows by
+        // swallowing the neighbour's ground.
+        let (hierarchy, mut assignment) = runs_world(&[4, 1]);
+        let landscapes = vec![landscape(); 6];
+        let roster = same_kind_faiths(2);
+        let protected: BTreeSet<u32> = BTreeSet::from([5u32]);
+        merge_small_faiths(
+            &mut assignment,
+            &roster,
+            &landscapes,
+            &land_of(&hierarchy),
+            &hierarchy,
+            &protected,
+            1,
+            &ReligionConfig::default(),
+        );
+        let counts = faith_counts(&assignment);
+        assert_eq!(
+            counts.len(),
+            2,
+            "an enclave is not a state religion: {counts:?}"
+        );
+        assert_eq!(counts.get(&2).copied().unwrap_or(0), 1);
+    }
+
+    #[test]
+    fn the_world_is_folded_down_to_its_quota() {
+        let (hierarchy, mut assignment) = runs_world(&[4, 3, 3, 3, 2, 2, 2, 1]);
+        let landscapes = vec![landscape(); 21];
+        let roster = same_kind_faiths(8);
+        merge_small_faiths(
+            &mut assignment,
+            &roster,
+            &landscapes,
+            &land_of(&hierarchy),
+            &hierarchy,
+            &BTreeSet::new(),
+            3,
+            &ReligionConfig::default(),
+        );
+        let counts = faith_counts(&assignment);
+        assert_eq!(
+            counts.len(),
+            3,
+            "a quota of three should leave three traditions, not {}",
+            counts.len()
+        );
+        assert!(every_faith_is_one_run(&assignment));
+        assert_eq!(counts.values().sum::<u32>(), 20);
+    }
+
+    #[test]
+    fn a_faith_split_in_two_is_repaired_into_one_body() {
+        let (hierarchy, mut assignment) = runs_world(&[2, 2, 2]);
+        // Faith 1 holds both ends of the chain, cut in two by faith 2.
+        assignment[1] = 1;
+        assignment[2] = 1;
+        assignment[3] = 2;
+        assignment[4] = 2;
+        assignment[5] = 1;
+        assignment[6] = 1;
+        let roster = same_kind_faiths(2);
+        repair_fragments(
+            &mut assignment,
+            &roster,
+            &land_of(&hierarchy),
+            &BTreeSet::new(),
+            // The hearth lies in the larger piece, so the far end is the enclave
+            // that has to be repaired rather than kept as a shrine.
+            &[(1, 3), (2, 5)],
+        );
+        assert!(
+            every_faith_is_one_run(&assignment),
+            "a split creed should keep one body: {assignment:?}"
+        );
+    }
+
+    #[test]
+    fn smoothing_takes_a_one_province_finger() {
+        let hierarchy = grid(3, 3);
+        let landscapes = vec![landscape(); 10];
+        let owner = vec![1u16; 10];
+        // Every province keeps the first faith except the middle one, which a
+        // cost walk left as a one-province island.
+        let mut assignment = vec![0u16];
+        assignment.extend(std::iter::repeat_n(1u16, 9));
+        assignment[5] = 2;
+        smooth_frontiers(
+            &mut assignment,
+            &owner,
+            &landscapes,
+            &land_of(&hierarchy),
+            &BTreeSet::new(),
+            2,
+        );
+        assert_eq!(
+            faith_counts(&assignment).len(),
+            1,
+            "the island should have been swept into its neighbours: {assignment:?}"
+        );
+    }
+
+    #[test]
+    fn neighbouring_faiths_of_one_root_get_the_most_contrasting_shades() {
+        // One religion with four same-root neighbours: each of them must be given
+        // the shade furthest from the tones already on its frontier, not merely the
+        // next index in the family.
+        let roots = vec![MetaphysicalRoot::Monotheism; 5];
+        let mut adjacency: BTreeMap<u16, Vec<u16>> = BTreeMap::new();
+        adjacency.insert(1, vec![2, 3, 4, 5]);
+        for other in 2..=5u16 {
+            adjacency.insert(other, vec![1]);
+        }
+        let colors = assign_religion_colors(&roots, &adjacency);
+        for other in 1..5 {
+            let distance = crate::civilization::delta_e(colors[0], colors[other]);
+            assert!(
+                distance > 8.0,
+                "neighbour {other} is only {distance:.1} from the first religion"
+            );
+        }
+    }
+
+    /// A rectangular grid of provinces, four-connected and all present — enough
+    /// to give one province more than two neighbours.
+    fn grid(width: usize, height: usize) -> GeopoliticalHierarchy {
+        let nodes = width * height;
+        let id_of = |x: usize, y: usize| (y * width + x + 1) as u32;
+        let mut provinces = vec![ProvinceNode {
+            id: 0,
+            center_x: 0.0,
+            center_y: 0.0,
+            pixel_count: 0,
+            neighbors: Vec::new(),
+            area_id: 0,
+            region_id: 0,
+            superregion_id: 0,
+            continent_id: 0,
+            anchor_id: 0,
+        }];
+        for y in 0..height {
+            for x in 0..width {
+                let mut neighbors = Vec::new();
+                if x > 0 {
+                    neighbors.push((id_of(x - 1, y), 10));
+                }
+                if x + 1 < width {
+                    neighbors.push((id_of(x + 1, y), 10));
+                }
+                if y > 0 {
+                    neighbors.push((id_of(x, y - 1), 10));
+                }
+                if y + 1 < height {
+                    neighbors.push((id_of(x, y + 1), 10));
+                }
+                provinces.push(ProvinceNode {
+                    id: id_of(x, y),
+                    center_x: x as f32 * 10.0,
+                    center_y: y as f32 * 10.0,
+                    pixel_count: 1,
+                    neighbors,
+                    area_id: 1,
+                    region_id: 1,
+                    superregion_id: 1,
+                    continent_id: 1,
+                    anchor_id: 0,
+                });
+            }
+        }
+        GeopoliticalHierarchy {
+            total_provinces: nodes,
+            total_areas: 1,
+            total_regions: 1,
+            total_superregions: 1,
+            total_continents: 1,
+            provinces,
+        }
     }
 
     fn ring(n: u16) -> BTreeMap<u16, Vec<u16>> {

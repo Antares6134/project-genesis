@@ -3,8 +3,10 @@
 //! Every constant the world generator reads, in one place, in the order the acts
 //! apply it: the planet's spin and its sea-level temperatures, the polar ice, the
 //! continental field and its coastlines, the orogeny that folds them, the rains
-//! that fall on them, the rivers that drain them, the provinces they are cut into
-//! and the continents those are gathered into.
+//! that fall on them, the rivers that drain them, the provinces they are cut into,
+//! the continents those are gathered into, and the dawn of history — how civilized
+//! the world grows, how strongly societies and creeds consolidate, how fast realms
+//! develop, and how many people they hold.
 //!
 //! Two rules shape this panel, and both are honest rather than convenient:
 //!
@@ -19,17 +21,19 @@
 //!   values have been moved off those constants says `edited` in its header, so a
 //!   reader can see at a glance where the planet was changed.
 //!
-//! The section, and every group inside it, is collapsible: the panel is 372 px
-//! wide and holds twenty-five sliders plus the acts, and a reader who is growing
-//! a world wants the acts in front of them, not the weathering model.
+//! The section, and every act inside it, is collapsible: the panel is 372 px
+//! wide and holds thirty sliders plus the acts, and a reader who is growing a
+//! world wants the acts in front of them, not the weathering model. The sliders
+//! are gathered under the act that reads them, so a reader changing the dawn of
+//! history is not scrolling past the orogeny to find it.
 
 use crate::core::fmt::thousands;
-use crate::pipeline::WorldGenSettings;
+use crate::pipeline::{Stage, WorldGenSettings};
 use eframe::egui::{self, RichText, SliderClamping};
 use std::ops::RangeInclusive;
 
 use super::i18n::Language;
-use super::{TEXT_BODY, caption};
+use super::{TEXT_BODY, caption, scroll_bar_gutter};
 
 /// The width a combo box gets in this panel: the panel is narrow, and the mode
 /// has to stay readable without widening it.
@@ -85,6 +89,12 @@ fn draw_section(
                     "Every constant of the engine, in the order the acts apply it. A value applies to the acts not yet grown — press ↺ on an act to grow it again.",
                 ),
             );
+            caption(
+                ui,
+                language.text(
+                    "These constants travel with the world: Save records them, and Load restores them.",
+                ),
+            );
 
             ui.horizontal(|ui| {
                 let reset = ui
@@ -111,8 +121,10 @@ fn draw_section(
             // would be thrown away when the world is handed back. The groups stay
             // readable — greyed — rather than lying about what they did.
             ui.add_enabled_ui(!busy, |ui| {
-                for group in Group::ALL {
-                    draw_group(ui, group, settings, defaults, &mut changed, force_open, language);
+                for act in ActSection::ALL {
+                    draw_act(
+                        ui, act, settings, defaults, &mut changed, force_open, language,
+                    );
                 }
             });
         });
@@ -131,60 +143,165 @@ fn section_title(edited: bool, language: Language) -> String {
     }
 }
 
+/// One act of creation, and the groups of constants it reads.
+///
+/// This is the panel's top level: a reader who wants the dawn of history opens
+/// Act 7, not a flat list that begins with the planet's spin.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ActSection {
+    Geology,
+    Climate,
+    Hydrology,
+    Provinces,
+    Geopolitics,
+    HydroPolitics,
+    History,
+}
+
+impl ActSection {
+    /// Every act, in the order the pipeline runs them.
+    const ALL: [ActSection; 7] = [
+        ActSection::Geology,
+        ActSection::Climate,
+        ActSection::Hydrology,
+        ActSection::Provinces,
+        ActSection::Geopolitics,
+        ActSection::HydroPolitics,
+        ActSection::History,
+    ];
+
+    /// The act whose title and reading order this section follows.
+    fn stage(self) -> Stage {
+        match self {
+            ActSection::Geology => Stage::Geology,
+            ActSection::Climate => Stage::Climate,
+            ActSection::Hydrology => Stage::Hydrology,
+            ActSection::Provinces => Stage::Provinces,
+            ActSection::Geopolitics => Stage::Geopolitics,
+            ActSection::HydroPolitics => Stage::HydroPolitics,
+            ActSection::History => Stage::History,
+        }
+    }
+
+    /// A stable id: the header carries a badge, so it cannot be the id.
+    fn id(self) -> &'static str {
+        match self {
+            ActSection::Geology => "settings_act_1",
+            ActSection::Climate => "settings_act_2",
+            ActSection::Hydrology => "settings_act_3",
+            ActSection::Provinces => "settings_act_4",
+            ActSection::Geopolitics => "settings_act_5",
+            ActSection::HydroPolitics => "settings_act_6",
+            ActSection::History => "settings_act_7",
+        }
+    }
+
+    /// The groups this act reads, in the order the specification lists them.
+    fn groups(self) -> &'static [Group] {
+        match self {
+            ActSection::Geology => &[Group::Coastlines, Group::Orogeny, Group::Weathering],
+            ActSection::Climate => &[Group::Planetary, Group::Climate],
+            ActSection::Hydrology => &[Group::Polar, Group::Hydrology],
+            ActSection::Provinces => &[Group::LandProvinces],
+            ActSection::Geopolitics => &[Group::Geopolitics],
+            ActSection::HydroPolitics => &[Group::OceanProvinces],
+            ActSection::History => &[
+                Group::HistorySocieties,
+                Group::HistoryReligion,
+                Group::HistoryDevelopment,
+            ],
+        }
+    }
+
+    /// True when any constant under this act has left the engine's default.
+    fn edited(self, settings: &WorldGenSettings, defaults: &WorldGenSettings) -> bool {
+        self.groups()
+            .iter()
+            .any(|group| group.edited(settings, defaults))
+    }
+
+    /// Put every group under this act back to the engine's defaults.
+    fn reset(self, settings: &mut WorldGenSettings, defaults: &WorldGenSettings) {
+        for group in self.groups() {
+            group.reset(settings, defaults);
+        }
+    }
+}
+
 /// One group of the specification: a handful of constants an act reads together.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Group {
-    Planetary,
-    Polar,
     Coastlines,
     Orogeny,
     Weathering,
+    Planetary,
     Climate,
+    Polar,
     Hydrology,
-    Geography,
+    LandProvinces,
     Geopolitics,
+    OceanProvinces,
+    HistorySocieties,
+    HistoryReligion,
+    HistoryDevelopment,
 }
 
 impl Group {
     /// Every group, in the order the acts apply them.
-    const ALL: [Group; 9] = [
-        Group::Planetary,
-        Group::Polar,
+    ///
+    /// The panel walks the act sections themselves; this list is the test's
+    /// guarantee that every group lives under exactly one of them.
+    #[cfg(test)]
+    const ALL: [Group; 13] = [
         Group::Coastlines,
         Group::Orogeny,
         Group::Weathering,
+        Group::Planetary,
         Group::Climate,
+        Group::Polar,
         Group::Hydrology,
-        Group::Geography,
+        Group::LandProvinces,
         Group::Geopolitics,
+        Group::OceanProvinces,
+        Group::HistorySocieties,
+        Group::HistoryReligion,
+        Group::HistoryDevelopment,
     ];
 
     /// A stable id: the header carries a badge, so it cannot be the id.
     fn id(self) -> &'static str {
         match self {
-            Group::Planetary => "settings_planetary",
-            Group::Polar => "settings_polar",
             Group::Coastlines => "settings_coastlines",
             Group::Orogeny => "settings_orogeny",
             Group::Weathering => "settings_weathering",
+            Group::Planetary => "settings_planetary",
             Group::Climate => "settings_climate",
+            Group::Polar => "settings_polar",
             Group::Hydrology => "settings_hydrology",
-            Group::Geography => "settings_geography",
+            Group::LandProvinces => "settings_land_provinces",
             Group::Geopolitics => "settings_geopolitics",
+            Group::OceanProvinces => "settings_ocean_provinces",
+            Group::HistorySocieties => "settings_history_societies",
+            Group::HistoryReligion => "settings_history_religion",
+            Group::HistoryDevelopment => "settings_history_development",
         }
     }
 
     fn title(self) -> &'static str {
         match self {
-            Group::Planetary => "🪐 Planetary & astronomical",
-            Group::Polar => "🧊 Polar glaciation",
             Group::Coastlines => "🗺 Continental layout & coastlines",
             Group::Orogeny => "⛰ Orogeny & tectonics",
             Group::Weathering => "💧 Weathering & erosion",
+            Group::Planetary => "🪐 Planetary & astronomical",
             Group::Climate => "🌧 Climate & atmospheric moisture",
+            Group::Polar => "🧊 Polar glaciation",
             Group::Hydrology => "🏞 Hydrology & rivers",
-            Group::Geography => "🧭 Geography, provinces & wastelands",
+            Group::LandProvinces => "🧭 Land provinces & wastelands",
             Group::Geopolitics => "👑 Geopolitical hierarchy",
+            Group::OceanProvinces => "🌊 Marine provinces",
+            Group::HistorySocieties => "🏺 Societies & states",
+            Group::HistoryReligion => "🛐 Religion & faiths",
+            Group::HistoryDevelopment => "🌱 Development & population",
         }
     }
 
@@ -192,15 +309,28 @@ impl Group {
     /// change — and what they would have to grow again for it to show.
     fn blurb(self) -> &'static str {
         match self {
-            Group::Planetary => "Act 2 — the planet's spin and its sea-level temperatures",
-            Group::Polar => "Acts 1 & 3 — where the permanent ice lies, in degrees of latitude",
             Group::Coastlines => "Act 1 — the continental field and its water line",
             Group::Orogeny => "Act 1 — the faults that raise the ranges",
             Group::Weathering => "Act 1 — how the land is worn down after it rises",
+            Group::Planetary => "Act 2 — the planet's spin and its sea-level temperatures",
             Group::Climate => "Act 2 — the moist atmosphere",
+            Group::Polar => {
+                "Act 3 — where the permanent ice lies, in degrees of latitude; act 1 reads \
+                 the same belts when it cuts the coastlines."
+            }
             Group::Hydrology => "Act 3 — what reaches the sea",
-            Group::Geography => "Acts 4 & 6 — the land and the ocean cut into provinces",
+            Group::LandProvinces => {
+                "Act 4 — the land cut into provinces, and the wilderness left between them"
+            }
             Group::Geopolitics => "Act 5 — how many continents the world is allowed",
+            Group::OceanProvinces => "Act 6 — the world ocean cut into marine provinces",
+            Group::HistorySocieties => {
+                "Act 7 — how many cradles rise, and how readily farming and chiefdoms spread"
+            }
+            Group::HistoryReligion => "Act 7 — how far local creeds fold into broader traditions",
+            Group::HistoryDevelopment => {
+                "Act 7 — how fast realms develop, and how many people they hold"
+            }
         }
     }
 
@@ -208,15 +338,6 @@ impl Group {
     fn reset(self, settings: &mut WorldGenSettings, defaults: &WorldGenSettings) {
         let d = defaults;
         match self {
-            Group::Planetary => {
-                settings.tidally_locked = d.tidally_locked;
-                settings.equator_temp = d.equator_temp;
-                settings.pole_temp = d.pole_temp;
-            }
-            Group::Polar => {
-                settings.polar_cap_start_lat_deg = d.polar_cap_start_lat_deg;
-                settings.polar_belt_start_lat_deg = d.polar_belt_start_lat_deg;
-            }
             Group::Coastlines => {
                 settings.sea_threshold = d.sea_threshold;
                 settings.continental_freq = d.continental_freq;
@@ -232,24 +353,46 @@ impl Group {
                 settings.erosion_droplets = d.erosion_droplets;
                 settings.thermal_iterations = d.thermal_iterations;
             }
+            Group::Planetary => {
+                settings.tidally_locked = d.tidally_locked;
+                settings.equator_temp = d.equator_temp;
+                settings.pole_temp = d.pole_temp;
+            }
             Group::Climate => {
                 settings.base_rainfall = d.base_rainfall;
                 settings.hadley_dry_depth = d.hadley_dry_depth;
                 settings.inland_factor_floor = d.inland_factor_floor;
                 settings.orographic_strength = d.orographic_strength;
             }
+            Group::Polar => {
+                settings.polar_cap_start_lat_deg = d.polar_cap_start_lat_deg;
+                settings.polar_belt_start_lat_deg = d.polar_belt_start_lat_deg;
+            }
             Group::Hydrology => {
                 settings.runoff_coefficient = d.runoff_coefficient;
                 settings.min_river_flow = d.min_river_flow;
             }
-            Group::Geography => {
+            Group::LandProvinces => {
                 settings.num_provinces = d.num_provinces;
-                settings.ocean_num_provinces = d.ocean_num_provinces;
                 settings.max_waste_share = d.max_waste_share;
                 settings.waste_cutoff = d.waste_cutoff;
             }
             Group::Geopolitics => {
                 settings.max_continents = d.max_continents;
+            }
+            Group::OceanProvinces => {
+                settings.ocean_num_provinces = d.ocean_num_provinces;
+            }
+            Group::HistorySocieties => {
+                settings.civilization_level = d.civilization_level;
+                settings.society_consolidation = d.society_consolidation;
+            }
+            Group::HistoryReligion => {
+                settings.religion_consolidation = d.religion_consolidation;
+            }
+            Group::HistoryDevelopment => {
+                settings.development_pace = d.development_pace;
+                settings.population_multiplier = d.population_multiplier;
             }
         }
     }
@@ -264,6 +407,51 @@ impl Group {
         self.reset(&mut probe, defaults);
         *settings != probe
     }
+}
+
+/// One act: its header, its groups, and the way back to the defaults.
+fn draw_act(
+    ui: &mut egui::Ui,
+    act: ActSection,
+    settings: &mut WorldGenSettings,
+    defaults: &WorldGenSettings,
+    changed: &mut bool,
+    force_open: Option<bool>,
+    language: Language,
+) {
+    let stage = act.stage();
+    let title = format!("{}. {}", stage.index(), language.text(stage.title()));
+    let header = if act.edited(settings, defaults) {
+        language.fill("{}  ·  edited", &[&title])
+    } else {
+        title
+    };
+
+    egui::CollapsingHeader::new(header)
+        .id_salt(act.id())
+        .open(force_open)
+        .default_open(false)
+        .show(ui, |ui| {
+            for group in act.groups() {
+                draw_group(
+                    ui, *group, settings, defaults, changed, force_open, language,
+                );
+            }
+
+            if act.edited(settings, defaults) {
+                ui.add_space(2.0);
+                if ui
+                    .add(egui::Button::new(language.text("↺ Reset this act's constants")).small())
+                    .on_hover_text(
+                        language.text("Every constant of this act back to the engine's default"),
+                    )
+                    .clicked()
+                {
+                    act.reset(settings, defaults);
+                    *changed = true;
+                }
+            }
+        });
 }
 
 /// One group: its header, its constants, and the way back to the defaults.
@@ -612,7 +800,7 @@ fn draw_constants(
             );
         }
 
-        Group::Geography => {
+        Group::LandProvinces => {
             count_setting(
                 ui,
                 changed,
@@ -623,21 +811,6 @@ fn draw_constants(
                 d.num_provinces,
                 250..=60_000,
                 250,
-                false,
-                language,
-            );
-            count_setting(
-                ui,
-                changed,
-                language.text("Marine provinces"),
-                language.text(
-                    "Marine provinces across the world ocean. Each world draws its own exact count from this mean (within 7.5 %); the ocean's basins, superregions, regions and areas follow it.",
-                ),
-                &thousands(d.ocean_num_provinces as f32),
-                &mut settings.ocean_num_provinces,
-                d.ocean_num_provinces,
-                25..=8_000,
-                25,
                 false,
                 language,
             );
@@ -666,6 +839,24 @@ fn draw_constants(
             );
         }
 
+        Group::OceanProvinces => {
+            count_setting(
+                ui,
+                changed,
+                language.text("Marine provinces"),
+                language.text(
+                    "Marine provinces across the world ocean. Each world draws its own exact count from this mean (within 7.5 %); the ocean's basins, superregions, regions and areas follow it.",
+                ),
+                &thousands(d.ocean_num_provinces as f32),
+                &mut settings.ocean_num_provinces,
+                d.ocean_num_provinces,
+                25..=8_000,
+                25,
+                false,
+                language,
+            );
+        }
+
         Group::Geopolitics => {
             count_setting(
                 ui,
@@ -678,6 +869,85 @@ fn draw_constants(
                 1..=16,
                 1,
                 false,
+                language,
+            );
+        }
+
+        Group::HistorySocieties => {
+            float_setting(
+                ui,
+                changed,
+                language.text("Civilization level"),
+                language.text("Scales the civilization the world grows: higher values draw more cradles and let farming and chiefdoms reach farther from them; lower values leave more of the map to foragers and herders."),
+                &format!("×{:.2}", d.civilization_level),
+                &mut settings.civilization_level,
+                d.civilization_level,
+                0.25..=3.00,
+                0.05,
+                "×",
+                2,
+                language,
+            );
+            float_setting(
+                ui,
+                changed,
+                language.text("Society consolidation"),
+                language.text("How strongly neighbouring peoples of one kind merge into a single society. Higher values leave fewer, larger forager bands, herding peoples, farming villages and chiefdoms; lower values keep more small societies standing. States are never merged."),
+                &format!("×{:.2}", d.society_consolidation),
+                &mut settings.society_consolidation,
+                d.society_consolidation,
+                0.25..=3.00,
+                0.05,
+                "×",
+                2,
+                language,
+            );
+        }
+
+        Group::HistoryReligion => {
+            float_setting(
+                ui,
+                changed,
+                language.text("Religion consolidation"),
+                language.text("How strongly local creeds fold into broader traditions. Higher values lower every society's and superregion's faith ceiling, raise the bar for a schism, make new hearths, diasporas and residual faiths rarer, and dissolve the smallest traditions into the neighbour they share the longest border with — fewer, larger religions, each one unbroken ground; lower values do the opposite."),
+                &format!("×{:.2}", d.religion_consolidation),
+                &mut settings.religion_consolidation,
+                d.religion_consolidation,
+                0.50..=10.00,
+                0.10,
+                "×",
+                2,
+                language,
+            );
+        }
+
+        Group::HistoryDevelopment => {
+            float_setting(
+                ui,
+                changed,
+                language.text("Development pace"),
+                language.text("Multiplies how fast every state climbs the development axis after its founding. Higher values reach a later age with more developed governments and denser populations; lower values keep the world nearer its first cities."),
+                &format!("×{:.2}", d.development_pace),
+                &mut settings.development_pace,
+                d.development_pace,
+                0.50..=2.00,
+                0.05,
+                "×",
+                2,
+                language,
+            );
+            float_setting(
+                ui,
+                changed,
+                language.text("Population multiplier"),
+                language.text("Scales every province's carrying capacity and the density at which a province counts as urban, so the world's peoples grow or shrink together without changing which provinces are cities. ×1.00 is the engine's own."),
+                &format!("×{:.2}", d.population_multiplier),
+                &mut settings.population_multiplier,
+                d.population_multiplier,
+                0.50..=2.00,
+                0.05,
+                "×",
+                2,
                 language,
             );
         }
@@ -720,7 +990,7 @@ fn float_setting<Num: egui::emath::Numeric>(
     decimals: usize,
     language: Language,
 ) {
-    if parameter_name(ui, name, *value == default, default_text, language) {
+    if parameter_name(ui, name, *value == default, default_text, language).clicked() {
         *value = default;
         *changed = true;
     }
@@ -761,7 +1031,7 @@ fn count_setting(
     logarithmic: bool,
     language: Language,
 ) {
-    if parameter_name(ui, name, *value == default, default_text, language) {
+    if parameter_name(ui, name, *value == default, default_text, language).clicked() {
         *value = default;
         *changed = true;
     }
@@ -792,7 +1062,7 @@ fn share_setting(
     language: Language,
 ) {
     let default_text = format!("{:.0}%", default * 100.0);
-    if parameter_name(ui, name, *value == default, &default_text, language) {
+    if parameter_name(ui, name, *value == default, &default_text, language).clicked() {
         *value = default;
         *changed = true;
     }
@@ -824,7 +1094,9 @@ fn mode_setting(
         !settings.tidally_locked,
         default_text,
         language,
-    ) {
+    )
+    .clicked()
+    {
         settings.tidally_locked = false;
         *changed = true;
     }
@@ -871,33 +1143,35 @@ fn mode_setting(
 /// The name of a parameter, with the ↺ that puts it back — on the right, where
 /// the eye already goes for a control that belongs to the row.
 ///
-/// Returns `true` when the reader asked for the default back. A parameter that
-/// *is* the default keeps its arrow, greyed: a control that vanishes is a
-/// control a reader has to hunt for.
+/// Returns the reset button's response, so the caller can tell whether the
+/// reader asked for the default back — and so a test can see where the way back
+/// was actually drawn. A parameter that *is* the default keeps its arrow,
+/// greyed: a control that vanishes is a control a reader has to hunt for.
 fn parameter_name(
     ui: &mut egui::Ui,
     name: &str,
     at_default: bool,
     default_text: &str,
     language: Language,
-) -> bool {
-    let mut reset = false;
+) -> egui::Response {
     ui.horizontal(|ui| {
         ui.label(RichText::new(name).size(TEXT_BODY));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .add_enabled(!at_default, egui::Button::new("↺").frame(false))
+            // In a right-to-left layout the first item added is the rightmost,
+            // so this holds the band egui's floating scroll bar paints over the
+            // panel's edge clear of the arrow: a ↺ flush with that edge would
+            // lie under the bar and never see a click — the bar would take the
+            // press and page the panel instead.
+            ui.add_space(scroll_bar_gutter(ui));
+            ui.add_enabled(!at_default, egui::Button::new("↺").frame(false))
                 .on_hover_text(language.fill("Back to the engine's default ({})", &[&default_text]))
                 .on_disabled_hover_text(
                     language.fill("Already the engine's default ({})", &[&default_text]),
                 )
-                .clicked()
-            {
-                reset = true;
-            }
-        });
-    });
-    reset
+        })
+        .inner
+    })
+    .inner
 }
 
 /// A parameter's hover card: the spec's sentence, and the default it returns to.
@@ -1030,22 +1304,22 @@ mod tests {
                 Box::new(|s| s.min_river_flow = 1_500.0),
             ),
             (
-                Group::Geography,
+                Group::LandProvinces,
                 "num_provinces",
                 Box::new(|s| s.num_provinces = 5_000),
             ),
             (
-                Group::Geography,
+                Group::OceanProvinces,
                 "ocean_num_provinces",
                 Box::new(|s| s.ocean_num_provinces = 8_000),
             ),
             (
-                Group::Geography,
+                Group::LandProvinces,
                 "max_waste_share",
                 Box::new(|s| s.max_waste_share = 0.0),
             ),
             (
-                Group::Geography,
+                Group::LandProvinces,
                 "waste_cutoff",
                 Box::new(|s| s.waste_cutoff = 0.90),
             ),
@@ -1053,6 +1327,31 @@ mod tests {
                 Group::Geopolitics,
                 "max_continents",
                 Box::new(|s| s.max_continents = 1),
+            ),
+            (
+                Group::HistorySocieties,
+                "civilization_level",
+                Box::new(|s| s.civilization_level = 2.0),
+            ),
+            (
+                Group::HistorySocieties,
+                "society_consolidation",
+                Box::new(|s| s.society_consolidation = 2.0),
+            ),
+            (
+                Group::HistoryReligion,
+                "religion_consolidation",
+                Box::new(|s| s.religion_consolidation = 2.0),
+            ),
+            (
+                Group::HistoryDevelopment,
+                "development_pace",
+                Box::new(|s| s.development_pace = 2.0),
+            ),
+            (
+                Group::HistoryDevelopment,
+                "population_multiplier",
+                Box::new(|s| s.population_multiplier = 1.05),
             ),
         ]
     }
@@ -1079,11 +1378,11 @@ mod tests {
         }
     }
 
-    /// The panel walks nine groups, and between them they hold the specification's
-    /// twenty-five constants — each of them once.
+    /// The panel walks thirteen groups, and between them they hold the
+    /// specification's thirty constants — each of them once.
     #[test]
     fn the_panel_walks_every_group_and_every_constant() {
-        assert_eq!(Group::ALL.len(), 9);
+        assert_eq!(Group::ALL.len(), 13);
         let mut counted: Vec<&str> = Vec::new();
         for group in Group::ALL {
             let owned: Vec<&str> = nudges()
@@ -1096,9 +1395,22 @@ mod tests {
         }
         assert_eq!(
             counted.len(),
-            25,
-            "the specification lists twenty-five constants"
+            30,
+            "the specification lists thirty constants"
         );
+    }
+
+    /// Every group lives under exactly one act, in the same order the panel
+    /// walks them. A group that fell out of an act would be a control a reader
+    /// could not reach.
+    #[test]
+    fn every_group_lives_under_exactly_one_act() {
+        let mut seen: Vec<Group> = Vec::new();
+        for act in ActSection::ALL {
+            assert!(!act.groups().is_empty(), "{act:?} has no groups");
+            seen.extend_from_slice(act.groups());
+        }
+        assert_eq!(seen, Group::ALL.to_vec());
     }
 
     /// The whole section must draw in a frame — every header, every slider, every
@@ -1238,5 +1550,67 @@ mod tests {
         }
 
         (ink, panel_rect)
+    }
+
+    /// The ↺ that puts a constant back must never lie under the panel's scroll
+    /// bar.
+    ///
+    /// egui's floating scroll bar is painted *over* the right edge of a scroll
+    /// area and senses every press in its `bar_width` band: a way back drawn
+    /// flush with that edge was dead — the bar took the press, expanded under
+    /// the pointer and paged the panel, and the default was never restored. The
+    /// row holds that band clear of the arrow, so the test draws one row in a
+    /// scroll area that reserves nothing itself, and asks where the arrow landed.
+    #[test]
+    fn the_way_back_never_lies_under_the_scroll_bar() {
+        use super::super::{GENESIS_PANEL_WIDTH, atlas_panel_frame, configure_style};
+
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1720.0, 1040.0));
+
+        let mut reset = egui::Rect::NOTHING;
+        let mut content_right = 0.0;
+        let mut bar_width = 0.0;
+
+        for frame in 0..3 {
+            let mut input = egui::RawInput::default();
+            input.screen_rect = Some(screen);
+            input.time = Some(1.0 + f64::from(frame));
+            let mut output = ctx.run_ui(input, |ui| {
+                egui::Panel::left("settings_reset_probe")
+                    .frame(atlas_panel_frame(ui.style()))
+                    .resizable(false)
+                    .exact_size(GENESIS_PANEL_WIDTH)
+                    .show(ui, |ui| {
+                        bar_width = ui.spacing().scroll.bar_width;
+                        // Deliberately no content margin: this is the row's own
+                        // clearance being measured, not the panel's.
+                        egui::ScrollArea::vertical()
+                            .id_salt("settings_reset_scroll")
+                            .show(ui, |ui| {
+                                content_right = ui.max_rect().right();
+                                reset = parameter_name(
+                                    ui,
+                                    "Equatorial temperature",
+                                    false,
+                                    "32 °C",
+                                    Language::English,
+                                )
+                                .rect;
+                            });
+                    });
+            });
+            output.textures_delta.clear();
+        }
+
+        assert!(reset.width() > 0.0, "the way back was never laid out");
+        assert!(
+            reset.right() <= content_right - bar_width,
+            "the way back ends at x = {:.1}, inside the {bar_width:.0} px the scroll bar \
+             claims at the right edge of the content (x = {:.1}..{content_right:.1})",
+            reset.right(),
+            content_right - bar_width,
+        );
     }
 }

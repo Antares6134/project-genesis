@@ -8,7 +8,7 @@
 /// cradles on this planet". The centimetre-precise figures a reader sees —
 /// kilometres, km², people — are produced from these by
 /// [`crate::core::sphere`], never by counting pixels.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CivilizationConfig {
     /// Fewest civilizations the world should carry. Also the floor the cradle
     /// selector relaxes its spacing rules to reach.
@@ -92,6 +92,15 @@ pub struct CivilizationConfig {
     /// is what puts a world's total population in the tens of millions rather than
     /// the hundreds.
     pub max_density_per_km2: f32,
+
+    /// Multiplier on the pace at which a state climbs the deep-time development
+    /// axis after it is founded.
+    ///
+    /// `1.0` is the engine's own pace. Higher values make every realm reach a later
+    /// age — with the denser population and more developed government that follows
+    /// — without changing how many cradles the world drew or when they rose. Lower
+    /// values keep the world nearer its first cities.
+    pub development_pace: f32,
 
     /// Province count a small realm aims for — a Greek polis against its neighbours.
     pub small_provinces: (usize, usize),
@@ -181,7 +190,7 @@ pub struct CivilizationConfig {
 /// generator's business.
 ///
 /// [`LanguageConfig`]: crate::language::LanguageConfig
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ReligionConfig {
     /// Frontier passes to run. Each pass reads a snapshot and applies its
     /// conversions together, so one atlas date cannot carry a faith across two
@@ -269,6 +278,35 @@ pub struct ReligionConfig {
     /// their regions really do keep their own faiths.
     pub faiths_per_superregion: [usize; 5],
 
+    // ── Shapes ──────────────────────────────────────────────────────────────
+    // A province-level map is not a puzzle of disconnected patches. The ceilings
+    // above decide how many creeds a society may keep; these three decide what
+    // each surviving creed looks like on the ground. See the shape passes in
+    // [`religion`](crate::civilization::religion).
+    /// Fewest provinces a tradition must hold to stand on its own.
+    ///
+    /// A creed smaller than this is dissolved into the neighbour it shares the
+    /// longest frontier with. The map must still be able to show a one-province
+    /// faith — a town congregation, a port quarter, a displaced people — so a
+    /// tradition that lives only on protected ground is never dissolved.
+    pub faith_min_provinces: usize,
+    /// How many hearths share one broad tradition.
+    ///
+    /// The dawn seeds one creed per hearth; this divisor says how many of those
+    /// hearths are folded together into a single world religion. `1` leaves every
+    /// hearth its own tradition (the engine's own world), `2` folds two hearths
+    /// into one, and a reader who asks for a coarser map may set ten. The fold
+    /// always happens across a real border, so the surviving creeds are bodies
+    /// rather than scatters.
+    pub faith_quota_divisor: f32,
+    /// Boundary sweeps to run over the finished map.
+    ///
+    /// Each sweep turns a province whose own land frontier already keeps another
+    /// faith by two thirds into that faith, which is what removes the one-province
+    /// fingers a cost walk leaves along rivers and coasts. Two is enough to
+    /// straighten a ribbon; more begins to eat real borders.
+    pub smooth_sweeps: usize,
+
     // ── Regional schisms ────────────────────────────────────────────────────
     /// A faith this large is a family of regional traditions, not one parish.
     pub schism_min_provinces: usize,
@@ -321,6 +359,10 @@ impl Default for ReligionConfig {
             faiths_per_tier: [3, 4, 6, 12, usize::MAX],
             faiths_per_superregion: [4, 5, usize::MAX, usize::MAX, usize::MAX],
 
+            faith_min_provinces: 2,
+            faith_quota_divisor: 1.0,
+            smooth_sweeps: 2,
+
             hearth_min_provinces: 6,
             endemic_faith_chance: 0.12,
 
@@ -357,6 +399,7 @@ impl Default for CivilizationConfig {
             founding_window_years: 1_500,
 
             max_density_per_km2: 9.0,
+            development_pace: 1.0,
 
             // A state is a city-state or a river kingdom, not a continent: the
             // atlas shows a world in which states hold barely one per cent of the

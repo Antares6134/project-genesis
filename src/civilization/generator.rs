@@ -54,7 +54,9 @@ use crate::civilization::epoch::{DevelopmentPace, Timeline};
 use crate::civilization::faith::{
     FAITH_SALT, FaithContext, apply_contact, generate_faith, inherit_faith, weighted_pick,
 };
-use crate::civilization::religion::{ProvinceLandscape, RELIGION_SALT, distribute_religions};
+use crate::civilization::religion::{
+    FrontierIndex, LandFrontier, ProvinceLandscape, RELIGION_SALT, distribute_religions,
+};
 use crate::civilization::{
     Age, Civilization, CivilizationWorld, CradleKind, Culture, Environment, Faith, Government,
     Hierarchy, Outlook, ReligionWorld, ScaleClass, SocietyTier, Subsistence,
@@ -220,6 +222,12 @@ pub fn generate_civilizations(
     // province on the 60th parallel is not credited with the ground of one on the
     // equator; the pixel count is kept only as a shape measure.
     let mut stats = vec![ProvinceStats::default(); n];
+    // Which provinces share a land border, and how long it is, in pixel pairs.
+    // The province graph's own neighbours also carry the sea links a strait
+    // leaves, and the religion pass needs the two apart: a creed that reaches
+    // across water is a congregation on an island, not a stripe. Measured here
+    // because this pass is already walking every pixel.
+    let mut land_frontier: LandFrontier = BTreeMap::new();
     {
         const SHORE: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
         for y in 0..h {
@@ -234,6 +242,23 @@ pub fn generate_civilizations(
                 let idx = id as usize;
                 if idx >= n {
                     continue;
+                }
+
+                // This pixel's land borders, one tally per neighbouring province
+                // and one per boundary pixel pair.
+                let right = *province_ids.get(province_ids.wrap_x(xi + 1) as isize, yi);
+                if right != 0 && right != id {
+                    *land_frontier
+                        .entry((id.min(right), id.max(right)))
+                        .or_insert(0) += 1;
+                }
+                if y + 1 < h {
+                    let down = *province_ids.get(xi, yi + 1);
+                    if down != 0 && down != id {
+                        *land_frontier
+                            .entry((id.min(down), id.max(down)))
+                            .or_insert(0) += 1;
+                    }
                 }
 
                 let elev = *heightmap.get(xi, yi);
@@ -1013,7 +1038,7 @@ pub fn generate_civilizations(
         min_river_flow,
         config.great_river_flow,
         map_year,
-        pace.multiplier(),
+        pace.multiplier() * config.development_pace,
         picked.len(),
     );
     let mean_complexity = if skeletons.is_empty() {
@@ -1191,6 +1216,7 @@ pub fn generate_civilizations(
     let realm_provinces: Vec<Vec<u32>> = skeletons.iter().map(|sk| sk.provinces.clone()).collect();
     let realm_tiers: Vec<SocietyTier> = skeletons.iter().map(|sk| sk.tier).collect();
     let mut religion_rng = ChaCha8Rng::seed_from_u64(seed ^ RELIGION_SALT);
+    let land = FrontierIndex::new(n, &land_frontier);
     let religion_world = distribute_religions(
         religions,
         &mut religion_origins,
@@ -1203,12 +1229,13 @@ pub fn generate_civilizations(
         &province_population,
         &landscapes,
         hierarchy,
+        &land,
         &faith_contexts,
         w,
         &config.religion,
         &mut religion_rng,
     );
-    report_religion_census(&religion_world, &owner, &realm_tiers, hierarchy);
+    report_religion_census(&religion_world, &owner, &realm_tiers, hierarchy, &land);
 
     // ─── 9. THE DEPTH OF PREHISTORY ───────────────────────────────────────────
     // The calendar begins at the first city — Year 0 — and everything before it is
@@ -1314,6 +1341,7 @@ fn report_religion_census(
     owner: &[u16],
     realm_tiers: &[SocietyTier],
     hierarchy: &GeopoliticalHierarchy,
+    frontier: &FrontierIndex,
 ) {
     if world.religions.is_empty() {
         return;
@@ -1360,6 +1388,54 @@ fn report_religion_census(
         "✓ Faiths: {} religions · {} kept in more than one realm | realms keeping 1/2/3+ faiths: {one}/{two}/{many}",
         world.religions.len(),
         multi_realm,
+    );
+    // The map's shapes, as they actually came out. A creed that spans two
+    // continents, or keeps a congregation on an island, is not broken for doing
+    // so — what this measures is how much of a religion's ground lies in one
+    // land-connected body. A world of stripes and scattered patches reads low;
+    // a world of blobs reads high.
+    let mut in_one_body = 0.0f32;
+    let mut scattered = 0usize;
+    for (rank, religion) in world.religions.iter().enumerate() {
+        let id = rank as u16 + 1;
+        let mut seen: BTreeSet<u32> = BTreeSet::new();
+        let mut biggest = 0usize;
+        for &start in &religion.provinces {
+            if seen.contains(&start) {
+                continue;
+            }
+            let mut piece = 0usize;
+            let mut queue = vec![start];
+            seen.insert(start);
+            while let Some(here) = queue.pop() {
+                piece += 1;
+                for &(neighbour, _) in frontier.of(here as usize) {
+                    if seen.contains(&neighbour) {
+                        continue;
+                    }
+                    if world.province_religion.get(neighbour as usize) == Some(&id) {
+                        seen.insert(neighbour);
+                        queue.push(neighbour);
+                    }
+                }
+            }
+            biggest = biggest.max(piece);
+        }
+        if religion.provinces.is_empty() {
+            continue;
+        }
+        let share = biggest as f32 / religion.provinces.len() as f32;
+        in_one_body += share;
+        if share < 0.5 {
+            scattered += 1;
+        }
+    }
+    let count = world.religions.len().max(1) as f32;
+    println!(
+        "  Shapes: {:.0}% of a religion's ground lies in one body on average · {} of {} religions keep less than half in one piece",
+        in_one_body / count * 100.0,
+        scattered,
+        world.religions.len(),
     );
     // The consolidation ceilings, as they actually came out. A hunter-gatherer
     // society should never exceed three, and a forager superregion should stay
@@ -2867,8 +2943,9 @@ fn build_culture(
         sk.complexity,
     );
 
-    let architecture = match inherited {
-        Some(ancestor) if rng.random::<f32>() < 0.7 => ancestor.architecture,
+    let inherited_architecture = inherited.map(|ancestor| ancestor.architecture.clone());
+    let architecture = match inherited_architecture {
+        Some(ancestor) if rng.random::<f32>() < 0.7 => ancestor,
         _ => {
             if subsistence == Subsistence::IrrigatedAgriculture
                 && matches!(
@@ -2876,17 +2953,17 @@ fn build_culture(
                     Government::DivineMonarchy | Government::TheocraticRepublic
                 )
             {
-                ARCHITECTURE_POOL[0]
+                ARCHITECTURE_POOL[0].to_string()
             } else {
-                *ARCHITECTURE_POOL.choose(rng).unwrap()
+                ARCHITECTURE_POOL.choose(rng).unwrap().to_string()
             }
         }
     };
 
     let art_count = rng.random_range(2..=3usize);
-    let mut arts: Vec<&'static str> = Vec::with_capacity(art_count);
+    let mut arts: Vec<String> = Vec::with_capacity(art_count);
     while arts.len() < art_count {
-        let art = *ARTS_POOL.choose(rng).unwrap();
+        let art = ARTS_POOL.choose(rng).unwrap().to_string();
         if !arts.contains(&art) {
             arts.push(art);
         }

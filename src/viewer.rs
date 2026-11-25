@@ -278,6 +278,35 @@ fn atlas_panel_frame(style: &egui::Style) -> egui::Frame {
     egui::Frame::side_top_panel(style).inner_margin(egui::Margin::symmetric(12, 5))
 }
 
+/// The room egui's floating scroll bar needs at a panel's right edge, in points.
+///
+/// The bar is painted *on top of* the content — the default
+/// [`egui::style::ScrollStyle::floating`] allocates no width for it — and it
+/// senses presses across its full `bar_width` whether or not it is expanded, so
+/// anything flush with that edge sits under it. A control there never sees the
+/// press: the bar takes it, expands under the pointer and pages the panel
+/// instead, which is how the ↺ that ends a settings row became unclickable.
+fn scroll_bar_gutter(ui: &egui::Ui) -> f32 {
+    let scroll = ui.spacing().scroll;
+    if scroll.floating {
+        // The band itself, plus a little air so a control's edge and the bar's
+        // never touch.
+        scroll.bar_width + 4.0
+    } else {
+        // A solid bar allocates its own column, so the content is already clear.
+        0.0
+    }
+}
+
+/// The content margin that keeps a scroll area's contents out of the band the
+/// floating scroll bar claims for itself (see [`scroll_bar_gutter`]).
+fn clear_of_scroll_bar(ui: &egui::Ui) -> egui::Margin {
+    egui::Margin {
+        right: scroll_bar_gutter(ui).round() as i8,
+        ..egui::Margin::ZERO
+    }
+}
+
 /// A panel title: the name of a legend panel, or of the atlas window itself.
 fn panel_title(ui: &mut egui::Ui, text: impl Into<String>) {
     ui.label(egui::RichText::new(text.into()).size(TEXT_HEADING).strong());
@@ -971,6 +1000,14 @@ fn acts_saved(acts: Option<u8>, language: Language) -> String {
         Some(acts) => language.fill("acts 1–{}", &[&acts]),
         None => language.text("a saved world").to_string(),
     }
+}
+
+/// Whether the Save command has anything to write.
+///
+/// One act is enough — there is a heightmap — and nothing withdraws the command
+/// afterwards: a finished world, dawn and all, is still a world worth keeping.
+fn can_save(stage: Option<Stage>) -> bool {
+    stage.is_some()
 }
 
 /// The scope the atlas opens on for a world of a given age.
@@ -1683,7 +1720,10 @@ fn civ_border_shade(
 /// between two different metaphysical roots, the softer one between two religions
 /// of the same family. Comparing the roots rather than the shades matters,
 /// because two religions of one root can share a shade when they are far apart —
-/// the frontier between them is still a real frontier.
+/// the frontier between them is still a real frontier. The soft weight is heavy
+/// enough to carry a boundary even where two relatives of one family were given
+/// two close tones: a reader must be able to see where one creed ends without
+/// consulting the key.
 #[inline]
 fn religion_border_shade(
     mut color: [f32; 3],
@@ -1739,7 +1779,7 @@ fn religion_border_shade(
     if hard {
         color = blend_rgb(color, CIV_INK, 0.55);
     } else if soft {
-        color = blend_rgb(color, CIV_INK, 0.28);
+        color = blend_rgb(color, CIV_INK, 0.40);
     }
     color
 }
@@ -2461,8 +2501,9 @@ impl MapViewer {
     /// Adopt a finished act: its world, its figures, and the next act's turn.
     fn finish_stage(&mut self, report: &StageReport) {
         self.world = self.genesis.atlas();
-        // Act three and act six may have written the world cache, so the list of
-        // saved worlds can have changed, and the panel reads it again next frame.
+        // Act three, act six and act seven may have written the world cache, so the
+        // list of saved worlds can have changed, and the panel reads it again next
+        // frame.
         if self.genesis.autosave() {
             self.cached_dirty = true;
         }
@@ -2606,11 +2647,13 @@ impl MapViewer {
         }
     }
 
-    /// Write the world as it stands, up to act six, without freezing the atlas.
+    /// Write the world as it stands — every act through the dawn, and the advanced
+    /// configuration with it — without freezing the atlas.
     ///
     /// The pipeline is moved onto a worker — every grid is behind an `Arc`, so the
     /// clone copies no pixels — and the result is polled back on a later frame.
-    /// History is never written: a save taken after it still holds acts one to six.
+    /// The history act is written like every other act: a save made after it holds
+    /// all seven, and a load of that save finds nothing left to grow.
     fn save_world(&mut self) {
         if self.save_job.is_some() {
             return;
@@ -2957,11 +3000,15 @@ impl MapViewer {
             .max_size(GENESIS_PANEL_MAX)
             .show(ui, |ui| {
                 // The panel can hold a seed, three cache controls, seven acts and
-                // twenty-five constants; on a short window it has to scroll rather
-                // than hide the last act behind the bottom edge.
+                // thirty constants; on a short window it has to scroll rather
+                // than hide the last act behind the bottom edge. Its content is
+                // held clear of the floating scroll bar, which is painted over
+                // the right edge and would take any press aimed at a control
+                // there (see `clear_of_scroll_bar`).
                 egui::ScrollArea::vertical()
                     .id_salt("genesis_scroll")
                     .auto_shrink([false, false])
+                    .content_margin(clear_of_scroll_bar(ui))
                     .show(ui, |ui| {
                         panel_title(ui, self.t("🧬 Genesis"));
                         ui.separator();
@@ -3015,9 +3062,10 @@ impl MapViewer {
             });
     }
 
-    /// Advanced configuration: every constant of the engine, in one fold-out of
-    /// nine groups. The section does its own drawing and its own resets; all this
-    /// has to do is hand the pipeline whatever the reader left behind.
+    /// Advanced configuration: every constant of the engine, gathered under the
+    /// seven acts that read it. The section does its own drawing and its own
+    /// resets; all this has to do is hand the pipeline whatever the reader left
+    /// behind.
     fn settings_section(&mut self, ui: &mut egui::Ui, busy: bool) {
         let mut settings = self.genesis.settings().clone();
         // The ↺ buttons restore the tuned density of the plate this world is on.
@@ -3148,8 +3196,8 @@ impl MapViewer {
     ///
     /// Load and Save are buttons that do their one thing at once — Load adopts
     /// the seed's saved world, Save writes the world as it stands. The checkbox
-    /// below them arms the automatic saves at act 3 and act 6, and every cache on
-    /// disk is listed at the bottom.
+    /// below them arms the automatic saves at act 3, act 6 and act 7, and every
+    /// cache on disk is listed at the bottom.
     fn world_data_rows(&mut self, ui: &mut egui::Ui, busy: bool) {
         // Read the directory once, and again whenever an act may have written
         // to it: one `read_dir` per act, not one per frame.
@@ -3191,10 +3239,10 @@ impl MapViewer {
             self.t("There is no cache for this seed yet")
         };
 
-        // A save holds every act grown so far, capped at six, so it is offered
-        // from act one to act six and withdrawn once the dawn is on the world.
-        let stage = self.genesis.stage();
-        let saveable = stage.is_some_and(|stage| stage.index() <= Stage::HydroPolitics.index());
+        // A save holds every act grown so far, all seven once the dawn is on the
+        // world, so it is offered from the moment act one lands and stays offered
+        // to the end.
+        let saveable = can_save(self.genesis.stage());
         let save_hint = if busy {
             self.t("Wait for the act in flight to finish")
         } else {
@@ -3228,7 +3276,7 @@ impl MapViewer {
                     egui::Button::new(self.t("💾 Save")),
                 )
                 .on_hover_text(self.t(
-                    "Write every act grown so far, up to act 6, to saved_seeds/world_<seed>_<width>x<height>.bin",
+                    "Write every act grown so far, up to act 7 — the advanced configuration included — to saved_seeds/world_<seed>_<width>x<height>.bin",
                 ))
                 .on_disabled_hover_text(save_hint);
             if save.clicked() {
@@ -3264,7 +3312,7 @@ impl MapViewer {
         }
     }
 
-    /// The save setting: whether act 3 and act 6 write the world cache.
+    /// The save setting: whether act 3, act 6 and act 7 write the world cache.
     fn save_row(&mut self, ui: &mut egui::Ui, busy: bool) {
         let mut autosave = self.genesis.autosave();
         if ui
@@ -3272,11 +3320,11 @@ impl MapViewer {
                 !busy,
                 egui::Checkbox::new(
                     &mut autosave,
-                    self.t("💾 Save automatically when act 3 and act 6 land"),
+                    self.t("💾 Save automatically when act 3, act 6 and act 7 land"),
                 ),
             )
             .on_hover_text(self.t(
-                "Write every act grown so far, up to act 6, to saved_seeds/world_<seed>_<width>x<height>.bin",
+                "Write every act grown so far, up to act 7 — the advanced configuration included — to saved_seeds/world_<seed>_<width>x<height>.bin",
             ))
             .changed()
         {
@@ -3320,6 +3368,10 @@ impl MapViewer {
                     egui::ScrollArea::vertical()
                         .max_height(220.0)
                         .auto_shrink([false, true])
+                        // A row is a full-width button, and the list's own bar
+                        // floats over its right end: without this margin a press
+                        // there would page the list instead of loading the world.
+                        .content_margin(clear_of_scroll_bar(ui))
                         .show(ui, |ui| {
                             for cache in &self.cached {
                                 // A save holds whichever acts the world had grown
@@ -6274,7 +6326,7 @@ mod tests {
         says("World data");
         says("📂 Load");
         says("💾 Save");
-        says("Save automatically when act 3 and act 6 land");
+        says("Save automatically when act 3, act 6 and act 7 land");
         says("Saved worlds");
         // The acts are a section of their own, counted, and the constants the
         // engine reads are folded away beneath them.
@@ -6569,6 +6621,55 @@ mod tests {
             "the folded panel is still being painted"
         );
     }
+    /// The genesis panel's content is held clear of egui's floating scroll bar.
+    ///
+    /// The bar is painted *over* the right edge of a scroll area and senses
+    /// every press in its `bar_width` band, so a control flush with that edge —
+    /// the ↺ that ends a settings row, a full-width saved-world row — would
+    /// never see a click. The panel reserves the band with a content margin
+    /// measured from the style itself; this draws a real panel and reads the two
+    /// back.
+    #[test]
+    fn the_panel_holds_its_content_clear_of_the_scroll_bar() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(configure_style);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1720.0, 1040.0));
+
+        let mut content_right = 0.0;
+        let mut inner_right = 0.0;
+        let mut bar_width = 0.0;
+
+        for frame in 0..3 {
+            let mut input = egui::RawInput::default();
+            input.screen_rect = Some(screen);
+            input.time = Some(1.0 + f64::from(frame));
+            let mut output = ctx.run_ui(input, |ui| {
+                egui::Panel::left("genesis_gutter_probe")
+                    .frame(atlas_panel_frame(ui.style()))
+                    .resizable(false)
+                    .exact_size(GENESIS_PANEL_WIDTH)
+                    .show(ui, |ui| {
+                        bar_width = ui.spacing().scroll.bar_width;
+                        let scroll = egui::ScrollArea::vertical()
+                            .id_salt("genesis_gutter_scroll")
+                            .auto_shrink([false, false])
+                            .content_margin(clear_of_scroll_bar(ui))
+                            .show(ui, |ui| {
+                                content_right = ui.max_rect().right();
+                            });
+                        inner_right = scroll.inner_rect.right();
+                    });
+            });
+            output.textures_delta.clear();
+        }
+
+        assert!(
+            content_right <= inner_right - bar_width,
+            "the panel's content reaches x = {content_right:.1}, inside the {bar_width:.0} px \
+             the scroll bar claims at x = {:.1}..{inner_right:.1}",
+            inner_right - bar_width,
+        );
+    }
 
     /// The census is data, not prose: it survives the redesign, in the footer,
     /// with its three lines intact.
@@ -6794,7 +6895,7 @@ mod tests {
         let _ = draw_frames(&ctx, &mut viewer);
         assert!(
             viewer.genesis.autosave(),
-            "the Save checkbox means act 3 and act 6 write the cache"
+            "the Save checkbox means act 3, act 6 and act 7 write the cache"
         );
 
         // Turning it off is a setting on the pipeline, not a mode in the panel.
@@ -7209,7 +7310,59 @@ mod tests {
     fn a_saved_world_says_which_acts_it_holds() {
         assert_eq!(acts_saved(Some(5), Language::English), "acts 1–5");
         assert_eq!(acts_saved(Some(6), Language::English), "acts 1–6");
+        assert_eq!(acts_saved(Some(7), Language::English), "acts 1–7");
         assert_eq!(acts_saved(None, Language::English), "a saved world");
+    }
+
+    /// Save is offered from the moment there is a world and withdrawn only when
+    /// there is none — the dawn does not take the command away.
+    #[test]
+    fn save_is_offered_for_every_act_including_the_last() {
+        assert!(!can_save(None), "there is nothing to write before act one");
+        for stage in Stage::ALL {
+            assert!(
+                can_save(Some(stage)),
+                "act {} is a world worth keeping",
+                stage.index()
+            );
+        }
+    }
+
+    /// Loading a saved world brings its advanced configuration and its canvas into
+    /// the panel: the sliders show the constants the world was grown with, and the
+    /// resolution selector moves to the plate the file was written on.
+    #[test]
+    fn loading_a_saved_world_restores_its_settings_and_canvas() {
+        let seed = 0x0BAD_C0D4;
+        let path = crate::pipeline::cache_path(seed, 4, 2);
+        let _ = std::fs::remove_file(&path);
+
+        let mut grown = Genesis::for_test(seed, Stage::Hydrology);
+        let mut settings = grown.settings().clone();
+        settings.sea_threshold = 0.03;
+        settings.num_provinces = 9_876;
+        settings.development_pace = 1.4;
+        grown.set_settings(settings.clone());
+        grown.save_cache().expect("write the world");
+
+        // A fresh atlas on the same seed, on its own plate and with the engine's
+        // defaults: picking the cache must adopt both the file's canvas and its
+        // constants.
+        let mut viewer = MapViewer::new(Genesis::new(seed));
+        assert_ne!(viewer.genesis.settings(), &settings);
+        viewer.pick_cached_world(seed);
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            viewer.genesis.settings(),
+            &settings,
+            "the panel now holds the constants the save records"
+        );
+        assert_eq!(
+            viewer.resolution,
+            MapResolution::from_canvas(4, 2),
+            "and the selector shows the cache's own plate"
+        );
     }
 
     /// Changing the seed mid-way does not throw the world away: the acts already

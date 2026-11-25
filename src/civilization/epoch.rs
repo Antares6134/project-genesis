@@ -42,7 +42,7 @@ use crate::core::fmt::thousands;
 ///   may take a million.
 /// * [`Timeline::atlas_year`] is where the map stands in that count — a few
 ///   centuries to a couple of millennia after the first city, never before it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Timeline {
     /// The depth of prehistory: years from the first people to the first city.
     pub prehistory_years: i32,

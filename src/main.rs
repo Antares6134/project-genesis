@@ -28,6 +28,7 @@ fn main() {
     let mut width: Option<usize> = None;
     let mut height: Option<usize> = None;
     let mut provinces: Option<usize> = None;
+    let mut religion_consolidation: Option<f32> = None;
     let mut force_headless = false;
 
     let mut run_viewer = false;
@@ -56,6 +57,8 @@ fn main() {
             height = args.next().and_then(|value| value.parse::<usize>().ok());
         } else if arg == "--provinces" {
             provinces = args.next().and_then(|value| value.parse::<usize>().ok());
+        } else if arg == "--religion-consolidation" {
+            religion_consolidation = args.next().and_then(|value| value.parse::<f32>().ok());
         } else if arg == "--plates" {
             run_plates = true;
         } else if arg == "--civs" {
@@ -85,7 +88,7 @@ fn main() {
     // Every act of creation is now run from the viewer's own panel, one press at
     // a time, and watched while it runs. The command line therefore no longer
     // decides *what* gets generated before the window opens — only where the
-    // panel starts: a seed to begin from, whether act three and act six should
+    // panel starts: a seed to begin from, whether acts three, six and seven should
     // write the world cache (`--save`), and whether to adopt the world already on
     // disk (`--load`) instead of growing one.
     if run_viewer {
@@ -109,16 +112,20 @@ fn main() {
         );
         let mut genesis = Genesis::new_sized(seed, start_width, start_height);
         genesis.set_autosave(save_cache);
-        apply_province_override(&mut genesis, provinces);
         if load_cache {
             // `--load --viewer` adopts the saved world for the seed in one read:
             // the acts the file carries are taken as done, and the act after them
             // is offered next. It is instant: no stage is re-run, only the file is
-            // read.
+            // read. The file's advanced configuration is adopted with it, so the
+            // panel opens on the constants the world was grown with.
             if let Err(why) = genesis.load_cache() {
                 report_load_failure(&why);
             }
         }
+        // A flag typed on the command line is an explicit instruction, so it wins
+        // over whatever the save recorded — the panel is the usual way to choose.
+        apply_province_override(&mut genesis, provinces);
+        apply_consolidation_override(&mut genesis, religion_consolidation);
         let (canvas_width, canvas_height) = genesis.canvas();
         println!(
             "Active Seed: {} | Canvas: {}x{}",
@@ -169,12 +176,15 @@ fn main() {
         height.unwrap_or(pipeline::WORLD_HEIGHT),
     );
     genesis.set_autosave(save_cache);
-    apply_province_override(&mut genesis, provinces);
     if load_cache {
         if let Err(why) = genesis.load_cache() {
             report_load_failure(&why);
         }
     }
+    // An explicit flag outranks the constants a save carries; a headless run that
+    // asks for a province count must grow the acts not yet made with it.
+    apply_province_override(&mut genesis, provinces);
+    apply_consolidation_override(&mut genesis, religion_consolidation);
     let (canvas_width, canvas_height) = genesis.canvas();
     println!(
         "Active Seed: {} | Canvas: {}x{}",
@@ -481,6 +491,21 @@ fn apply_province_override(genesis: &mut Genesis, provinces: Option<usize>) {
     };
     let mut settings = genesis.settings().clone();
     settings.num_provinces = count.max(1);
+    genesis.set_settings(settings);
+}
+
+/// `--religion-consolidation <x>`: how strongly the world folds local creeds into
+/// broader traditions.
+///
+/// The panel is the usual way to choose it; a headless plate has no panel, so a
+/// script can ask for the same world it would draw by hand — `10` folds ten
+/// hearths into one broad tradition, `1` is the engine's own world.
+fn apply_consolidation_override(genesis: &mut Genesis, consolidation: Option<f32>) {
+    let Some(value) = consolidation else {
+        return;
+    };
+    let mut settings = genesis.settings().clone();
+    settings.religion_consolidation = value.clamp(0.50, 10.0);
     genesis.set_settings(settings);
 }
 

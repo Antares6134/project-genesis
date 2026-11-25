@@ -63,6 +63,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
+use serde::{Deserialize, Serialize};
+
 /// The engine's tuned reference canvas: 16K.
 ///
 /// A world's resolution is part of its identity, exactly like its seed, so it
@@ -93,7 +95,10 @@ pub const CACHE_DIR: &str = "./saved_seeds";
 /// the atlas was tuned at, and the safe bounds are the panel's, not the
 /// engine's — a value far outside them is still a legal config, just not a
 /// planet anyone has looked at.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// `Serialize`/`Deserialize` are here because the whole struct travels inside a
+/// world cache: `Save` records the constants and `Load` restores them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorldGenSettings {
     // ── Planetary & astronomical ─────────────────────────────────────────────
     /// A rotating world with Hadley/Ferrel circulation, or an eyeball world
@@ -174,8 +179,45 @@ pub struct WorldGenSettings {
     pub waste_cutoff: f32,
 
     // ── Political hierarchy ──────────────────────────────────────────────────
-    /// Ceiling on the major continental cores.
+    /// Ceiling on the political continents: the major cores the graph finds, and
+    /// the parts an oversized core is cut into.
     pub max_continents: usize,
+
+    // ── History & languages ──────────────────────────────────────────────────
+    /// How civilized the world grows overall.
+    ///
+    /// A value above `1.0` draws more cradles — more states — and lets farming
+    /// and chiefdoms reach farther from them; below `1.0` more of the map stays
+    /// with foragers and herders. `1.0` is the engine's own tuned world.
+    pub civilization_level: f32,
+    /// How strongly neighbouring peoples of one kind merge into a single society.
+    ///
+    /// Higher values consolidate the four non-state tiers into fewer, larger
+    /// peoples; lower values leave more small societies standing. A state is
+    /// history rather than weather, so states are never merged.
+    pub society_consolidation: f32,
+    /// How strongly local creeds fold into broader traditions.
+    ///
+    /// Higher values lower every society's and superregion's faith ceiling,
+    /// raise the bar for a schism, make new hearths, diasporas and residual
+    /// faiths rarer, and — through [`ReligionConfig::faith_quota_divisor`] — fold
+    /// the map down to fewer broad traditions, each one unbroken ground; lower
+    /// values do the opposite. `1.0` is the engine's own world.
+    ///
+    /// [`ReligionConfig::faith_quota_divisor`]: crate::civilization::config::ReligionConfig::faith_quota_divisor
+    pub religion_consolidation: f32,
+    /// Multiplier on the deep-time development pace of every realm.
+    ///
+    /// Higher values carry states into a later age with denser populations and
+    /// more developed governments; lower values keep the world nearer its first
+    /// cities. `1.0` is the engine's own pace.
+    pub development_pace: f32,
+    /// Multiplier on every province's carrying capacity.
+    ///
+    /// The urban density threshold moves with it, so the world's peoples grow or
+    /// shrink together without silently changing which provinces count as cities.
+    /// `1.0` is the engine's own population.
+    pub population_multiplier: f32,
 }
 
 impl Default for WorldGenSettings {
@@ -189,6 +231,7 @@ impl Default for WorldGenSettings {
         let ocean = OceanConfig::default();
         let geopolitics = GeopoliticsConfig::default();
         let polar = PolarConfig::default();
+        let civilization = CivilizationConfig::default();
         Self {
             tidally_locked: !matches!(climate.mode, PlanetaryMode::RotatingStandard { .. }),
             equator_temp: climate.equator_temp,
@@ -220,6 +263,11 @@ impl Default for WorldGenSettings {
             max_waste_share: geography.max_waste_share,
             waste_cutoff: geography.waste_cutoff,
             max_continents: geopolitics.max_continents,
+            civilization_level: 1.0,
+            society_consolidation: 1.0,
+            religion_consolidation: 1.0,
+            development_pace: civilization.development_pace,
+            population_multiplier: 1.0,
         }
     }
 }
@@ -248,6 +296,30 @@ fn drawn_count(requested: usize, seed: u64, salt: u64) -> usize {
     let unit = (z >> 11) as f64 / (1u64 << 53) as f64; // [0, 1)
     let factor = 1.0 + (unit * 2.0 - 1.0) * DRAWN_COUNT_SPREAD;
     ((requested as f64 * factor).round() as usize).max(1)
+}
+
+/// Scale a count by a history setting, never below one.
+///
+/// Used for the cradle roster and its quotas, which must stay positive however
+/// far the reader pulls the civilization level down.
+fn scaled_count(count: usize, factor: f32) -> usize {
+    ((count as f32 * factor).round() as usize).max(1)
+}
+
+/// Scale a religious ceiling *inversely*: higher consolidation means fewer
+/// traditions. `usize::MAX` is the engine's "no ceiling" and is left alone.
+fn scaled_cap(cap: usize, factor: f32) -> usize {
+    if cap == usize::MAX {
+        cap
+    } else {
+        ((cap as f32 / factor).round() as usize).max(1)
+    }
+}
+
+/// Scale a probability *inversely*: higher consolidation makes a new faith less
+/// likely. Clamped to the unit interval a chance has to live in.
+fn scaled_chance(chance: f32, factor: f32) -> f32 {
+    (chance / factor).clamp(0.0, 1.0)
 }
 
 impl WorldGenSettings {
@@ -506,8 +578,8 @@ pub struct Genesis {
     languages: Option<Arc<LanguagesWorld>>,
     /// How long each act took, so the atlas can show it done.
     timings: [Option<f32>; 7],
-    /// Write the world cache (every act grown so far, up to act six) whenever act
-    /// three and again when act six land, overwriting the earlier save.
+    /// Write the world cache (every act grown so far, up to the dawn) whenever act
+    /// three, act six and act seven land, overwriting the earlier save.
     autosave: bool,
     /// The world's own constants, as the panel set them. Read by every act when
     /// it runs, exactly like the seed, so a change applies to the acts not yet
@@ -605,12 +677,13 @@ impl Genesis {
         self.seed = seed;
     }
 
-    /// Whether act three and act six write the world cache when they finish.
+    /// Whether act three, act six and act seven write the world cache when they
+    /// finish.
     pub fn set_autosave(&mut self, on: bool) {
         self.autosave = on;
     }
 
-    /// Whether act three or act six would write the world cache right now.
+    /// Whether act three, act six or act seven would write the world cache right now.
     pub fn autosave(&self) -> bool {
         self.autosave
     }
@@ -808,7 +881,81 @@ impl Genesis {
     }
 
     pub fn civilization_config(&self) -> CivilizationConfig {
-        CivilizationConfig::default()
+        let base = CivilizationConfig::default();
+        let mut config = base.clone();
+
+        // How civilized the world grows: more (or fewer) cradles, and a
+        // neolithic and chiefdom frontier that reaches farther (or less far).
+        let level = self.settings.civilization_level;
+        if (level - 1.0).abs() > f32::EPSILON {
+            config.min_civilizations = scaled_count(base.min_civilizations, level);
+            config.max_civilizations =
+                scaled_count(base.max_civilizations, level).max(config.min_civilizations);
+            config.cradle_max_per_region = scaled_count(base.cradle_max_per_region, level);
+            config.cradle_max_per_superregion =
+                scaled_count(base.cradle_max_per_superregion, level);
+            config.farm_cost = base.farm_cost / level;
+            config.chiefdom_cost = base.chiefdom_cost / level;
+            config.rise_floor = (base.rise_floor / level).clamp(0.0, 1.0);
+            config.independent_reach = base.independent_reach * level.sqrt();
+        }
+
+        // How strongly peoples of one kind merge. States are never merged, so
+        // only the four non-state ground budgets are touched.
+        let societies = self.settings.society_consolidation;
+        if (societies - 1.0).abs() > f32::EPSILON {
+            config.forager_merge_km2 = base.forager_merge_km2 * societies;
+            config.pastoralist_merge_km2 = base.pastoralist_merge_km2 * societies;
+            config.simple_farmer_merge_km2 = base.simple_farmer_merge_km2 * societies;
+            config.complex_farmer_merge_km2 = base.complex_farmer_merge_km2 * societies;
+        }
+
+        // How strongly local creeds fold into broader traditions: lower caps,
+        // rarer new hearths and diasporas, fewer schisms and less residual faith.
+        let religions = self.settings.religion_consolidation;
+        if (religions - 1.0).abs() > f32::EPSILON {
+            for tier in 0..5 {
+                config.religion.faiths_per_tier[tier] =
+                    scaled_cap(base.religion.faiths_per_tier[tier], religions);
+                config.religion.faiths_per_superregion[tier] =
+                    scaled_cap(base.religion.faiths_per_superregion[tier], religions);
+            }
+            config.religion.schism_min_provinces =
+                scaled_count(base.religion.schism_min_provinces, religions);
+            config.religion.schism_min_group =
+                scaled_count(base.religion.schism_min_group, religions);
+            config.religion.hearth_min_provinces =
+                scaled_count(base.religion.hearth_min_provinces, religions);
+            config.religion.endemic_faith_chance =
+                scaled_chance(base.religion.endemic_faith_chance, religions);
+            config.religion.diaspora_chance =
+                scaled_chance(base.religion.diaspora_chance, religions);
+            config.religion.diaspora_new_faith_chance =
+                scaled_chance(base.religion.diaspora_new_faith_chance, religions);
+            config.religion.residual_share = scaled_chance(base.religion.residual_share, religions);
+            // The shapes are consolidated too: a coarser map dissolves larger
+            // specks, folds more hearths into one tradition, and can afford a
+            // firmer hand on the frontier — one more sweep per doubling, to a
+            // ceiling that still leaves a real border alone.
+            config.religion.faith_min_provinces =
+                scaled_count(base.religion.faith_min_provinces, religions);
+            config.religion.faith_quota_divisor = religions;
+            let doublings = religions.log2().max(0.0).floor() as usize;
+            config.religion.smooth_sweeps = (base.religion.smooth_sweeps + doublings).min(4);
+        }
+
+        config.development_pace = self.settings.development_pace;
+
+        // Population scales carrying capacity and the urban threshold together,
+        // so the history's structure is unchanged while its headcount moves.
+        let population = self.settings.population_multiplier;
+        if (population - 1.0).abs() > f32::EPSILON {
+            config.max_density_per_km2 = base.max_density_per_km2 * population;
+            config.religion.urban_density_per_km2 =
+                base.religion.urban_density_per_km2 * population;
+        }
+
+        config
     }
 
     pub fn language_config(&self) -> LanguageConfig {
@@ -825,10 +972,11 @@ impl Genesis {
     /// Write the acts grown so far to disk, overwriting any earlier save for
     /// this seed **on this canvas**.
     ///
-    /// The save holds acts one through whichever act the world has reached, capped
-    /// at act six: the bare land, the climate, the water, and as far up the two
-    /// hierarchies as the world has climbed. Acts seven and eight are never
-    /// written, so a saved world always resumes at the dawn or before it. A world
+    /// The save holds acts one through whichever act the world has reached, all
+    /// seven once the dawn is on it: the bare land, the climate, the water, the two
+    /// hierarchies, and the realms, faiths and tongues. It also records the world's
+    /// own [`WorldGenSettings`], so a load restores the constants the world was
+    /// grown with — including the polar geography the ice is resolved from. A world
     /// with no act behind it has nothing worth keeping and is not written.
     pub fn save_cache(&self) -> Result<PathBuf, LoadError> {
         let path = self.cache_path();
@@ -844,6 +992,7 @@ impl Genesis {
             &WorldCacheView {
                 width: self.width,
                 height: self.height,
+                settings: Some(&self.settings),
                 heightmap,
                 temp_grid: self.temperature.as_deref(),
                 precip_grid: self.precipitation.as_deref(),
@@ -853,6 +1002,8 @@ impl Genesis {
                 hierarchy: self.hierarchy.as_deref(),
                 ocean: self.ocean.as_deref(),
                 ocean_hierarchy: self.ocean_hierarchy.as_deref(),
+                civilizations: self.civilizations.as_deref(),
+                languages: self.languages.as_deref(),
             },
             &path.to_string_lossy(),
         )
@@ -869,8 +1020,16 @@ impl Genesis {
     ///
     /// The save carries acts one through whichever act the world had reached when
     /// it was written, so the pipeline picks up at the act after that one — act
-    /// four for a save made at act three, history for one made at act six. On
-    /// success it holds exactly that much of the world, and no more.
+    /// four for a save made at act three, and nothing at all for one made at
+    /// history, because the world is finished. On success it holds exactly that
+    /// much of the world, and no more.
+    ///
+    /// A save this build wrote also carries the advanced configuration, which is
+    /// adopted here as part of the world: the panel's sliders follow it, and the
+    /// polar ice — recomputed rather than stored — is resolved from the saved polar
+    /// settings instead of whatever the panel happened to hold. A save from an
+    /// older build records none, so the pipeline keeps the constants it has and
+    /// moves its plate-dependent defaults onto the cache's canvas.
     pub fn load_cache(&mut self) -> Result<(), LoadError> {
         let exact = self.cache_path();
         if Path::new(&exact).exists() {
@@ -898,10 +1057,17 @@ impl Genesis {
         let old_canvas = (self.width, self.height);
         self.width = cache.width;
         self.height = cache.height;
-        // A count still at the old plate's tuned default follows the plate the
-        // cache was written on; a value the reader typed is absolute and stays.
-        self.settings
-            .adopt_plate_defaults(old_canvas, (self.width, self.height));
+        // The settings travel with the save and are adopted first: the ice belt,
+        // resolved again at the end of this function, has to be frozen from the
+        // polar geography the world was *saved* under, not from whatever the panel
+        // held when the file was opened. A save from before the settings were
+        // written has none, and the panel's own constants stand.
+        match cache.settings {
+            Some(settings) => self.settings = settings,
+            None => self
+                .settings
+                .adopt_plate_defaults(old_canvas, (self.width, self.height)),
+        }
         self.heightmap = Some(Arc::new(cache.heightmap));
         self.temperature = cache.temp_grid.map(Arc::new);
         self.precipitation = cache.precip_grid.map(Arc::new);
@@ -911,6 +1077,10 @@ impl Genesis {
         self.hierarchy = cache.hierarchy.map(Arc::new);
         self.ocean = cache.ocean.map(Arc::new);
         self.ocean_hierarchy = cache.ocean_hierarchy.map(Arc::new);
+        // The dawn, when the save holds it. A save made at act six has none, and a
+        // save from before the dawn was written has none either.
+        self.civilizations = cache.civilizations.map(Arc::new);
+        self.languages = cache.languages.map(Arc::new);
         // The ice belt is not stored: it is resolved again here, from the same
         // grids and the same seed, exactly as act three resolves it. It is a no-op
         // for a save made before act three, whose lakes are not there yet.
@@ -1526,6 +1696,7 @@ impl Genesis {
             .clone()
             .expect("act three runs before act five");
 
+        let geopolitics = self.geopolitics_config();
         let extracted = extract_province_graph(
             &provinces.province_ids,
             &world.heightmap,
@@ -1533,7 +1704,7 @@ impl Genesis {
             relief::SEA_LEVEL,
             // The ceiling on continental cores is the panel's; the clustering
             // below turns whatever cores it is given into a hierarchy.
-            self.geopolitics_config().max_continents,
+            geopolitics.max_continents,
         );
         // The clustering passes never see a pixel, so the pixel grids they are
         // painted from travel with the progress handle.
@@ -1546,6 +1717,9 @@ impl Genesis {
             extracted.provinces,
             self.seed,
             world.width as f32,
+            // A core that would swallow the map is cut into political parts,
+            // but the tier never grows past this ceiling.
+            geopolitics.max_continents,
             &progress,
         );
 
@@ -1706,6 +1880,15 @@ impl Genesis {
         ];
         self.civilizations = Some(Arc::new(civilizations));
         self.languages = Some(Arc::new(languages));
+
+        // The finished world, dawn and tongue and all, written the moment history
+        // lands — overwriting the save act six made, so the file now holds acts one
+        // to seven and a load of it finds nothing left to grow.
+        if self.autosave
+            && let Err(why) = self.save_cache()
+        {
+            println!("⚠ The world cache could not be written: {why:?}");
+        }
         summary
     }
 }
@@ -1970,6 +2153,81 @@ mod tests {
         assert!((polar.belt_start_lat.to_degrees() - 45.0).abs() < 1.0e-3);
     }
 
+    /// The history panel's untouched defaults are the engine's own config:
+    /// adding sliders must not change the world a reader never touched.
+    #[test]
+    fn the_untouched_history_settings_are_the_engine_s_own() {
+        let genesis = Genesis::new(42);
+        assert_eq!(
+            genesis.civilization_config(),
+            CivilizationConfig::default(),
+            "the dawn of history must be the engine's world when nothing is moved"
+        );
+    }
+
+    /// Every history slider reaches the config the generator reads, in the
+    /// direction its hover card promises.
+    #[test]
+    fn history_settings_reach_the_civilization_config() {
+        let base = CivilizationConfig::default();
+        let mut genesis = Genesis::new(42);
+        genesis.set_settings(WorldGenSettings {
+            civilization_level: 2.0,
+            society_consolidation: 2.0,
+            religion_consolidation: 2.0,
+            development_pace: 2.0,
+            population_multiplier: 1.5,
+            ..WorldGenSettings::default()
+        });
+        let config = genesis.civilization_config();
+
+        // A more civilized world draws more cradles and lets the neolithic and
+        // chiefdom frontier reach farther.
+        assert!(config.min_civilizations > base.min_civilizations);
+        assert!(config.max_civilizations > base.max_civilizations);
+        assert!(config.cradle_max_per_region > base.cradle_max_per_region);
+        assert!(config.cradle_max_per_superregion > base.cradle_max_per_superregion);
+        assert!(config.farm_cost < base.farm_cost);
+        assert!(config.chiefdom_cost < base.chiefdom_cost);
+        assert!(config.rise_floor < base.rise_floor);
+        assert!(config.independent_reach > base.independent_reach);
+
+        // Consolidation leaves fewer, larger peoples.
+        assert!(config.forager_merge_km2 > base.forager_merge_km2);
+        assert!(config.pastoralist_merge_km2 > base.pastoralist_merge_km2);
+        assert!(config.simple_farmer_merge_km2 > base.simple_farmer_merge_km2);
+        assert!(config.complex_farmer_merge_km2 > base.complex_farmer_merge_km2);
+
+        // Religious consolidation lowers the ceilings and raises the bar for a
+        // new tradition, while leaving the engine's "no ceiling" alone.
+        assert!(config.religion.faiths_per_tier[0] < base.religion.faiths_per_tier[0]);
+        assert!(
+            config.religion.faiths_per_superregion[0] < base.religion.faiths_per_superregion[0]
+        );
+        assert_eq!(
+            config.religion.faiths_per_tier[4],
+            usize::MAX,
+            "states keep their local cults"
+        );
+        assert!(config.religion.schism_min_provinces > base.religion.schism_min_provinces);
+        assert!(config.religion.hearth_min_provinces > base.religion.hearth_min_provinces);
+        assert!(config.religion.endemic_faith_chance < base.religion.endemic_faith_chance);
+        // The map's shapes consolidate with it: larger specks are dissolved, more
+        // hearths share one tradition, and the frontier is smoothed a little
+        // firmer.
+        assert!(config.religion.faith_min_provinces > base.religion.faith_min_provinces);
+        assert!(config.religion.faith_quota_divisor > base.religion.faith_quota_divisor);
+        assert!(config.religion.smooth_sweeps >= base.religion.smooth_sweeps);
+
+        // Development pace and population scale their own axes.
+        assert_eq!(config.development_pace, 2.0);
+        assert!(config.max_density_per_km2 > base.max_density_per_km2);
+        assert!(
+            config.religion.urban_density_per_km2 > base.religion.urban_density_per_km2,
+            "the urban threshold must move with the population"
+        );
+    }
+
     /// The settings are read by each act as it runs, so moving one leaves every
     /// act already grown — and the world they produced — exactly as it was.
     #[test]
@@ -1995,8 +2253,9 @@ mod tests {
         );
     }
 
-    /// A save holds every act the world has grown, capped at six, so a world of
-    /// three acts writes acts one to three and resumes at act four.
+    /// A save holds every act the world has grown — all seven once the dawn is on
+    /// it — so a world of three acts writes acts one to three and resumes at act
+    /// four.
     #[test]
     fn a_partial_world_round_trips_through_its_cache() {
         // A synthetic seed that no real cache will ever be written for, so the
@@ -2028,12 +2287,12 @@ mod tests {
         );
     }
 
-    /// A full world written to disk is the same world when it is read back, and
-    /// the pipeline picks up at history rather than re-running acts one to six.
+    /// A full world written to disk is the same world when it is read back, and a
+    /// load of it finds every act already done — the dawn included.
     #[test]
     fn a_full_world_round_trips_through_its_cache() {
         let seed = 0x0BAD_C0DE;
-        let genesis = Genesis::for_test(seed, Stage::HydroPolitics);
+        let genesis = Genesis::for_test(seed, Stage::History);
         let path = genesis.cache_path();
         let _ = std::fs::remove_file(&path);
         genesis.save_cache().expect("write the world");
@@ -2042,29 +2301,35 @@ mod tests {
         adopted.load_cache().expect("read the world back");
         let _ = std::fs::remove_file(&path);
 
-        assert_eq!(adopted.ready(), Some(Stage::History));
         assert_eq!(
-            adopted.state(Stage::HydroPolitics),
-            StageState::Done { secs: 0.0 },
-            "acts one to six are adopted from disk"
+            adopted.ready(),
+            None,
+            "a saved world of seven acts has nothing left to grow"
         );
-        let world = adopted.atlas().expect("six acts are a world");
-        assert_eq!(world.stage, Stage::HydroPolitics);
+        assert_eq!(
+            adopted.state(Stage::History),
+            StageState::Done { secs: 0.0 },
+            "acts one to seven are adopted from disk"
+        );
+        let world = adopted.atlas().expect("seven acts are a world");
+        assert_eq!(world.stage, Stage::History);
         assert!(world.flow.is_some() && world.is_lake.is_some());
         assert!(
             world.provinces.is_some() && world.ocean.is_some(),
             "the provinces and the ocean came back with it"
         );
+        assert_eq!(world.civilizations.seed, seed, "the dawn came back");
+        assert_eq!(world.languages.seed, seed, "and its tongues with it");
     }
 
     /// A save holds exactly the acts the world had grown, and a load resumes at
-    /// the act after the last of them — for every act from one to six.
+    /// the act after the last of them — for every act from one to seven.
     #[test]
     fn a_save_resumes_at_the_act_after_the_one_it_holds() {
         let seed = 0x0BAD_C0D1;
         let path = cache_path(seed, 4, 2);
         let _ = std::fs::remove_file(&path);
-        for (index, stage) in Stage::ALL[..6].iter().enumerate() {
+        for (index, stage) in Stage::ALL.iter().enumerate() {
             let genesis = Genesis::for_test(seed, *stage);
             genesis.save_cache().expect("write the world");
 
@@ -2080,6 +2345,95 @@ mod tests {
             assert_eq!(adopted.stage(), Some(*stage), "and holds exactly {stage:?}");
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A save carries the world's own constants, and a load adopts them — the
+    /// panel's sliders follow the file rather than whatever they held before.
+    #[test]
+    fn a_saved_world_adopts_the_settings_it_was_grown_with() {
+        let seed = 0x0BAD_C0D5;
+        let path = cache_path(seed, 4, 2);
+        let _ = std::fs::remove_file(&path);
+
+        let mut grown = Genesis::for_test(seed, Stage::Hydrology);
+        let mut settings = grown.settings().clone();
+        settings.sea_threshold = 0.07;
+        settings.num_provinces = 12_345;
+        settings.religion_consolidation = 4.0;
+        settings.civilization_level = 1.5;
+        grown.set_settings(settings.clone());
+        grown.save_cache().expect("write the world");
+        let on_disk = crate::core::WorldCache::try_load(&path.to_string_lossy())
+            .expect("read the file just written");
+        assert_eq!(
+            on_disk.settings,
+            Some(settings.clone()),
+            "the file itself holds the constants, not just the pipeline"
+        );
+
+        // A fresh pipeline on its own plate, with the engine's defaults: the load
+        // must bring both the cache's canvas and its constants across.
+        let mut adopted = Genesis::new(seed);
+        assert_ne!(adopted.settings(), &settings);
+        adopted.load_cache().expect("read the world back");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(adopted.canvas(), (4, 2), "the cache's canvas is adopted");
+        assert_eq!(
+            adopted.settings(),
+            &settings,
+            "and every constant it was grown with"
+        );
+        assert_eq!(
+            adopted.geography_config().num_provinces,
+            drawn_count(12_345, seed, LAND_PROVINCE_SALT),
+            "the loaded constants are the ones act four will read"
+        );
+    }
+
+    /// A save from before the settings were written keeps the panel's constants:
+    /// the old file has nothing to adopt, so the reader's choices stand.
+    #[test]
+    fn a_save_from_before_the_settings_keeps_the_panel_s_constants() {
+        let seed = 0x0BAD_C0D6;
+        let path = cache_path(seed, 4, 2);
+        let _ = std::fs::remove_file(&path);
+
+        let grown = Genesis::for_test(seed, Stage::Hydrology);
+        let legacy = crate::core::cache::WorldCacheV2 {
+            width: 4,
+            height: 2,
+            heightmap: (*grown.atlas().expect("a world").heightmap).clone(),
+            temp_grid: Some(Grid::filled_with(4, 2, 12.0f32)),
+            precip_grid: Some(Grid::filled_with(4, 2, 0.4f32)),
+            flow_grid: Some(Grid::filled_with(4, 2, 0.0f32)),
+            is_lake: Some(Grid::filled_with(4, 2, false)),
+            provinces: None,
+            hierarchy: None,
+            ocean: None,
+            ocean_hierarchy: None,
+        };
+        crate::core::cache::write_legacy_cache(&legacy, 3, &path.to_string_lossy())
+            .expect("write a format-2 cache");
+
+        let mut adopted = Genesis::new(seed);
+        let mut settings = adopted.settings().clone();
+        settings.sea_threshold = 0.09;
+        adopted.set_settings(settings.clone());
+        adopted.load_cache().expect("read the old world back");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(adopted.stage(), Some(Stage::Hydrology));
+        assert_eq!(
+            adopted.settings().sea_threshold,
+            0.09,
+            "an old save records no constants, so the panel's stand"
+        );
+        assert_eq!(
+            adopted.settings().num_provinces,
+            WorldGenSettings::for_canvas(4, 2).num_provinces,
+            "and a count still at the old plate's default follows the cache's plate"
+        );
     }
 
     /// A cache is named after the seed it holds and the canvas it was grown on.

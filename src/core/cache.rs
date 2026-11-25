@@ -1,6 +1,9 @@
+use crate::civilization::CivilizationWorld;
 use crate::core::Grid;
 use crate::geography::{OceanResult, ProvinceResult};
 use crate::geopolitics::GeopoliticalHierarchy;
+use crate::language::LanguagesWorld;
+use crate::pipeline::WorldGenSettings;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -11,10 +14,19 @@ use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 /// still load.
 const CACHE_MAGIC: &[u8; 4] = b"PGZ1";
 
-/// The four bytes that open every cache this build writes: `PG` for Project
-/// Genesis, `Z2` for a zstd frame of format 2, whose header carries one byte
-/// beyond the magic — the deepest act the save holds.
+/// The four bytes that open the cache format before the dawn was written: `PG`
+/// for Project Genesis, `Z2` for a zstd frame of format 2, whose header carries
+/// one byte beyond the magic — the deepest act the save holds.
+///
+/// Format 2 holds acts one through six and no settings. It is still read: see
+/// [`WorldCacheV2`].
 const CACHE_MAGIC_ACTS: &[u8; 4] = b"PGZ2";
+
+/// The four bytes that open every cache this build writes: `PG` for Project
+/// Genesis, `Z3` for a zstd frame of format 3. Its payload carries the world's
+/// own settings and the dawn of history, so a save can hold all seven acts and
+/// a load restores the constants the world was grown with.
+const CACHE_MAGIC_FULL: &[u8; 4] = b"PGZ3";
 
 /// zstd level for cache writes. The payloads are spatially coherent grids and
 /// boolean masks, so even this fast level folds a save to a fraction of its raw
@@ -24,7 +36,7 @@ const CACHE_MAGIC_ACTS: &[u8; 4] = b"PGZ2";
 const CACHE_ZSTD_LEVEL: i32 = 3;
 
 /// Worker threads zstd compresses a cache on. The payloads are gigabyte-scale —
-/// a full world at act six is roughly four gigabytes at 16K — and compressing
+/// a full world at act seven is roughly four gigabytes at 16K — and compressing
 /// it on one thread leaves every other core idle while a save runs. Eight is
 /// deliberately modest: it fills the cores of ordinary machines without
 /// starving the viewer, and zstd simply queues work when fewer cores exist.
@@ -51,12 +63,28 @@ const CACHE_BUFFER_BYTES: usize = 1 << 20;
 /// produces are wrapped here. The payload is byte-for-byte what an uncompressed
 /// cache holds, so a compressed world and a plain one decode to exactly the same
 /// grids, and the round-trip stays bit-exact.
+///
+/// The magic is [`CACHE_MAGIC_FULL`] because `value` is the current payload —
+/// [`WorldCache`] or its by-reference view. The same routine writes the retired
+/// format in the tests, which is what keeps the compatibility path honest.
 fn write_cache<T: Serialize>(value: &T, acts: u8, path: &str) -> Result<(), String> {
+    write_cache_with_magic(CACHE_MAGIC_FULL, value, acts, path)
+}
+
+/// The one writer: `magic` chooses the format, `value` is that format's payload.
+///
+/// Kept generic so the compatibility tests can write a format-2 cache through the
+/// very same compression path a real save took, rather than a hand-rolled frame
+/// that could drift from it.
+fn write_cache_with_magic<T: Serialize>(
+    magic: &[u8; 4],
+    value: &T,
+    acts: u8,
+    path: &str,
+) -> Result<(), String> {
     let file = File::create(path).map_err(|why| why.to_string())?;
     let mut writer = BufWriter::new(file);
-    writer
-        .write_all(CACHE_MAGIC_ACTS)
-        .map_err(|why| why.to_string())?;
+    writer.write_all(magic).map_err(|why| why.to_string())?;
     // The deepest act the save holds, one byte, straight after the magic. The
     // atlas reads this to describe a cache without decoding its payload; a load
     // ignores it and reads the act off the fields, which stay the one truth.
@@ -87,46 +115,78 @@ fn write_cache<T: Serialize>(value: &T, acts: u8, path: &str) -> Result<(), Stri
     Ok(())
 }
 
-/// Read a cache written by [`write_cache`], or by an older build — a `PGZ1` frame
-/// without the acts header, or bare bincode.
+/// Write a format-2 cache (`PGZ2`) through the very same compression path a real
+/// save used.
 ///
-/// The magic decides which: `PGZ2` means the acts byte and then a zstd frame,
-/// `PGZ1` means the frame alone, and no magic means the whole file is the payload.
-/// A file too short to hold the magic is simply handed to bincode, which reports
-/// the error in its own words.
-fn read_cache<T: DeserializeOwned>(path: &str) -> Result<T, String> {
+/// Only the tests need this — they are what prove an old file still opens, and
+/// that a file without settings leaves the panel's constants alone.
+#[cfg(test)]
+pub(crate) fn write_legacy_cache<T: Serialize>(
+    value: &T,
+    acts: u8,
+    path: &str,
+) -> Result<(), String> {
+    write_cache_with_magic(CACHE_MAGIC_ACTS, value, acts, path)
+}
+
+/// Read a cache written by [`write_cache`], or by an older build — a `PGZ2`
+/// frame without the settings and the dawn, a `PGZ1` frame without the acts
+/// header, or bare bincode.
+///
+/// The magic decides which struct the payload holds: `PGZ3` is the current
+/// [`WorldCache`], `PGZ2` and `PGZ1` are the retired [`WorldCacheV2`] layout
+/// (converted here, with no settings and no history), and no magic means the
+/// whole file is a bare format-2 payload. A file too short to hold the magic is
+/// simply handed to bincode, which reports the error in its own words.
+fn read_cache(path: &str) -> Result<WorldCache, String> {
     let mut file = File::open(path).map_err(|why| format!("{path}: {why}"))?;
     let mut magic = [0u8; CACHE_MAGIC.len()];
     let framed = file.read_exact(&mut magic).is_ok();
-    if framed && (&magic == CACHE_MAGIC_ACTS || &magic == CACHE_MAGIC) {
-        // A format-2 cache carries one byte past the magic: the deepest act the
-        // save holds. It is a hint for the atlas, not the truth — the payload's
-        // own fields decide what a load adopts — so it is read past and dropped.
+    if framed && &magic == CACHE_MAGIC_FULL {
+        // The current format: the acts byte, then the payload that carries the
+        // settings and every act through the dawn.
+        let mut acts = [0u8; 1];
+        file.read_exact(&mut acts)
+            .map_err(|why| format!("{path}: {why}"))?;
+        read_frame(file, path)
+    } else if framed && (&magic == CACHE_MAGIC_ACTS || &magic == CACHE_MAGIC) {
+        // A format-2 or format-1 cache: the payload is the pre-history layout.
+        // Only the format with an acts header carries that one byte.
         if &magic == CACHE_MAGIC_ACTS {
             let mut acts = [0u8; 1];
             file.read_exact(&mut acts)
                 .map_err(|why| format!("{path}: {why}"))?;
         }
-        let decoder = zstd::stream::read::Decoder::new(BufReader::new(file))
-            .map_err(|why| format!("{path}: {why}"))?;
-        // The mirror of the write buffer: bincode calls `read_exact` once per
-        // element, so a buffered decoder is what keeps a load from making tens of
-        // millions of small calls into zstd — see `CACHE_BUFFER_BYTES`.
-        let buffered = BufReader::with_capacity(CACHE_BUFFER_BYTES, decoder);
-        bincode::deserialize_from(buffered).map_err(|why| format!("{path}: {why}"))
+        let legacy: WorldCacheV2 = read_frame(file, path)?;
+        Ok(legacy.into_current())
     } else {
         // A cache written before the frame existed: bare bincode, no magic. It gets
         // the same read buffer, since the decode is element-wise either way.
         file.seek(SeekFrom::Start(0))
             .map_err(|why| format!("{path}: {why}"))?;
         let buffered = BufReader::with_capacity(CACHE_BUFFER_BYTES, file);
-        bincode::deserialize_from(buffered).map_err(|why| format!("{path}: {why}"))
+        let legacy: WorldCacheV2 =
+            bincode::deserialize_from(buffered).map_err(|why| format!("{path}: {why}"))?;
+        Ok(legacy.into_current())
     }
+}
+
+/// Inflate and decode one zstd-framed bincode payload.
+///
+/// The mirror of the write buffer: bincode calls `read_exact` once per element, so
+/// a buffered decoder is what keeps a load from making tens of millions of small
+/// calls into zstd — see [`CACHE_BUFFER_BYTES`].
+fn read_frame<T: DeserializeOwned>(file: File, path: &str) -> Result<T, String> {
+    let decoder = zstd::stream::read::Decoder::new(BufReader::new(file))
+        .map_err(|why| format!("{path}: {why}"))?;
+    let buffered = BufReader::with_capacity(CACHE_BUFFER_BYTES, decoder);
+    bincode::deserialize_from(buffered).map_err(|why| format!("{path}: {why}"))
 }
 
 /// The deepest act a cache holds, read straight off the file's header.
 ///
-/// Only a format-2 cache (`PGZ2`) names the act in its header. For an older
+/// Both framed formats name the act in the byte after the magic — format 2 for a
+/// pre-history save, format 3 for one that may hold all seven acts. For an older
 /// `PGZ1` frame or a bare bincode save the act is knowable only by decoding the
 /// payload, which the atlas's list must not pay for — so those answer `None`, and
 /// the list says only that a world is there. A handful of bytes, so the panel may
@@ -137,22 +197,27 @@ pub fn cache_stage(path: &str) -> Option<u8> {
     if file.read_exact(&mut head).is_err() {
         return None;
     }
-    head.starts_with(CACHE_MAGIC_ACTS)
+    // Both framed formats lead with four magic bytes and then the act, so the
+    // same offset reads either one.
+    (head.starts_with(CACHE_MAGIC_ACTS) || head.starts_with(CACHE_MAGIC_FULL))
         .then(|| head[CACHE_MAGIC_ACTS.len()])
 }
 
-/// The deepest act a set of present-or-absent artefacts amounts to, `1..=6`.
+/// The deepest act a set of present-or-absent artefacts amounts to, `1..=7`.
 ///
 /// Shared by a cache and its write-time view so the number stamped into a save's
 /// header is the very number a load derives from the payload.
 fn acts_held(
+    history: bool,
     ocean_hierarchy: bool,
     hierarchy: bool,
     provinces: bool,
     is_lake: bool,
     temp_grid: bool,
 ) -> u8 {
-    if ocean_hierarchy {
+    if history {
+        7
+    } else if ocean_hierarchy {
         6
     } else if hierarchy {
         5
@@ -167,19 +232,21 @@ fn acts_held(
     }
 }
 
-/// The one world cache: every act a world has grown, up to act six.
+/// The one world cache: every act a world has grown, up to act seven.
 ///
 /// A save holds acts one through whichever act the world had reached when it was
 /// written. The heightmap is always there; each later artefact is an `Option` and
 /// is present exactly when its own act has run:
 ///
 /// ```text
+///   settings                  —   the constants the world is grown with
 ///   heightmap                 1   the bare land
 ///   temp_grid, precip_grid    2   the atmosphere
 ///   flow_grid, is_lake        3   the water
 ///   provinces                 4   the land cut into provinces
 ///   hierarchy                 5   provinces folded into areas, regions, superregions
 ///   ocean, ocean_hierarchy    6   the world ocean, cut and folded the same way
+///   civilizations, languages  7   the dawn: realms, faiths, tongues and their names
 /// ```
 ///
 /// The deepest act is therefore read straight off the fields, which stay the one
@@ -189,13 +256,21 @@ fn acts_held(
 /// file (`world_<seed>_<width>x<height>.bin`) always holds the deepest checkpoint
 /// that seed has on that canvas.
 ///
+/// `settings` carries the advanced configuration as the panel had it when the save
+/// was written, so a load restores the world *and* the constants it was grown
+/// with. It is an `Option` only because a save read back from an older build has
+/// none; every save this build writes fills it.
+///
 /// Polar ice is not stored: it is a deterministic function of the heightmap, the
-/// lakes and the seed, resolved again on load so that a loaded world and a grown
-/// one agree to the last bit.
+/// lakes, the seed and the polar settings, resolved again on load so that a loaded
+/// world and a grown one agree to the last bit.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct WorldCache {
     pub width: usize,
     pub height: usize,
+    /// The world's own constants. `None` only for a save from before they were
+    /// recorded.
+    pub settings: Option<WorldGenSettings>,
     pub heightmap: Grid<f32>,
     /// Act two onward.
     pub temp_grid: Option<Grid<f32>>,
@@ -213,6 +288,57 @@ pub struct WorldCache {
     pub ocean: Option<OceanResult>,
     /// Act six onward.
     pub ocean_hierarchy: Option<GeopoliticalHierarchy>,
+    /// Act seven onward: the realms, societies and faiths of the dawn.
+    pub civilizations: Option<CivilizationWorld>,
+    /// Act seven onward: the families, tongues, lexicons and names.
+    pub languages: Option<LanguagesWorld>,
+}
+
+/// The payload a format-2 cache (`PGZ2`) holds, kept only so those files still
+/// load.
+///
+/// Before the dawn and the settings were written, a save was these eleven fields
+/// and nothing else. bincode is not self-describing, so the new payload cannot be
+/// read by the old reader (nor the old one by this build); this struct is the
+/// shape the retired format actually has, and [`WorldCacheV2::into_current`]
+/// lifts it into the current one.
+#[derive(Serialize, Deserialize)]
+pub struct WorldCacheV2 {
+    pub width: usize,
+    pub height: usize,
+    pub heightmap: Grid<f32>,
+    pub temp_grid: Option<Grid<f32>>,
+    pub precip_grid: Option<Grid<f32>>,
+    pub flow_grid: Option<Grid<f32>>,
+    pub is_lake: Option<Grid<bool>>,
+    pub provinces: Option<ProvinceResult>,
+    pub hierarchy: Option<GeopoliticalHierarchy>,
+    pub ocean: Option<OceanResult>,
+    pub ocean_hierarchy: Option<GeopoliticalHierarchy>,
+}
+
+impl WorldCacheV2 {
+    /// The same world in the current layout: no settings (the old format did not
+    /// record any, so a load keeps whatever the panel has) and no history (the old
+    /// format stopped at act six).
+    fn into_current(self) -> WorldCache {
+        WorldCache {
+            width: self.width,
+            height: self.height,
+            settings: None,
+            heightmap: self.heightmap,
+            temp_grid: self.temp_grid,
+            precip_grid: self.precip_grid,
+            flow_grid: self.flow_grid,
+            is_lake: self.is_lake,
+            provinces: self.provinces,
+            hierarchy: self.hierarchy,
+            ocean: self.ocean,
+            ocean_hierarchy: self.ocean_hierarchy,
+            civilizations: None,
+            languages: None,
+        }
+    }
 }
 
 /// The world held by reference, for writing without copying a pixel of it.
@@ -224,6 +350,7 @@ pub struct WorldCache {
 pub struct WorldCacheView<'a> {
     pub width: usize,
     pub height: usize,
+    pub settings: Option<&'a WorldGenSettings>,
     pub heightmap: &'a Grid<f32>,
     pub temp_grid: Option<&'a Grid<f32>>,
     pub precip_grid: Option<&'a Grid<f32>>,
@@ -233,15 +360,18 @@ pub struct WorldCacheView<'a> {
     pub hierarchy: Option<&'a GeopoliticalHierarchy>,
     pub ocean: Option<&'a OceanResult>,
     pub ocean_hierarchy: Option<&'a GeopoliticalHierarchy>,
+    pub civilizations: Option<&'a CivilizationWorld>,
+    pub languages: Option<&'a LanguagesWorld>,
 }
 
 impl WorldCacheView<'_> {
-    /// The deepest act this save holds, `1..=6`, read off the fields present.
+    /// The deepest act this save holds, `1..=7`, read off the fields present.
     ///
     /// The mirror of [`WorldCache::stage`], so a save stamps the header with the
     /// very act a load would derive from the payload it writes.
     pub fn stage(&self) -> u8 {
         acts_held(
+            self.civilizations.is_some() || self.languages.is_some(),
             self.ocean_hierarchy.is_some(),
             self.hierarchy.is_some(),
             self.provinces.is_some(),
@@ -252,12 +382,13 @@ impl WorldCacheView<'_> {
 }
 
 impl WorldCache {
-    /// The deepest act this save holds, `1..=6`, read off the fields present.
+    /// The deepest act this save holds, `1..=7`, read off the fields present.
     ///
     /// A loaded world resumes at the act after this one, so this single number is
     /// what tells the pipeline how much of the world it already has.
     pub fn stage(&self) -> u8 {
         acts_held(
+            self.civilizations.is_some() || self.languages.is_some(),
             self.ocean_hierarchy.is_some(),
             self.hierarchy.is_some(),
             self.provinces.is_some(),
@@ -289,11 +420,20 @@ impl WorldCache {
 mod tests {
     use super::*;
 
-    /// A full world: every act's artefact present, all the way to the hierarchies.
+    /// The seal a synthetic cache is written under: a seed no real world is
+    /// grown from, so the act-7 payloads are empty but honest.
+    const SEED: u64 = 0x0BAD_C0DE_0BAD_C0DE;
+
+    /// A full world: every act's artefact present, all the way to the dawn.
     fn little_world() -> WorldCache {
+        let mut settings = WorldGenSettings::default();
+        settings.sea_threshold = 0.08;
+        settings.num_provinces = 4_321;
+        settings.religion_consolidation = 2.5;
         WorldCache {
             width: 3,
             height: 2,
+            settings: Some(settings),
             heightmap: Grid::filled_with(3, 2, 0.42f32),
             temp_grid: Some(Grid::filled_with(3, 2, -7.5f32)),
             precip_grid: Some(Grid::filled_with(3, 2, 0.11f32)),
@@ -311,6 +451,8 @@ mod tests {
                 num_provinces: 0,
             }),
             ocean_hierarchy: Some(GeopoliticalHierarchy::empty()),
+            civilizations: Some(CivilizationWorld::empty(SEED)),
+            languages: Some(LanguagesWorld::empty(SEED)),
         }
     }
 
@@ -339,6 +481,7 @@ mod tests {
         WorldCacheView {
             width: cache.width,
             height: cache.height,
+            settings: cache.settings.as_ref(),
             heightmap: &cache.heightmap,
             temp_grid: cache.temp_grid.as_ref(),
             precip_grid: cache.precip_grid.as_ref(),
@@ -348,6 +491,26 @@ mod tests {
             hierarchy: cache.hierarchy.as_ref(),
             ocean: cache.ocean.as_ref(),
             ocean_hierarchy: cache.ocean_hierarchy.as_ref(),
+            civilizations: cache.civilizations.as_ref(),
+            languages: cache.languages.as_ref(),
+        }
+    }
+
+    /// The same world as a format-2 cache held it: the old field list, with the
+    /// settings and the dawn stripped off.
+    fn as_v2(cache: &WorldCache) -> WorldCacheV2 {
+        WorldCacheV2 {
+            width: cache.width,
+            height: cache.height,
+            heightmap: cache.heightmap.clone(),
+            temp_grid: cache.temp_grid.clone(),
+            precip_grid: cache.precip_grid.clone(),
+            flow_grid: cache.flow_grid.clone(),
+            is_lake: cache.is_lake.clone(),
+            provinces: cache.provinces.clone(),
+            hierarchy: cache.hierarchy.clone(),
+            ocean: cache.ocean.clone(),
+            ocean_hierarchy: cache.ocean_hierarchy.clone(),
         }
     }
 
@@ -377,7 +540,11 @@ mod tests {
         assert_eq!(loaded.width, cache.width);
         assert_eq!(loaded.height, cache.height);
         assert_eq!(loaded.heightmap.raw_slice(), cache.heightmap.raw_slice());
-        assert_eq!(loaded.stage(), 6);
+        assert_eq!(loaded.stage(), 7, "a world of seven acts comes back whole");
+        assert_eq!(
+            loaded.settings, cache.settings,
+            "the constants the world was grown with came back with it"
+        );
         assert_eq!(
             loaded
                 .provinces
@@ -388,19 +555,21 @@ mod tests {
         assert!(loaded.hierarchy.is_some());
         assert!(loaded.ocean.is_some());
         assert!(loaded.ocean_hierarchy.is_some());
+        assert!(loaded.civilizations.is_some(), "the dawn came back");
+        assert!(loaded.languages.is_some(), "and its tongues with it");
     }
 
-    /// A world that stopped short of act six must come back with its tiers intact
-    /// and its stage read off the fields that are there.
+    /// A world that stopped at the ocean must come back with its tiers intact and
+    /// its stage read off the fields that are there.
     #[test]
     fn a_partial_world_keeps_its_stage_through_a_round_trip() {
         let mut cache = little_world();
-        cache.ocean = None;
-        cache.ocean_hierarchy = None;
+        cache.civilizations = None;
+        cache.languages = None;
         assert_eq!(
             cache.stage(),
-            5,
-            "provinces and the land hierarchy, no ocean"
+            6,
+            "every physical act and its ocean, no dawn"
         );
 
         let path = std::env::temp_dir().join("project_genesis_partial_cache_test.bin");
@@ -409,18 +578,27 @@ mod tests {
         let loaded = WorldCache::try_load(&path).expect("read the world back");
         let _ = std::fs::remove_file(&path);
 
-        assert_eq!(loaded.stage(), 5);
+        assert_eq!(loaded.stage(), 6);
         assert!(loaded.provinces.is_some());
         assert!(loaded.hierarchy.is_some());
-        assert!(loaded.ocean.is_none());
+        assert!(loaded.ocean.is_some());
+        assert!(loaded.civilizations.is_none() && loaded.languages.is_none());
         assert_eq!(loaded.heightmap.raw_slice(), cache.heightmap.raw_slice());
     }
 
     /// The stage is a fact of the fields, so dropping them one act at a time walks
-    /// it back from six to one.
+    /// it back from seven to one.
     #[test]
     fn a_world_knows_which_act_it_reached() {
         let mut cache = little_world();
+        assert_eq!(cache.stage(), 7, "the dawn is act seven");
+        cache.civilizations = None;
+        assert_eq!(
+            cache.stage(),
+            7,
+            "the tongues are the dawn too, so half of it still counts"
+        );
+        cache.languages = None;
         assert_eq!(cache.stage(), 6);
         cache.ocean_hierarchy = None;
         assert_eq!(cache.stage(), 5);
@@ -448,12 +626,12 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         assert_eq!(
-            &bytes[..CACHE_MAGIC_ACTS.len()],
-            CACHE_MAGIC_ACTS,
-            "a written cache must open with the format-2 magic"
+            &bytes[..CACHE_MAGIC_FULL.len()],
+            CACHE_MAGIC_FULL,
+            "a written cache must open with the format-3 magic"
         );
         assert_eq!(
-            bytes[CACHE_MAGIC_ACTS.len()],
+            bytes[CACHE_MAGIC_FULL.len()],
             cache.stage(),
             "the byte after the magic names the deepest act held"
         );
@@ -466,14 +644,15 @@ mod tests {
         );
     }
 
-    /// A cache written by an older build — bare bincode, no magic — still loads.
+    /// A cache written by an older build — bare bincode, no magic — still loads,
+    /// with no settings and no dawn.
     #[test]
     fn a_legacy_uncompressed_cache_still_loads() {
         let cache = little_world();
         let path = std::env::temp_dir().join("project_genesis_legacy_cache_test.bin");
         let path = path.to_string_lossy().to_string();
 
-        let payload = bincode::serialize(&cache).expect("serialize the legacy payload");
+        let payload = bincode::serialize(&as_v2(&cache)).expect("serialize the legacy payload");
         std::fs::write(&path, &payload).expect("write the legacy cache");
 
         let loaded = WorldCache::try_load(&path).expect("read the legacy world back");
@@ -487,7 +666,64 @@ mod tests {
         assert_eq!(loaded.width, cache.width);
         assert_eq!(loaded.height, cache.height);
         assert_eq!(loaded.heightmap.raw_slice(), cache.heightmap.raw_slice());
+        assert_eq!(loaded.stage(), 6, "the old format stopped at act six");
+        assert_eq!(
+            loaded.settings, None,
+            "an old save records no constants, so a load keeps the panel's"
+        );
+        assert!(loaded.civilizations.is_none() && loaded.languages.is_none());
+    }
+
+    /// A format-2 cache — the one this program wrote before the dawn and the
+    /// settings travelled with a save — still loads, and leaves the constants for
+    /// the panel to keep.
+    #[test]
+    fn a_format_two_cache_still_loads_without_settings() {
+        let cache = little_world();
+        let path = std::env::temp_dir().join("project_genesis_format_two_test.bin");
+        let path = path.to_string_lossy().to_string();
+
+        write_cache_with_magic(CACHE_MAGIC_ACTS, &as_v2(&cache), 6, &path)
+            .expect("write a format-2 cache");
+
+        let loaded = WorldCache::try_load(&path).expect("read the format-2 world back");
+        assert_eq!(
+            cache_stage(&path),
+            Some(6),
+            "the format-2 header still names its acts without a decode"
+        );
+        let _ = std::fs::remove_file(&path);
+
         assert_eq!(loaded.stage(), 6);
+        assert_eq!(loaded.settings, None);
+        assert!(loaded.provinces.is_some() && loaded.ocean.is_some());
+        assert!(loaded.civilizations.is_none() && loaded.languages.is_none());
+    }
+
+    /// The advanced configuration is part of the save: every constant comes back
+    /// exactly as it was written.
+    #[test]
+    fn a_saved_world_carries_the_settings_it_was_grown_with() {
+        let mut cache = little_world();
+        let settings = cache.settings.as_mut().expect("a full world has settings");
+        settings.equator_temp = 41.5;
+        settings.continental_freq = 1.234_567_890_123_456;
+        settings.erosion_droplets = 12_345;
+        settings.ocean_num_provinces = 777;
+        settings.civilization_level = 1.75;
+        settings.population_multiplier = 0.5;
+
+        let path = std::env::temp_dir().join("project_genesis_settings_test.bin");
+        let path = path.to_string_lossy().to_string();
+        WorldCache::save_view(&as_view(&cache), &path).expect("write the world");
+        let loaded = WorldCache::try_load(&path).expect("read the world back");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            loaded.settings.as_ref(),
+            cache.settings.as_ref(),
+            "every constant travels with the file, to the last bit"
+        );
     }
 
     /// The act a save holds is stamped in the header, so the atlas's list can read
@@ -495,6 +731,8 @@ mod tests {
     #[test]
     fn an_acts_header_is_read_without_decoding_the_world() {
         let mut cache = little_world();
+        cache.civilizations = None;
+        cache.languages = None;
         cache.ocean = None;
         cache.ocean_hierarchy = None;
         assert_eq!(cache.stage(), 5);
@@ -511,6 +749,19 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// A full save names all seven acts in its header — the deepest checkpoint the
+    /// program can now write.
+    #[test]
+    fn a_full_save_names_all_seven_acts() {
+        let cache = little_world();
+        let path = std::env::temp_dir().join("project_genesis_seven_acts_test.bin");
+        let path = path.to_string_lossy().to_string();
+        WorldCache::save_view(&as_view(&cache), &path).expect("write the world");
+
+        assert_eq!(cache_stage(&path), Some(7));
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// A cache from before the acts header — a `PGZ1` frame — still loads, and
     /// answers `None` when the list asks how far it was grown.
     #[test]
@@ -521,7 +772,7 @@ mod tests {
 
         // Hand-build what an older build wrote: the old magic, then a zstd frame of
         // the bincode payload, with no acts byte between them.
-        let payload = bincode::serialize(&cache).expect("serialize the legacy payload");
+        let payload = bincode::serialize(&as_v2(&cache)).expect("serialize the legacy payload");
         let mut file = File::create(&path).expect("create the legacy cache");
         file.write_all(CACHE_MAGIC).expect("write the old magic");
         let mut encoder =
@@ -531,6 +782,7 @@ mod tests {
 
         let loaded = WorldCache::try_load(&path).expect("read the legacy world back");
         assert_eq!(loaded.stage(), 6);
+        assert_eq!(loaded.settings, None);
         assert_eq!(
             cache_stage(&path),
             None,

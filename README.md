@@ -49,12 +49,13 @@ live low-resolution plate of the world appearing on the canvas as it is made.
 | Flag | Effect |
 | :--- | :--- |
 | `<seed>` | Any unsigned integer; the same seed always produces the same planet. |
-| `--save` | Write the world as it grows (acts 1–3, then 1–6) to `saved_seeds/world_<seed>_<width>x<height>.bin`, zstd-compressed on disk. |
-| `--load` | Adopt the saved world for the seed instead of regenerating (much faster): the acts the file carries are taken as done, and the act after them is offered next. The cache's own canvas is adopted. |
+| `--save` | Write the world as it grows (acts 1–3, then 1–6, then all seven) to `saved_seeds/world_<seed>_<width>x<height>.bin`, zstd-compressed on disk. |
+| `--load` | Adopt the saved world for the seed instead of regenerating (much faster): the acts the file carries are taken as done, and the act after them is offered next. The cache's own canvas and advanced configuration are adopted — `--provinces` and `--religion-consolidation` still win if given. |
 | `--viewer` | Launch the interactive desktop atlas. The atlas starts on the **8K** preset. |
 | `--headless` | Run without a window — the default when `--viewer` is absent. Headless starts on the tuned 16K plate. |
 | `--width <px>` / `--height <px>` | Choose the canvas for either mode; the interactive viewer's presets are 2K–16K. |
 | `--provinces <n>` | The **mean** land-province count for the acts not yet grown. Each seed draws its own target within 7.5 % of it (`--width 8192 --provinces 4000` grows 3 700–4 300), on any canvas. The panel is the usual way; this is for scripts and headless plates. |
+| `--religion-consolidation <x>` | The **Religion consolidation** the history act is grown with: `1` is the engine's own world, `10` folds ten hearths into one broad tradition and dissolves the smallest creeds into the neighbours they border. The panel is the usual way; this lets a script reproduce the map it drew. |
 | `--civs` | Run the history act, print the dossier, export its 16K plate. |
 | `--civs-all` | The same, with a full dossier for every society — hundreds of them. |
 | `--langs` | Run the history act, print the language families and their lexicons, and export the Languages map. |
@@ -66,12 +67,13 @@ holding whichever acts the world had grown when it was written — every save ov
 for that seed and canvas, so the file always holds the deepest checkpoint. An 8K and a 16K run of the
 same seed are different worlds and never overwrite each other. A cache from before the canvas joined
 the name, `saved_seeds/world_<seed>.bin`, is still listed and loadable as the reference 16K plate.
-It is written as a zstd frame — a `PGZ2` magic, one byte naming the deepest act held, then the same
+It is written as a zstd frame — a `PGZ3` magic, one byte naming the deepest act held, then the same
 bincode payload an uncompressed cache holds — so a save is a good deal smaller than its raw bytes.
 The one-byte header lets the atlas say how far a save was grown without decoding it, and is a hint
 only: a load still reads the acts off the payload. Compression is lossless, so a reloaded world is
-bit-for-bit the world that was saved, and a cache written by an older build (`PGZ1`, or bare bincode
-with no magic) still loads.
+bit-for-bit the world that was saved, and a cache written by an older build (`PGZ2`, without the
+settings or the dawn; `PGZ1`; or bare bincode with no magic) still loads — with the panel's own
+constants, since those older files recorded none.
 
 Every headless run also exports `world_physical_map.png`, `world_topographic_map.png` (a
 contoured elevation survey) and `world_political_map.png` (the land hierarchy); a history run
@@ -99,11 +101,11 @@ lines of plain figures under the canvas:
 | :--- | :--- |
 | **Seed** | Type a whole number, or press 🎲 to draw one. A seed is read by each act as it runs, so changing it between acts keeps the acts already grown and re-points only the acts still to come; before act 1 it simply starts a fresh world. |
 | **Map resolution** | The canvas the next world grows on: **2K · 2048 × 1024**, **4K · 4096 × 2048**, **8K · 8192 × 4096** (the startup default), **12K · 12288 × 6144**, or **16K · 16384 × 8192**. Before act 1 the choice applies at once. Once a world exists its canvas is part of its identity: choosing another preset shows a reset prompt, and **↺ Reset world** applies it. Erosion droplets, strait widths and lake thresholds scale with the canvas; **Land provinces and Marine provinces are means** — each seed draws its own exact count within 7.5 % of the typed value, on any canvas — and a fresh world begins at its plate's tuned mean (`469` land provinces at 2K, `7 500` at 8K, `30 000` at 16K). |
-| **World data** | 📂 **Load** and 💾 **Save** are the two commands for the seed above. **Save** writes the world as it stands to `saved_seeds/world_<seed>_<width>x<height>.bin`, from act 1 up to act 6 — the land, the climate, the water and as far up the hierarchies as the world has climbed; the history act is never written. Every save overwrites the last, so the file always holds the deepest checkpoint. **Load** adopts it in one press and picks the panel up at the act after the one it holds. 💾 **Save automatically when act 3 and act 6 land** is the setting behind them: while it is ticked, act 3 writes the cache and act 6 writes it again, overwriting the earlier save. The expandable **📂 Saved worlds** list under it shows every cache on disk, newest first, with its age and size, and each row names the acts that save holds — `acts 1–6` — read from the file's one-byte header (a save from an older build, which has no header, says only that a world is there); click a world to load it. A seed with no cache says so plainly, in one line. |
+| **World data** | 📂 **Load** and 💾 **Save** are the two commands for the seed above. **Save** writes the world as it stands to `saved_seeds/world_<seed>_<width>x<height>.bin`, from act 1 to act 7 — the land, the climate, the water, both hierarchies and the dawn of history — together with the **advanced configuration** it was grown with. Every save overwrites the last, so the file always holds the deepest checkpoint. **Load** adopts it in one press, restores those constants, and picks the panel up at the act after the one it holds; a save of all seven acts opens as a finished world. 💾 **Save automatically when act 3, act 6 and act 7 land** is the setting behind them: while it is ticked, each of those acts writes the cache, overwriting the earlier save. The expandable **📂 Saved worlds** list under it shows every cache on disk, newest first, with its age and size, and each row names the acts that save holds — `acts 1–7` — read from the file's one-byte header (a save from an older build, which has no header, says only that a world is there); click a world to load it. A seed with no cache says so plainly, in one line. |
 | **The seven acts** | A fold-out of its own, counting how many are grown. Only the next act is pressable; the ones behind it are ✔ and the ones ahead are greyed out. Every ✔ act also carries a small **↺** button that un-does that act and everything after it, so the whole tail may be grown again — optionally from a new seed or new constants. |
 | **▶▶ Run all remaining** | Grows the rest of the world without stopping (⏹ stops it after the act in flight). |
 | **↺ Reset world** | Throws the world away and starts over on the same seed — with the constants you chose. |
-| **⚙ Advanced configuration** | A fold-out of every constant the engine reads: twenty-five of them in nine groups — the planet's spin and its sea-level temperatures, the polar ice, the continental field and its coastlines, the orogeny that folds them, weathering and erosion, the moist atmosphere, the rivers, the provinces and wastelands, and the ceiling on continents. Every slider carries the specification's sentence as a hover card and a **↺** back to the engine's default; a group whose values have been moved says `edited`, and each group has a reset of its own. Constants are read by an act **when it runs**, so a change applies to the acts not yet grown — press ↺ on an act to grow it again — and the world already on the canvas is never rewritten. While an act is in flight the constants are greyed: the pipeline is on a worker thread and could not hear the drag. |
+| **⚙ Advanced configuration** | A fold-out of every constant the engine reads: thirty of them in thirteen groups under the seven acts — the planet's spin and its sea-level temperatures, the polar ice, the continental field and its coastlines, the orogeny that folds them, weathering and erosion, the moist atmosphere, the rivers, the land and ocean provinces, the wastelands, the ceiling on continents, and the dawn of history: how civilized the world is, how strongly societies and religions consolidate, how fast realms develop, and a population multiplier. Every slider carries the specification's sentence as a hover card and a **↺** back to the engine's default; a group whose values have been moved says `edited`, and each group and act has a reset of its own. Constants are read by an act **when it runs**, so a change applies to the acts not yet grown — press ↺ on an act to grow it again — and the world already on the canvas is never rewritten. While an act is in flight the constants are greyed: the pipeline is on a worker thread and could not hear the drag. The constants are part of a save: **Save** records them and **Load** restores them, so a reopened world grows its remaining acts under the same settings. |
 
 The atlas's own voice — its panels, legends, hover cards and configuration — can be read in six
 languages: **English, Español, Français, Deutsch, Português and Türkçe**. Pick one with the 🌐
@@ -135,11 +137,11 @@ active scope, the active tier, a selection.
 | :--- | :--- |
 | 1. Geology & Erosion | Tectonic plates, fractal detail, hydraulic + thermal erosion |
 | 2. Atmospheric Climate | Temperature, winds, rainfall |
-| 3. Hydrology & Rivers | Lakes and flow accumulation — **the world cache is written here, and again at act 6** |
+| 3. Hydrology & Rivers | Lakes and flow accumulation — **the world cache is written here, and again at acts 6 and 7** |
 | 4. Geography & Provinces | The land cut into provinces, its wilderness mapped |
 | 5. Geopolitical Hierarchy | Provinces → areas → regions → superregions → continents |
-| 6. Hydro-Political Hierarchy | The world ocean, same five tiers — **the full pre-history checkpoint (acts 1–6) is writable from here** |
-| 7. History & Languages | Realms, societies, economies, governments, seven-level faiths, phonologies, proto-lexicons, native names |
+| 6. Hydro-Political Hierarchy | The world ocean, same five tiers — **the ocean checkpoint (acts 1–6) is writable from here** |
+| 7. History & Languages | Realms, societies, economies, governments, seven-level faiths, phonologies, proto-lexicons, native names — **the finished world and its constants (acts 1–7) are written here** |
 
 Each act runs on a worker thread, so the window stays alive while the world is grown, and the
 map scopes are offered exactly when their subject exists: the survey sheet from act 1, the
@@ -233,8 +235,31 @@ a state as many local cults as its ground grows. The same logic runs one scale
 wider for the two mobile tiers: a forager superregion keeps at most four broad
 traditions and a herder superregion five, so many neighbouring peoples can share
 one family of creeds — a Tengrism of the steppe — while each region inside it
-keeps a local recension. The leading tradition stays dominant; consolidation
-never forces a great society to one faith.
+keeps a local recension. A fold always follows the **land frontier**: a faith
+gives way to the tradition it actually borders, and a chain of little creeds
+passes along itself to the keeper at the end of the chain rather than jumping
+across the map.
+
+The map's **shapes** are then put right, because a ceiling is a census and not a
+border. A tradition that cannot hold its own ground is dissolved into the
+neighbour it shares the longest land frontier with — smallest first, so little
+creeds pair off with each other instead of one giant absorbing everything it
+touches — and the fold stops when the world holds the number of traditions its
+consolidation allows (one hearth in ten at **×10.00**, the engine's own density
+at **×1.00**). Every survivor is then given **one body**: its land-connected
+pieces are found, the largest and any piece holding a town, a port or the
+faith's own hearth are kept, and every other piece is handed whole to the
+neighbour it borders. A town congregation, a port quarter and a displaced
+people are therefore still one-province faiths the map can show, while a rural
+sliver, a ribbon down a river and a scattered patch are swept into their
+neighbours. A last sweep rounds the frontier, turning a province only when two
+thirds of its own border already keeps another faith. The leading tradition
+stays the largest; consolidation never forces a great society to one faith.
+
+Faiths are also painted by **contrast**, not by index: a religion takes the shade
+of its root's family that lies furthest — in perceptual distance — from every
+same-root neighbour already painted, and a family leans its hue away from the
+painter's water so that no creed fades into the sea.
 
 There is deliberately **no state religion yet**: the census records what each
 realm's people keep, not what a throne patronises, so a faith can live in one or
@@ -285,6 +310,12 @@ shade of its Region's
 colour and a Region a shade of its Superregion's, no two neighbours sharing one. A plate inks
 the tier above it as its frontier and its own subdivisions faintly, so the atlas reads as
 nested structure rather than a mosaic.
+
+A Continent is a **political** reading of the map, not a geological one. The physical
+landmass cores are kept and every island stays with the coast it is nearest, but a core that
+would hold more than about a third of the drawn world is cut into two or three contiguous
+parts — the way Afroeurasia reads as Europe, Asia and Africa — and the panel's continent
+ceiling still caps the whole tier.
 
 | Provinces | Areas | Regions | Superregions | Continents |
 | :---: | :---: | :---: | :---: | :---: |
@@ -339,7 +370,8 @@ scaled up because it is one connected, far larger domain.
 5. **Ocean provinces** — Poisson-disc seeding plus a bathymetry-aware Dijkstra flood fill,
    across open **and** frozen seas ([`src/geography/oceans.rs`](src/geography/oceans.rs)).
 6. **Hierarchies** — each domain clustered upward: Areas → Regions → Superregions →
-   Continents (land) and Areas → Regions → Superregions → Basins (ocean)
+   Continents (land; a landmass that would swallow the map is cut into two or three
+   political continents) and Areas → Regions → Superregions → Basins (ocean)
    ([`src/geopolitics/`](src/geopolitics/)).
 7. **History** — census, cradle scoring, expansion, deep-time development, populations
    and inheritance ([`src/civilization/`](src/civilization/)).
@@ -408,17 +440,17 @@ Everything is drawn from the seed through a `ChaCha8Rng` with fixed per-stage sa
 collection the RNG walks is sorted, so a seed always yields the same planet, civilizations,
 dates and populations.
 
-There is one cache per seed and canvas, `world_<seed>_<width>x<height>.bin`, holding every act the world has grown up to act 6 — the
-heightmap, temperature, precipitation, flow and lakes, then the land provinces, the ocean provinces
-and both hierarchies as far as the world has climbed. It is written automatically the moment act 3
-lands and again the moment act 6 lands, each overwriting the last, and it can be written by hand at
-any time from the atlas's **💾 Save** button. The history act is never written, so a save always
-resumes at history or before it. `--load` adopts the file and never re-runs the acts it covers — a
-save made at act 3 resumes at act 4, one made at act 6 at history. Languages are cheap enough to
-regenerate every time, so they have no cache.
+There is one cache per seed and canvas, `world_<seed>_<width>x<height>.bin`, holding every act the world has grown — the
+heightmap, temperature, precipitation, flow and lakes, the land provinces, the ocean provinces and both hierarchies,
+and finally the dawn: the realms, societies, faiths, languages, lexicons and names. It also records the **advanced
+configuration** the world is grown with, so loading a save restores its sliders and the polar geography the ice belt is
+resolved from. It is written automatically the moment act 3 lands, again at act 6 and once more at act 7 — each
+overwriting the last — and it can be written by hand at any time from the atlas's **💾 Save** button. `--load` adopts
+the file and never re-runs the acts it covers: a save made at act 3 resumes at act 4, one made at act 6 at history, and
+one made at act 7 is a finished world with nothing left to grow.
 
 Each save also carries a one-byte header naming the deepest act it holds, so the atlas's **📂 Saved
-worlds** list can say `acts 1–6` for a cache without decoding several gigabytes to find out; a save from an
+worlds** list can say `acts 1–7` for a cache without decoding several gigabytes to find out; a save from an
 older build has no such header and is still listed, but without the acts.
 
 ## Project layout

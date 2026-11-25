@@ -6,10 +6,12 @@
 /// continent.
 #[derive(Clone, Debug)]
 pub struct GeopoliticsConfig {
-    /// Hard ceiling on the major continental cores found by the topological
-    /// clustering. `1` gives a single Pangaean hierarchy, `7` is the fractured
-    /// Earth-like world the atlas was tuned at, and higher ceilings break the
-    /// map into still more powers.
+    /// Hard ceiling on the political continents. The topological clustering
+    /// finds the major continental cores, and a core that would hold more than
+    /// about a third of the drawn world is then cut into two or three contiguous
+    /// parts — but the tier never grows past this number. `1` gives a single
+    /// Pangaean hierarchy, `7` is the fractured Earth-like world the atlas was
+    /// tuned at, and higher ceilings break the map into still more powers.
     ///
     /// Landmasses beyond the ceiling are not lost: they are anchored to the
     /// nearest continental core, exactly as an island is.

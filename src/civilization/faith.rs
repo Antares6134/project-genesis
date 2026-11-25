@@ -59,7 +59,9 @@ pub const MAX_DYADIC_SECONDARIES: usize = 2;
 // ─── LEVEL 1: THE METAPHYSICAL ROOT ─────────────────────────────────────────
 
 /// What kind of divine order a faith holds to exist.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub enum MetaphysicalRoot {
     /// One god, and no other.
     Monotheism,
@@ -146,9 +148,15 @@ impl MetaphysicalRoot {
 
     /// How many shades one metaphysical root's colour family carries.
     ///
-    /// The same nine as a society tier: enough for the greedy walk to give every
-    /// religion on a frontier its own shade, with room to spare.
-    pub const SHADES: usize = 9;
+    /// Ten tones: five lightness bands and, for a root with chroma to spare, two
+    /// hue sides. Nine was enough for a planar map's greedy walk, but a Religions
+    /// map puts a dozen faiths of one root beside each other — Polytheism alone
+    /// can hold a third of a world's creeds — and ten is the most a family can
+    /// carry while every tone stays clear of the painter's sea.
+    pub const SHADES: usize = 10;
+
+    /// How many lightness bands a colour family walks, from ink to paper.
+    const BANDS: usize = 5;
 
     /// The main colour of this metaphysical root on the Religions map mode.
     ///
@@ -175,44 +183,80 @@ impl MetaphysicalRoot {
     /// The `index`-th shade of this root's colour family.
     ///
     /// The family is a real neighbourhood, not a categorical palette: a shade is
-    /// the root's own hue blended toward ink or toward paper, so two religions of
-    /// one root read as relatives while still being visibly distinct. The walk is
-    /// deterministic and index wraps, so the same seed paints the same map.
+    /// the root's own colour walked from ink to paper and — where the root has
+    /// chroma to spare — leaned a little in hue. Two religions of one root
+    /// therefore read as relatives while remaining clearly distinct fills.
     ///
-    /// The walk visits the family in a *contrast-first* order — the main colour,
-    /// then the darkest, then the lightest, then the two mid-tones — because the
-    /// greedy colouring hands neighbours consecutive indices. A plain left-to-
-    /// right ramp would give two neighbouring religions the two most similar
-    /// shades in the family; this order gives them the two least similar.
+    /// The lean is always *away* from the painter's water hues, never toward
+    /// them: a violet family drifting into the navy shallows, or a teal family
+    /// drifting onto the shelf, is a religion the sea has swallowed. A grey root
+    /// (deism, nontheism) has no hue to lean, so it spends all ten tones on
+    /// lightness instead.
+    ///
+    /// The walk visits the family *contrast-first* — the root's own colour, then
+    /// the darkest, then the lightest, then inwards — because the greedy colouring
+    /// hands neighbours consecutive indices; a plain ramp would give two
+    /// neighbouring faiths the two most similar shades in the family.
+    /// Deterministic, and the index wraps.
     pub fn shade(self, index: usize) -> [u8; 3] {
-        const WALK: [usize; MetaphysicalRoot::SHADES] = [4, 0, 8, 2, 6, 1, 7, 3, 5];
-        // How far towards black or white a full step travels. Small enough that
-        // the hue still reads as one family, large enough that the nine shades
-        // are visually distinct even in the darker roots.
-        const REACH: f32 = 0.26;
-        let base = self.legend_color().map(f32::from);
-        let step = WALK[index % Self::SHADES];
-        let t = step as f32 / (Self::SHADES - 1) as f32 * 2.0 - 1.0;
-        let target = if t < 0.0 { 0.0 } else { 255.0 };
-        let mix = t.abs() * REACH;
-        [
-            (base[0] + (target - base[0]) * mix)
-                .round()
-                .clamp(0.0, 255.0) as u8,
-            (base[1] + (target - base[1]) * mix)
-                .round()
-                .clamp(0.0, 255.0) as u8,
-            (base[2] + (target - base[2]) * mix)
-                .round()
-                .clamp(0.0, 255.0) as u8,
-        ]
+        /// The walk over the five bands and the two hue sides: the root's own
+        /// tone first, then the darkest and the lightest, then the pairs in
+        /// between. Every `(band, side)` appears exactly once.
+        const WALK: [(usize, bool); MetaphysicalRoot::SHADES] = [
+            (2, false),
+            (0, false),
+            (4, true),
+            (1, true),
+            (3, false),
+            (1, false),
+            (3, true),
+            (0, true),
+            (4, false),
+            (2, true),
+        ];
+        /// Ten plain lightness bands, for a root with no hue to lean.
+        const GREY_WALK: [usize; MetaphysicalRoot::SHADES] = [0, 9, 1, 8, 2, 7, 3, 6, 4, 5];
+        /// How far the darkest and lightest tones travel, as a share of the
+        /// root's own value. Wide enough that the ten tones are ten fills a reader
+        /// can tell apart, still inside the family's own band.
+        const VALUE_REACH: f32 = 0.30;
+        /// How far the far hue side leans, in degrees — inside the twelve the
+        /// family test allows, and always away from the sea.
+        const HUE_REACH: f32 = 12.0;
+        /// Below this saturation a root is a grey: it has no hue worth leaning.
+        const GREY: f32 = 0.30;
+        /// The hue of the painter's water — sea, shelf and lake all sit in
+        /// `205..240°`, so that is the band a family leans away from.
+        const WATER_HUE: f32 = 210.0;
+
+        let (hue, saturation, value) = super::rgb_to_hsv(self.legend_color());
+        if saturation < GREY {
+            let band =
+                GREY_WALK[index % Self::SHADES] as f32 / (Self::SHADES - 1) as f32 * 2.0 - 1.0;
+            return super::hsv_to_rgb(hue, saturation, value * (1.0 + VALUE_REACH * band));
+        }
+        let (band, far_side) = WALK[index % Self::SHADES];
+        let value_step = band as f32 / (Self::BANDS - 1) as f32 * 2.0 - 1.0;
+        let lean = if hue < WATER_HUE {
+            -HUE_REACH
+        } else {
+            HUE_REACH
+        };
+        let tone_hue = if far_side { hue + lean } else { hue };
+        super::hsv_to_rgb(
+            tone_hue,
+            saturation,
+            value * (1.0 + VALUE_REACH * value_step),
+        )
     }
 }
 
 // ─── LEVEL 2A: CARDINALITY ─────────────────────────────────────────────────
 
 /// How many primary powers a faith has, and how many serve beneath them.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub enum Cardinality {
     /// One primary, no secondaries.
     Singular,
@@ -270,14 +314,18 @@ impl Cardinality {
 // ─── LEVEL 2B: THE OBJECT OF REVERENCE ──────────────────────────────────────
 
 /// The gender a theistic faith ascribes to its god or gods.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub enum DivineGender {
     Masculine,
     Feminine,
 }
 
 /// What an animist faith reveres.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub enum SpiritKind {
     Spirits,
     Totems,
@@ -286,7 +334,9 @@ pub enum SpiritKind {
 }
 
 /// The principle at the heart of a nontheist faith.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub enum NontheistConcept {
     Path,
     Way,
@@ -295,7 +345,9 @@ pub enum NontheistConcept {
 }
 
 /// The human figure at the heart of a nontheist faith.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub enum NontheistPerson {
     Teacher,
     Sage,
@@ -304,7 +356,9 @@ pub enum NontheistPerson {
 }
 
 /// Whether a nontheist faith reveres a principle or a person.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub enum NontheistFocus {
     Concept(NontheistConcept),
     Person(NontheistPerson),
@@ -315,7 +369,9 @@ pub enum NontheistFocus {
 /// This is the umbrella the dossier never prints: its heading is the concrete
 /// title ([`Divinity::title`]), so a faith of teachers is never called a
 /// "Deity" and a faith of principles is never called a "God".
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub enum Divinity {
     Theistic(DivineGender),
     Animistic(SpiritKind),
@@ -381,7 +437,7 @@ impl Divinity {
 
 /// The four families of domains, used for grouping and for the philosophical
 /// roots' domain bias.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum DomainCategory {
     Celestial,
     Elemental,
@@ -402,7 +458,7 @@ impl DomainCategory {
 }
 
 /// One power, principle or province of a faith.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Domain {
     Sky,
     Solar,
@@ -630,7 +686,7 @@ impl Domain {
 // ─── LEVEL 3: COSMOLOGY AND ESCHATOLOGY ────────────────────────────────────
 
 /// Where the world came from.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Cosmogony {
     ExNihilo,
     CosmicOrdering,
@@ -669,7 +725,7 @@ impl Cosmogony {
 }
 
 /// The shape of time.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Temporality {
     Linear,
     Cyclical,
@@ -702,7 +758,7 @@ impl Temporality {
 }
 
 /// How the world ends — or whether it does.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Eschaton {
     FinalJudgment,
     CosmicRenewal,
@@ -735,7 +791,7 @@ impl Eschaton {
 }
 
 /// What happens to the dead.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Afterlife {
     DualRealms,
     Reincarnation,
@@ -776,7 +832,7 @@ impl Afterlife {
 // ─── LEVEL 4: ETHOS AND SOTERIOLOGY ────────────────────────────────────────
 
 /// What the faith praises.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Virtue {
     Obedience,
     Valor,
@@ -827,7 +883,7 @@ impl Virtue {
 }
 
 /// The one thing the faith cannot forgive.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Taboo {
     Idolatry,
     Apostasy,
@@ -872,7 +928,7 @@ impl Taboo {
 }
 
 /// How salvation, liberation or the good life is reached.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Soteriology {
     Grace,
     Works,
@@ -911,7 +967,7 @@ impl Soteriology {
 }
 
 /// What the faith makes of outsiders.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum OutgroupStance {
     Missionary,
     Exclusive,
@@ -943,7 +999,7 @@ impl OutgroupStance {
 // ─── LEVEL 5: PRAXIS AND RITUAL ─────────────────────────────────────────────
 
 /// The central act of worship.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Rite {
     AnimalSacrifice,
     BloodOffering,
@@ -994,7 +1050,7 @@ impl Rite {
 }
 
 /// How the tradition is carried.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Transmission {
     WrittenCanon,
     OralEpic,
@@ -1030,7 +1086,7 @@ impl Transmission {
 }
 
 /// The event the sacred year hangs on.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum CalendarAnchor {
     Solstice,
     Equinox,
@@ -1071,7 +1127,7 @@ impl CalendarAnchor {
 // ─── LEVEL 6: ORGANIZATION AND POLITY ──────────────────────────────────────
 
 /// Who performs the rites and speaks for the faith.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Clergy {
     Ecclesiarchy,
     SacredKingship,
@@ -1117,7 +1173,7 @@ impl Clergy {
 /// There is deliberately no `Outlawed` term: a persecuted cult is represented by
 /// its `Secretive` outgroup stance and by the minority cults it plants abroad, not
 /// by a second way of saying the same thing.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum StateCoupling {
     Theocracy,
     StatePatronage,
@@ -1152,7 +1208,7 @@ impl StateCoupling {
 // ─── LEVEL 7: MANIFESTATION ────────────────────────────────────────────────
 
 /// The place the faith holds sacred.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum SacredLocus {
     Peak,
     RiverConfluence,
@@ -1203,7 +1259,7 @@ impl SacredLocus {
 }
 
 /// The direction the sacred place and its rites face.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum OrientationAxis {
     Sunrise,
     Sunset,
@@ -1248,7 +1304,7 @@ impl OrientationAxis {
 }
 
 /// The mark the faith is known by.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Emblem {
     Disk,
     Crescent,
@@ -1302,7 +1358,7 @@ impl Emblem {
 }
 
 /// The grammatical pattern a faith's name follows.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum NamingPattern {
     RootEpithet,
     DomainOrder,
@@ -1336,7 +1392,7 @@ impl NamingPattern {
 // ─── THE FAITH ──────────────────────────────────────────────────────────────
 
 /// The mark a daughter faith carries from its ancestor.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum FaithRecension {
     Reformed,
     Old,
@@ -1371,7 +1427,7 @@ impl FaithRecension {
 /// Only the faith name, its deities and the words for their domains, the core
 /// of an abstract faith, and its emblem are named. The rest of the cascade —
 /// creed, cosmology, ethos, path, rites, temple, manifestation — stays English.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FaithNames {
     /// Parallel to [`Faith::domains`]: the native word for each domain.
     pub domain_nouns: Vec<String>,
@@ -1387,7 +1443,7 @@ pub struct FaithNames {
 }
 
 /// A minority tradition planted in a realm by a secretive neighbour.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Cult {
     /// Native after the naming phase; the descriptive mystery before it.
     pub name: String,
@@ -1400,7 +1456,7 @@ pub struct Cult {
 }
 
 /// One holy place of a faith, named in its own tongue.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SacredSite {
     /// Native proper name of the site.
     pub name: String,
@@ -1413,7 +1469,7 @@ pub struct SacredSite {
 }
 
 /// One civilization's religion, read as a cascade from root to manifestation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Faith {
     /// Native after the naming phase; the English name before it.
     pub name: String,
